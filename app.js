@@ -61,10 +61,11 @@ var db = null, ONLINE = false;
 try { if (window.__SMART_PAGE__ && window.__SMART_PAGE__.database) { db = window.__SMART_PAGE__.database; ONLINE = true; } } catch(e){}
 
 /* ============ 在线存储模式判定 ============
- * 三种模式优先级：db（资料库智能页）> gh（GitHub 仓库当数据库）> local（浏览器 localStorage）
- * - db  ：在 WorkBuddy 资料库里打开，数据存私有资料库云端表
- * - gh  ：部署到 GitHub Pages 后，用户填好仓库配置，数据读写仓库里的 data/lifedesk.json
- * - local：无网络后端时兜底，数据存当前浏览器 localStorage
+ * 四种模式优先级：db（资料库智能页）> localfile（File System Access 直接写本机文件）> gh（GitHub 仓库当数据库）> local（浏览器 localStorage）
+ * - db      ：在 WorkBuddy 资料库里打开，数据存私有资料库云端表
+ * - localfile：浏览器支持 showDirectoryPicker 时启用，用户挑一次文件夹，数据作为真实文件写进本机（推荐，免服务器）
+ * - gh      ：部署到 GitHub Pages 后，用户填好仓库配置，数据读写仓库里的 data/lifedesk.json
+ * - local   ：不支持 FSA 且无网络后端时兜底，数据存当前浏览器 localStorage
  * 注意：db 模式永远优先于 gh（资料库自带云端，不需要 GitHub）。 */
 /* 部署版：仓库信息已内置（owner/repo/分支/路径），用户只需在「同步设置」粘贴 Token 即可连接。
  * 读取公开仓库无需 Token；写入需要带 repo 权限的 Token。 */
@@ -148,11 +149,13 @@ function ghSaveAll(obj, cb){
 var _ghTimer = null;
 function queueGhSave(){
   if (!GH || !GH.token){
+    setGhStatus('noconn');
     toast('要保存改动，请先点右下角 ⚙ 同步设置 粘贴 GitHub Token', '去填', function(){ toggleGhPanel(); });
     return;
   }
+  setGhStatus('saving');
   if (_ghTimer) clearTimeout(_ghTimer);
-  _ghTimer = setTimeout(function(){ _ghTimer = null; ghSaveAll(snapshotAll(), function(ok){ if (!ok) toast('同步到 GitHub 失败，稍后重试'); }); }, 700);
+  _ghTimer = setTimeout(function(){ _ghTimer = null; ghSaveAll(snapshotAll(), function(ok){ if (ok) setGhStatus('synced'); else setGhStatus('failed'); if (!ok) toast('同步到 GitHub 失败，稍后重试'); }); }, 700);
 }
 function snapshotAll(){
   var obj = {};
@@ -161,10 +164,142 @@ function snapshotAll(){
   });
   return obj;
 }
+/* 本地兜底缓存：gh 模式下 GitHub 写入是异步且国内访问 api.github.com 可能慢/失败，
+   每次本地改动后同步写一份全量到 localStorage；启动读取 GitHub 失败时回退到此缓存，避免强刷丢数据。 */
+var _LOCAL_CACHE_KEY = 'lifedesk_local_cache';
+function localCacheSetFrom(obj){ try { localStorage.setItem(_LOCAL_CACHE_KEY, JSON.stringify(obj)); } catch(e){} }
+function localCacheSet(){ localCacheSetFrom(snapshotAll()); }
+function localCacheGet(){ try { return JSON.parse(localStorage.getItem(_LOCAL_CACHE_KEY) || 'null'); } catch(e){ return null; } }
 function persistAll(cb){
+  if (MODE === 'localfile'){ localfsWrite(snapshotAll(), function(ok){ if (cb) cb(ok); }); return; }
   if (MODE === 'gh'){ ghSaveAll(snapshotAll(), function(ok){ if (cb) cb(ok); }); return; }
   if (MODE === 'local'){ var o = snapshotAll(); Object.keys(o).forEach(function(k){ lsSet(k, o[k]); }); if (cb) cb(true); return; }
   if (cb) cb(false);
+}
+
+/* === 本地文件模式（File System Access API：浏览器原生直接写本机真实文件，无需任何服务器）===
+ * 与「serve.js + fetch」方案相比：不用起 Node 服务，数据作为真实文件落盘（lifedesk.json），
+ * 用户只需在首次使用时用系统对话框挑一个文件夹（建议选本项目 data 文件夹）即可，之后自动读写。
+ * 目录句柄存 IndexedDB 跨刷新保留；不支持 FSA 的浏览器（Firefox / Safari / 多数手机浏览器）
+ * 自动回退到 gh / local 模式，不报错。
+ * 上传 GitHub 按钮保留：把内存数据覆盖 PUT 到仓库（图片内联在 JSON 里，单文件自包含）。 */
+var _FSA_SUPPORT = (typeof window !== 'undefined') && ('showDirectoryPicker' in window);
+var _fsaHandle = null;
+var _LOCALFS_FILE = 'lifedesk.json';
+var _fsaTimer = null;
+
+/* ---- IndexedDB 持久化目录句柄（跨刷新保留；失败则每次需重选，不阻断）---- */
+function _fsaOpenDB(){
+  return new Promise(function(res, rej){
+    if (!('indexedDB' in window)){ rej(new Error('no idb')); return; }
+    var req = indexedDB.open('lifedesk-fsa', 1);
+    req.onupgradeneeded = function(e){ var db=e.target.result; if(!db.objectStoreNames.contains('handles')) db.createObjectStore('handles'); };
+    req.onsuccess = function(e){ res(e.target.result); };
+    req.onerror = function(e){ rej(e.target.error); };
+  });
+}
+async function _fsaSaveHandle(h){
+  try { var db=await _fsaOpenDB(); var tx=db.transaction('handles','readwrite'); tx.objectStore('handles').put(h,'handle'); await new Promise(function(r){tx.oncomplete=r;tx.onerror=function(){r();};}); return true; } catch(e){ return false; }
+}
+async function _fsaLoadHandle(){
+  try { var db=await _fsaOpenDB(); return await new Promise(function(res){ var tx=db.transaction('handles','readonly'); var rq=tx.objectStore('handles').get('handle'); rq.onsuccess=function(){res(rq.result||null);}; rq.onerror=function(){res(null);}; }); } catch(e){ return null; }
+}
+async function _fsaClearHandle(){ try { var db=await _fsaOpenDB(); var tx=db.transaction('handles','readwrite'); tx.objectStore('handles').delete('handle'); } catch(e){} }
+
+/* 让用户挑一次数据目录；成功则写入 IndexedDB 并设 _fsaHandle */
+async function pickFsaDir(){
+  var handle = await window.showDirectoryPicker({ mode:'readwrite' });
+  _fsaHandle = handle;
+  await _fsaSaveHandle(handle);
+  return handle;
+}
+
+/* 启动时恢复目录句柄：有则请求权限，授权成功返回 handle，否则 null */
+async function restoreFsaHandle(){
+  var h = await _fsaLoadHandle();
+  if (!h) return null;
+  try {
+    var p = await h.queryPermission({ mode:'readwrite' });
+    if (p === 'granted') return h;
+    if (p === 'prompt'){ p = await h.requestPermission({ mode:'readwrite' }); if (p === 'granted') return h; }
+    return null;
+  } catch(e){ return null; }
+}
+
+/* 读 lifedesk.json：兼容「导出备份」格式 {tables:{...}} 与扁平行格式；默认 {} */
+async function localfsRead(cb){
+  if (!_fsaHandle){ cb({}); return; }
+  try {
+    var fh = await _fsaHandle.getFileHandle(_LOCALFS_FILE);
+    var f = await fh.getFile();
+    var txt = await f.text();
+    var obj = (txt && txt.trim()) ? JSON.parse(txt) : {};
+    if (obj && obj.tables && typeof obj.tables === 'object') obj = obj.tables;
+    cb(obj && typeof obj === 'object' ? obj : {});
+  } catch(e){ cb({}); }
+}
+
+/* 写 lifedesk.json（覆盖） */
+async function localfsWrite(obj, cb){
+  if (!_fsaHandle){ if (cb) cb(false); return; }
+  try {
+    var fh = await _fsaHandle.getFileHandle(_LOCALFS_FILE, { create:true });
+    var w = await fh.createWritable();
+    await w.write(JSON.stringify(obj, null, 2));
+    await w.close();
+    if (cb) cb(true);
+  } catch(e){ if (cb) cb(false); }
+}
+
+/* 本地保存（防抖），与 gh 的 queueGhSave 同语义 */
+function queueLocalSave(){
+  setGhStatus('saving');
+  if (_fsaTimer) clearTimeout(_fsaTimer);
+  _fsaTimer = setTimeout(function(){
+    _fsaTimer = null;
+    localfsWrite(snapshotAll(), function(ok){
+      _ghCache = snapshotAll();           /* 写完后内存视图与文件一致 */
+      if (ok){ setGhStatus('localfile'); }
+      else { setGhStatus('failed'); toast('写入本地数据目录失败'); }
+    });
+  }, 400);
+}
+
+/* 选择/更换数据目录并连接：连接后若目录为空则把当前内存数据写入，避免切换丢数据 */
+async function pickFsaDirAndConnect(){
+  var h = null;
+  try { h = await pickFsaDir(); } catch(e){ if (!(e && e.name==='AbortError')) console.warn('选择目录失败', e); return; }
+  if (!h) return;
+  _fsaHandle = h; MODE = 'localfile';
+  var existing = await new Promise(function(res){ localfsRead(function(o){ res(o); }); });
+  var isEmpty = !existing || Object.keys(existing).length === 0;
+  if (isEmpty){ await new Promise(function(res){ localfsWrite(snapshotAll(), function(){ res(); }); }); }
+  setGhStatus('localfile');
+  refreshFsaButtons();
+  loadAll();
+  toast('已连接本地数据目录：' + h.name + (isEmpty ? '（已把当前数据写入）' : '（已读取目录内数据）'));
+}
+
+/* 刷新「选择数据目录」按钮的文案/可见性，以及「下载云端到本地」按钮的显示 */
+function refreshFsaButtons(){
+  var b = $('fsaPick'); if (!b) return;
+  if (!_FSA_SUPPORT){ b.style.display='none'; }
+  else if (MODE === 'localfile' && _fsaHandle){
+    b.style.display='inline-block'; b.textContent = '📂 数据目录：' + _fsaHandle.name;
+  } else {
+    b.style.display='inline-block'; b.textContent = '📂 选择数据目录';
+  }
+  var pull = $('ghPull');
+  if (pull) pull.style.display = (MODE === 'localfile') ? 'inline-block' : 'none';
+}
+
+/* 首次（本会话）提示用户可选本地目录，点一下即可挑文件夹 */
+function promptPickFsaDir(){
+  if (!_FSA_SUPPORT) return;
+  try { if (sessionStorage.getItem('fsaPrompted')) return; sessionStorage.setItem('fsaPrompted','1'); } catch(e){}
+  setTimeout(function(){
+    toast('可把数据直接存到本机文件夹（无需服务器），点右下角「选择数据目录」', '选择目录', pickFsaDirAndConnect);
+  }, 1200);
 }
 
 /* 导出全部本地数据为 JSON 文件（备份 / 迁移用） */
@@ -217,14 +352,17 @@ function addDataTools(){
   if ($('dataTools')) return;
   var box = document.createElement('div');
   box.id = 'dataTools';
-  box.innerHTML = '<button type="button" data-act="sync">⚙ 同步设置</button>' +
+  box.innerHTML = '<button type="button" data-act="fsa" id="fsaPick">📂 选择数据目录</button>' +
+                  '<button type="button" data-act="sync">⚙ 同步设置</button>' +
                   '<button type="button" data-act="export">导出数据</button>' +
                   '<button type="button" data-act="import">导入数据</button>';
   box.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:9999;display:flex;gap:8px';
   document.body.appendChild(box);
+  box.querySelector('[data-act="fsa"]').onclick = pickFsaDirAndConnect;
   box.querySelector('[data-act="export"]').onclick = exportData;
   box.querySelector('[data-act="import"]').onclick = importData;
   box.querySelector('[data-act="sync"]').onclick = toggleGhPanel;
+  refreshFsaButtons();
   /* GitHub 同步配置面板 */
   var p = document.createElement('div');
   p.id = 'ghPanel';
@@ -239,6 +377,7 @@ function addDataTools(){
     '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' +
       '<button type="button" id="ghSave" style="padding:7px 12px;border:1px solid #4d3045;border-radius:7px;background:#4d3045;color:#fff;cursor:pointer;font-size:12px">保存并连接</button>' +
       '<button type="button" id="ghUpload" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">上传本地数据</button>' +
+      '<button type="button" id="ghPull" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px;display:none">下载云端到本地</button>' +
       '<button type="button" id="ghClose" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">关闭</button>' +
     '</div>' +
     '<div id="ghHint" style="margin-top:8px;color:#666;font-size:11px;line-height:1.5"></div>';
@@ -254,7 +393,7 @@ function addDataTools(){
     if (!c.owner || !c.repo){ $('ghHint').textContent = '请填写 owner 和 repo'; return; }
     $('ghHint').textContent = '连接中…';
     try { localStorage.setItem('lifedesk_gh', JSON.stringify(c)); } catch(e){}
-    GH = c; MODE = 'gh'; _ghCache = null; _ghSha = null;
+    GH = c; if (MODE !== 'localfile') MODE = 'gh'; _ghCache = null; _ghSha = null;
     ghGetAll(function(all, sha, err){
       if (all === null){
         var m = '连接失败';
@@ -263,17 +402,45 @@ function addDataTools(){
         else if (err && /403/.test(err)) m += '：可能被限流或无权限，稍后重试或检查 Token。';
         else m += '：' + (err || '检查仓库名 / Token 权限 / 仓库是否公开可读');
         $('ghHint').textContent = m;
+        setGhStatus('noconn');
         return;
       }
-      $('ghHint').textContent = '连接成功！已读到仓库数据。点「上传本地数据」可把本机现有数据推上去。';
-      bootBanner(); loadAll();
+      if (MODE === 'localfile'){
+        $('ghHint').textContent = '云端已连接！点「上传本地数据」即可把本地 data 文件夹覆盖推到 GitHub。';
+        setGhStatus('localfile');
+        bootBanner();
+      } else {
+        $('ghHint').textContent = '连接成功！已读到仓库数据。';
+        setGhStatus('synced');
+        bootBanner(); loadAll();
+      }
     });
   };
   $('ghUpload').onclick = function(){
-    if (MODE !== 'gh'){ $('ghHint').textContent = '请先保存并连接'; return; }
+    if (!GH || !GH.token){ $('ghHint').textContent = '请先在同步设置里保存并连接（粘贴有 repo 权限的 Token）'; return; }
     $('ghHint').textContent = '上传中…';
-    ghSaveAll(snapshotAll(), function(ok){ $('ghHint').textContent = ok ? '已上传当前本机数据到仓库' : '上传失败，检查 Token 权限'; if (ok) loadAll(); });
+    ghSaveAll(snapshotAll(), function(ok){
+      if (ok){ setGhStatus('synced'); $('ghHint').textContent = '已把本地数据覆盖上传到 GitHub 仓库 ✓'; toast('已上传到云端（覆盖）'); }
+      else { setGhStatus('failed'); $('ghHint').textContent = '上传失败，检查 Token 权限或网络'; }
+    });
   };
+  $('ghPull').onclick = function(){
+    if (!GH || !GH.token){ $('ghHint').textContent = '请先保存并连接（粘贴 Token）再下载'; return; }
+    $('ghHint').textContent = '从 GitHub 下载中…';
+    ghGetAll(function(all, sha, err){
+      if (all === null){ $('ghHint').textContent = '下载失败：' + (err || '检查 Token / 网络'); setGhStatus('failed'); return; }
+      localfsWrite(all || {}, function(ok){
+        if (!ok){ $('ghHint').textContent = '写入本地 data 文件夹失败'; setGhStatus('failed'); return; }
+        _ghCache = all || {};
+        setGhStatus('localfile');
+        $('ghHint').textContent = '已把 GitHub 数据下载并覆盖到本地 data 文件夹 ✓';
+        toast('已从云端下载到本地');
+        loadAll();
+      });
+    });
+  };
+  /* 本地文件模式下才显示「下载云端到本地」；gh 模式下本就在线，无需下载 */
+  if ($('ghPull')) $('ghPull').style.display = (MODE === 'localfile') ? 'inline-block' : 'none';
 }
 function toggleGhPanel(){
   var p = $('ghPanel');
@@ -557,13 +724,79 @@ function retryQueue(){
   });
 }
 
+/* ============ GitHub 同步状态指示器（左下角常驻小药丸） ============ */
+var _ghStatusEl = null;
+function setGhStatus(state){
+  var el = _ghStatusEl || (_ghStatusEl = $('ghStatus'));
+  if (!el) return;
+  var map = {
+    saving: ['正在保存…','saving'],
+    synced: ['已同步到 GitHub','synced'],
+    failed: ['保存失败','failed'],
+    noconn: ['未连接云端（仅本地缓存）','noconn'],
+    'local-only': ['仅本地保存（未连云端）','local'],
+    localfile: ['已存到本地文件夹（直接写盘）','localfile'],
+    db: ['资料库模式（云端）','db']
+  };
+  var s = map[state] || map.noconn;
+  el.innerHTML = '<i class="dot"></i><span>'+s[0]+'</span>';
+  el.className = 'ghstatus show ' + s[1];
+}
+function initGhStatus(){
+  if (MODE === 'db'){ setGhStatus('db'); return; }
+  if (MODE === 'localfile'){ setGhStatus('localfile'); return; }
+  if (MODE === 'local'){ setGhStatus('local-only'); return; }
+  /* gh 模式：有 Token 视为已连上（绿色），无 Token 仅本地缓存（灰） */
+  setGhStatus((GH && GH.token) ? 'synced' : 'noconn');
+}
+
 /* ============ 读取 ============ */
 function fetchAll(key, cb){
+  if (MODE === 'localfile'){
+    if (_ghCache){ cb(_ghCache[key] || []); return; }
+    if (_ghLoading){ _ghLoading.push(function(all){ cb((all||{})[key] || []); }); return; }
+    _ghLoading = [];
+    localfsRead(function(obj){
+      _ghCache = obj;
+      var q = _ghLoading; _ghLoading = null;
+      q.forEach(function(fn){ fn(_ghCache); });
+      cb(obj[key] || []);
+    });
+    return;
+  }
   if (MODE === 'gh'){
     if (_ghCache){ cb(_ghCache[key] || []); return; }
     if (_ghLoading){ _ghLoading.push(function(all){ cb((all||{})[key] || []); }); return; }
     _ghLoading = [];
-    ghGetAll(function(all){ _ghCache = all || {}; cb(_ghCache[key] || []); _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; });
+    ghGetAll(function(all, sha, err){
+      var cache = localCacheGet();
+      if (all === null && err){
+        /* GitHub 读取失败（网络/401）：用本地缓存兜底全量，避免强刷后数据全失 */
+        _ghCache = cache || {};
+        cb(_ghCache[key] || []);
+        if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
+        return;
+      }
+      _ghCache = all || {};
+      if (all && !err){
+        /* 与本地缓存按 id 合并：防止「保存进行中强刷、GitHub 尚未落盘」导致的新增丢失。
+           GitHub 为权威（同 id 以 GitHub 为准），本地有而 GitHub 缺失的 id 补回。 */
+        var cache = localCacheGet();
+        if (cache){
+          Object.keys(cache).forEach(function(ck){
+            var crows = (cache[ck] || []).filter(function(r){ return r && r._id; });
+            if (!crows.length) return;
+            var base = (_ghCache[ck] || []).slice();
+            var has = {}; base.forEach(function(r){ if (r && r._id) has[String(r._id)] = true; });
+            crows.forEach(function(r){ if (!has[String(r._id)]) base.push(r); });
+            _ghCache[ck] = base;
+          });
+        }
+        localCacheSetFrom(_ghCache); /* 合并结果写回本地缓存，保持最新 */
+      }
+      cb(_ghCache[key] || []);
+      if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
+    });
     return;
   }
   if (MODE === 'local'){ cb(lsGet(key)); return; }
@@ -634,8 +867,9 @@ function localUpsert(key, id, vals){
   rows.unshift(row);
   store[key].rows = rows;
   store[key].status = rows.length ? 'ok' : 'empty';
-  if (MODE === 'gh') queueGhSave();
-  else if (MODE === 'local') lsSet(key, rows);
+  if (MODE === 'gh'){ queueGhSave(); localCacheSet(); }
+  else if (MODE === 'localfile'){ queueLocalSave(); }
+  else if (MODE === 'local'){ lsSet(key, rows); localCacheSet(); }
 }
 function refreshKey(key, after){
   fetchAll(key, function(rows){
@@ -672,7 +906,7 @@ function addRow(key, vals, after){
     localUpsert(key, id, vals);
     if (after) after();
     render();
-    toast('已保存到本地（当前浏览器）');
+    toast(MODE === 'localfile' ? '已保存到本地 data 文件夹' : '已保存到本地（当前浏览器）');
     return;
   }
   var m=MODS[key], props=propsFrom(m.fields, vals);
@@ -689,7 +923,7 @@ function updateRow(key, id, vals, after){
     localUpsert(key, id, vals);
     if (after) after();
     render();
-    toast('已保存到本地');
+    toast(MODE === 'localfile' ? '已保存到本地 data 文件夹' : '已保存到本地');
     return;
   }
   var m=MODS[key], props=propsFrom(m.fields, vals);
@@ -704,7 +938,9 @@ function deleteRow(key, id, name, after){
   if (MODE !== 'db'){
     store[key].rows = store[key].rows.filter(function(r){ return r._id!==id; });
     store[key].status = store[key].rows.length ? 'ok' : 'empty';
-    lsSet(key, store[key].rows);
+    if (MODE === 'gh'){ queueGhSave(); localCacheSet(); }
+    else if (MODE === 'localfile'){ queueLocalSave(); }
+    else { lsSet(key, store[key].rows); localCacheSet(); }
     if (after) after();
     render();
     toast('已从本地删除');
@@ -2534,6 +2770,12 @@ try{
 function bootBanner(){
   var box=$('offlineBox');
   if (MODE === 'db'){ box.className='offline'; return; }
+  if (MODE === 'localfile'){
+    box.className='offline show gh';
+    box.innerHTML='<b>本地文件模式</b>：数据保存在本机 <b>data/lifedesk.json</b>（由本地服务器读写）。'+
+      '点右下角「⚙ 同步设置」连上 GitHub 后，可用「上传本地数据」把这份文件<b>覆盖推到云端</b>。';
+    return;
+  }
   if (MODE === 'gh'){
     box.className='offline show gh';
     box.innerHTML='<b>已连接 GitHub 仓库</b>：'+esc(GH.owner)+'/'+esc(GH.repo)+'（'+esc(GH.branch)+'）。'+
@@ -2550,10 +2792,30 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape' && !$('she
 
 function __boot(){
  try {
-  bootBanner();
-  addDataTools();
-  render();
-  loadAll();  /* db / gh / local 三种模式都经 fetchAll 分发，统一初始加载 */
+  if (_FSA_SUPPORT){
+    restoreFsaHandle().then(function(h){
+      if (h){ _fsaHandle = h; MODE = 'localfile'; afterBoot(); }
+      else {
+        MODE = (GH && GH.owner && GH.repo) ? 'gh' : 'local';
+        if (ONLINE) MODE = 'db';
+        afterBoot();
+        promptPickFsaDir();
+      }
+    }).catch(function(){
+      MODE = (GH && GH.owner && GH.repo) ? 'gh' : 'local'; if (ONLINE) MODE = 'db'; afterBoot();
+    });
+  } else {
+    if (ONLINE) MODE = 'db';
+    afterBoot();
+  }
+  function afterBoot(){
+    bootBanner();
+    addDataTools();
+    render();
+    loadAll();  /* db / gh / local / localfile 四种模式都经 fetchAll 分发，统一初始加载 */
+    initGhStatus();
+    refreshFsaButtons();
+  }
  } catch(e){
   console.error('启动异常', e);
   var _s=document.getElementById('stage');
@@ -2908,7 +3170,7 @@ function rebuildMarkers(g){
     var spr=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:true, depthWrite:false}));
     spr.position.copy(pos);
     spr.center.set(0.5,1.0);                /* 底部中心锚点 */
-    spr.scale.set(0.022,0.028,1);           /* 小巧，和城市点同量级 */
+    spr.scale.set(0.011,0.014,1);           /* 比原小图钉再小一半；去过/想去 同尺寸 */
     spr.userData={id:m.id, name:(m.name || m['名称'] || ('目的地 '+m.id)), status:st, kind:'travelMarker'};
     g.markerGroup.add(spr);
     g._markerMeshes.push(spr);
