@@ -13,7 +13,7 @@
 
 
 :root{
-  --paper:#f5f0e8;--card:#fffdfa;--ink:#29251f;--muted:#746d63;--line:#ded5c8;
+  --paper:#f5f0e8;--card:#fffdfa;--ink:#17120b;--muted:#5b554c;--line:#ded5c8;
   
   --terra-soft:#f3dfd6;
   --sage:#627a67;--sage-soft:#dfe8df;
@@ -471,9 +471,9 @@ input.search:focus{border-color:var(--accent);background:#fff}
 :root {
   --serif: "Cormorant Garamond","Playfair Display","Songti SC","SimSun","STSong",serif;
   --sans:  "PingFang SC","Hiragino Sans GB","Microsoft YaHei","Helvetica Neue",sans-serif;
-  --ink:        #3a2618;   /* 主标题 深褐 */
-  --ink-soft:   #5a4030;   /* 副标题 暖棕 */
-  --ink-faint:  #8a6a48;   /* 元信息/描述 浅金棕 */
+  --ink:        #17120b;   /* 主标题 近黑 */
+  --ink-soft:   #3a2a1c;   /* 副标题 暖棕（加深） */
+  --ink-faint:  #6b5036;   /* 元信息/描述 浅金棕（加深） */
   --paper:      rgba(255, 250, 240, 0.78);   /* 玻璃卡片奶白半透 */
   
   --hairline:   rgba(255, 240, 220, 0.55);

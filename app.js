@@ -66,10 +66,17 @@ try { if (window.__SMART_PAGE__ && window.__SMART_PAGE__.database) { db = window
  * - gh  ：部署到 GitHub Pages 后，用户填好仓库配置，数据读写仓库里的 data/lifedesk.json
  * - local：无网络后端时兜底，数据存当前浏览器 localStorage
  * 注意：db 模式永远优先于 gh（资料库自带云端，不需要 GitHub）。 */
+/* 部署版：仓库信息已内置（owner/repo/分支/路径），用户只需在「同步设置」粘贴 Token 即可连接。
+ * 读取公开仓库无需 Token；写入需要带 repo 权限的 Token。 */
+var GH_DEFAULT = { owner:'Ciaorz', repo:'life-desk', branch:'main', path:'data/lifedesk.json', token:'' };
 var GH = null, MODE = 'local';
 try { GH = JSON.parse(localStorage.getItem('lifedesk_gh') || 'null'); } catch(e){ GH = null; }
-if (GH && GH.owner && GH.repo){ GH.branch = GH.branch || 'main'; GH.path = GH.path || 'data/lifedesk.json'; MODE = 'gh'; }
-else GH = null;
+if (!GH || typeof GH !== 'object') GH = {};
+GH = Object.assign({}, GH_DEFAULT, GH);            // 已存的本地配置（含 Token）覆盖默认值
+GH.branch = GH.branch || 'main';
+GH.path   = GH.path   || 'data/lifedesk.json';
+/* 只要有 owner+repo（默认就有）就走 gh 模式：读公开仓库无需 Token，写需要 Token */
+if (GH && GH.owner && GH.repo){ MODE = 'gh'; } else { MODE = 'local'; }
 if (ONLINE) MODE = 'db';
 
 /* ============ 离线本地存储后端 ============
@@ -122,6 +129,7 @@ function ghGetAll(cb){
     .catch(function(){ cb(null, null); });
 }
 function ghSaveAll(obj, cb){
+  if (!GH || !GH.token){ if (cb) cb(false); return; }
   _ghCache = obj; /* 写完后内存视图立刻与仓库一致 */
   var body = { message: 'life-desk data sync ' + new Date().toISOString().slice(0,19), content: utf8ToB64(JSON.stringify(obj, null, 2)) };
   if (_ghSha) body.sha = _ghSha;
@@ -135,6 +143,10 @@ function ghSaveAll(obj, cb){
 }
 var _ghTimer = null;
 function queueGhSave(){
+  if (!GH || !GH.token){
+    toast('要保存改动，请先点右下角 ⚙ 同步设置 粘贴 GitHub Token', '去填', function(){ toggleGhPanel(); });
+    return;
+  }
   if (_ghTimer) clearTimeout(_ghTimer);
   _ghTimer = setTimeout(function(){ _ghTimer = null; ghSaveAll(snapshotAll(), function(ok){ if (!ok) toast('同步到 GitHub 失败，稍后重试'); }); }, 700);
 }
@@ -180,7 +192,7 @@ function importData(){
         var data = JSON.parse(rd.result);
         if (!data || !data.tables) throw new Error('bad');
         Object.keys(data.tables).forEach(function(k){ if (MODE!=='gh') lsSet(k, data.tables[k] || []); });
-        if (MODE === 'gh'){
+        if (MODE === 'gh' && GH && GH.token){
           ORDER.filter(function(k){ return k!=='overview'; }).concat(EXTRA).forEach(function(k){
             if (data.tables[k]){ if(!store[k]) store[k]={rows:[],status:'ok'}; store[k].rows = data.tables[k]; }
           });
@@ -214,10 +226,11 @@ function addDataTools(){
   p.id = 'ghPanel';
   p.innerHTML =
     '<div style="font-weight:700;margin-bottom:8px">GitHub 数据同步</div>' +
-    '<label style="display:block;margin:4px 0">用户名(owner)<input id="ghOwner" style="width:100%;box-sizing:border-box"></label>' +
-    '<label style="display:block;margin:4px 0">仓库名(repo)<input id="ghRepo" style="width:100%;box-sizing:border-box"></label>' +
-    '<label style="display:block;margin:4px 0">分支(branch)<input id="ghBranch" value="main" style="width:100%;box-sizing:border-box"></label>' +
-    '<label style="display:block;margin:4px 0">数据文件路径<input id="ghPath" value="data/lifedesk.json" style="width:100%;box-sizing:border-box"></label>' +
+    '<div style="font-size:11px;color:#9aa;margin:2px 0 6px">仓库已自动填好，你只需粘贴下方 Token：</div>' +
+    '<label style="display:block;margin:4px 0">用户名(owner)<input id="ghOwner" readonly style="width:100%;box-sizing:border-box;background:#eee"></label>' +
+    '<label style="display:block;margin:4px 0">仓库名(repo)<input id="ghRepo" readonly style="width:100%;box-sizing:border-box;background:#eee"></label>' +
+    '<label style="display:block;margin:4px 0">分支(branch)<input id="ghBranch" readonly value="main" style="width:100%;box-sizing:border-box;background:#eee"></label>' +
+    '<label style="display:block;margin:4px 0">数据文件路径<input id="ghPath" readonly value="data/lifedesk.json" style="width:100%;box-sizing:border-box;background:#eee"></label>' +
     '<label style="display:block;margin:4px 0">Token（有 repo 权限，仅存本机）<input id="ghToken" type="password" style="width:100%;box-sizing:border-box"></label>' +
     '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' +
       '<button type="button" id="ghSave">保存并连接</button>' +
