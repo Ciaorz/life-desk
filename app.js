@@ -2810,27 +2810,6 @@ function ringSignedArea(flat){
   return s;
 }
 
-/* === 旅行地标签 === */
-function buildTravelLabels(g, group, markers){
-  if (!g || !group || !markers) return;
-  var three = window.THREE;
-  for (var i=0; i<markers.length; i++){
-    var m = markers[i];
-    var label = m.name || m['名称'] || ('#'+m.id);
-    var color = m.status==='去过' ? '#e23b3b' : '#7fb3ff';
-    var tex = _labelTex(label, {color:color, outline:'#0a1232', size:128});
-    var spr = new three.Sprite(new three.SpriteMaterial({map:tex, transparent:true, depthTest:false, depthWrite:false}));
-    var pos = latLonVec3(m.lat, m.lon, 1.055);
-    spr.position.copy(pos);
-    var w = label.length*0.04 + 0.18;
-    if (w < 0.22) w = 0.22;
-    if (w > 0.45) w = 0.45;
-    spr.scale.set(w, w*0.45, 1);
-    spr.userData = {kind:'travelLabel', id:m.id, name:label};
-    group.add(spr);
-  }
-}
-
 function sizeG(g){
   var cv=g.cv; if(!cv) return;
   var rect=cv.getBoundingClientRect();
@@ -2876,41 +2855,42 @@ function _mkTex(color){
 var _pinTexCache=null, _sproutTexCache=null;
 function _pinTex(){
   if(_pinTexCache) return _pinTexCache;
+  /* 去过 = 红色小图钉 📌：圆头 + 尖尾，底部锚点 */
   var c=document.createElement('canvas'); c.width=64; c.height=80; var x=c.getContext('2d');
-  var px=32, top=28, r=15;
-  x.fillStyle='#3b78d9';
+  var px=32, top=24, r=13;
+  x.fillStyle='#e23b3b';
   x.beginPath(); x.arc(px,top,r,0,6.283); x.fill();
-  x.beginPath(); x.moveTo(px-r,top); x.lineTo(px+r,top); x.lineTo(px,72); x.closePath(); x.fill();
-  x.fillStyle='#fff'; x.beginPath(); x.arc(px,top,6,0,6.283); x.fill();
-  var t=new THREE.CanvasTexture(c); _pinTexCache=t; return t;
+  x.beginPath(); x.moveTo(px-r+2,top); x.lineTo(px+r-2,top); x.lineTo(px,74); x.closePath(); x.fill();
+  x.fillStyle='#fff'; x.beginPath(); x.arc(px,top,5,0,6.283); x.fill();
+  var t=new THREE.CanvasTexture(c); t.center=new THREE.Vector2(0.5,1.0); _pinTexCache=t; return t;
 }
 function _sproutTex(){
   if(_sproutTexCache) return _sproutTexCache;
-  /* v15.18：想去 = 绿色小草苗：一根茎两片叶，下面一坨小土 */
+  /* 想去 = 绿色小草苗 🌿：小巧，底部锚点 */
   var c=document.createElement('canvas'); c.width=64; c.height=80; var x=c.getContext('2d');
   /* 土堆 */
   x.fillStyle='#6b4a2b';
-  x.beginPath(); x.ellipse(32,72,22,5,0,0,6.283); x.fill();
+  x.beginPath(); x.ellipse(32,74,18,4,0,0,6.283); x.fill();
   x.fillStyle='#8a6240';
-  x.beginPath(); x.ellipse(32,70,18,3.5,0,0,6.283); x.fill();
+  x.beginPath(); x.ellipse(32,72,14,2.8,0,0,6.283); x.fill();
   /* 主茎 */
-  x.strokeStyle='#3aa55a'; x.lineWidth=2.6; x.lineCap='round';
-  x.beginPath(); x.moveTo(32,70); x.quadraticCurveTo(33,52,32,34); x.stroke();
-  /* 左侧叶（朝左上） */
+  x.strokeStyle='#3aa55a'; x.lineWidth=2.2; x.lineCap='round';
+  x.beginPath(); x.moveTo(32,72); x.quadraticCurveTo(33,56,32,40); x.stroke();
+  /* 左侧叶 */
   x.fillStyle='#4ec36b';
-  x.beginPath(); x.moveTo(32,52); x.quadraticCurveTo(16,42,12,30);
-  x.quadraticCurveTo(22,38,32,46); x.closePath(); x.fill();
-  x.strokeStyle='#2e8a4b'; x.lineWidth=1.2;
-  x.beginPath(); x.moveTo(32,50); x.lineTo(14,32); x.stroke();
-  /* 右侧叶（朝右上） */
+  x.beginPath(); x.moveTo(32,56); x.quadraticCurveTo(18,48,15,38);
+  x.quadraticCurveTo(24,44,32,52); x.closePath(); x.fill();
+  x.strokeStyle='#2e8a4b'; x.lineWidth=1;
+  x.beginPath(); x.moveTo(32,54); x.lineTo(17,40); x.stroke();
+  /* 右侧叶 */
   x.fillStyle='#5fd17c';
-  x.beginPath(); x.moveTo(33,40); x.quadraticCurveTo(50,32,54,20);
-  x.quadraticCurveTo(42,26,32,34); x.closePath(); x.fill();
-  x.strokeStyle='#2e8a4b'; x.lineWidth=1.2;
-  x.beginPath(); x.moveTo(33,38); x.lineTo(52,22); x.stroke();
-  /* 顶芽小亮 */
+  x.beginPath(); x.moveTo(33,46); x.quadraticCurveTo(48,40,52,30);
+  x.quadraticCurveTo(41,34,32,42); x.closePath(); x.fill();
+  x.strokeStyle='#2e8a4b'; x.lineWidth=1;
+  x.beginPath(); x.moveTo(33,44); x.lineTo(50,32); x.stroke();
+  /* 顶芽 */
   x.fillStyle='#7fe69a';
-  x.beginPath(); x.arc(32,33,3,0,6.283); x.fill();
+  x.beginPath(); x.arc(32,39,2.5,0,6.283); x.fill();
   var t=new THREE.CanvasTexture(c); _sproutTexCache=t; return t;
 }
 
@@ -2921,20 +2901,16 @@ function rebuildMarkers(g){
   if(!g.markers) return;
   g.markers.forEach(function(m){
     var st = (m.status==='已订') ? '想去' : (m.status||'想去');
-    var pos=latLonVec3(m.lat,m.lon,1.055);
-    var tex = (st==='去过') ? _pinTex() : _sproutTex();   /* v15.18：去过=图钉，想去=绿色小草苗 */
+    var isVisited = st==='去过';
+    /* 图标底部锚点在地表 + 0.003，扎在地球上不浮空 */
+    var pos=latLonVec3(m.lat,m.lon,1.003);
+    var tex = isVisited ? _pinTex() : _sproutTex();
     var spr=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:true, depthWrite:false}));
-    spr.position.copy(pos); spr.scale.set(0.058,0.072,1);
-    var name = m.name || m['名称'] || ('目的地 '+m.id);
-    /* 标签统一为深色气泡 + 白色文字，和城市名标签风格一致 */
-    var txt = new THREE.Sprite(new THREE.SpriteMaterial({map:_labelTex(name, {color:'#fff', bg:'rgba(22,26,36,0.88)', size:96}), transparent:true, depthTest:false, depthWrite:false}));
-    txt.position.set(pos.x, pos.y + 0.085, pos.z);
-    var w = name.length*0.026 + 0.16;
-    if (w < 0.18) w = 0.18;
-    if (w > 0.42) w = 0.42;
-    txt.scale.set(w, w*0.42, 1);
-    spr.userData={id:m.id}; txt.userData={id:m.id};
-    g.markerGroup.add(spr); g.markerGroup.add(txt);
+    spr.position.copy(pos);
+    spr.center.set(0.5,1.0);                /* 底部中心锚点 */
+    spr.scale.set(0.022,0.028,1);           /* 小巧，和城市点同量级 */
+    spr.userData={id:m.id, name:(m.name || m['名称'] || ('目的地 '+m.id)), status:st, kind:'travelMarker'};
+    g.markerGroup.add(spr);
     g._markerMeshes.push(spr);
   });
 }
@@ -2971,16 +2947,21 @@ function bindG(g){
   cv.addEventListener('wheel', function(e){ e.preventDefault(); var f=e.deltaY<0?1.12:1/1.12; g.zoomTarget=clampZoom(g.zoomTarget*f); }, {passive:false});
 }
 
-/* 城市点悬停/点按显示名称：桌面鼠标扫过即显示，移动端手指点击显示、点空白隐藏。
-   通过把每个城市投影到屏幕像素坐标、取最近者（带阈值），避免依赖精灵射线检测的精度问题。 */
+/* 城市点 + 旅行标记 悬停/点按显示名称：桌面鼠标扫过即显示，移动端手指点击显示、点空白隐藏。
+   通过把每个点投影到屏幕像素坐标、取最近者（带阈值），避免依赖精灵射线检测的精度问题。 */
 function setupCityHover(g){
-  if(!window.CITY_POINTS || !window.CITY_POINTS.length) return;
+  var hasCities = !!(window.CITY_POINTS && window.CITY_POINTS.length);
+  var hasMarkers = !!(g.markers && g.markers.length);
+  if(!hasCities && !hasMarkers) return;
   var cv=g.cv;
-  var tip=document.createElement('div');
-  tip.className='city-tip';
-  tip.style.display='none';
-  (document.body||document.documentElement).appendChild(tip);
-  g._cityTip=tip;
+  var tip=g._cityTip;
+  if(!tip){
+    tip=document.createElement('div');
+    tip.className='city-tip';
+    tip.style.display='none';
+    (document.body||document.documentElement).appendChild(tip);
+    g._cityTip=tip;
+  }
   function projectCity(c){
     g.earth.updateWorldMatrix(true,false);
     var r=(g.terrainR?g.terrainR(c[1],c[0]):1.0)+0.006;
@@ -2990,14 +2971,33 @@ function setupCityHover(g){
     var ndc=v.clone().project(g.camera);
     if(ndc.z>1||ndc.z<-1) return null;
     var rect=cv.getBoundingClientRect();
-    return { x: rect.left+(ndc.x*0.5+0.5)*rect.width, y: rect.top+(-ndc.y*0.5+0.5)*rect.height, name:c[2], tier:c[3] };
+    return { x: rect.left+(ndc.x*0.5+0.5)*rect.width, y: rect.top+(-ndc.y*0.5+0.5)*rect.height, name:c[2] };
   }
-  function nearestCity(cx,cy,tol){
+  function projectMarker(m){
+    g.earth.updateWorldMatrix(true,false);
+    var v=latLonVec3(m.lat,m.lon,1.003);
+    g.earth.localToWorld(v);
+    if(v.z<=0) return null;
+    var ndc=v.clone().project(g.camera);
+    if(ndc.z>1||ndc.z<-1) return null;
+    var rect=cv.getBoundingClientRect();
+    return { x: rect.left+(ndc.x*0.5+0.5)*rect.width, y: rect.top+(-ndc.y*0.5+0.5)*rect.height, name:(m.name || m['名称'] || ('目的地 '+m.id)) };
+  }
+  function nearestPoint(cx,cy,tol){
     var best=null, bestD=tol;
-    for(var i=0;i<window.CITY_POINTS.length;i++){
-      var p=projectCity(window.CITY_POINTS[i]); if(!p) continue;
-      var dx=p.x-cx, dy=p.y-cy, d=Math.sqrt(dx*dx+dy*dy);
-      if(d<bestD){ bestD=d; best=p; }
+    if(hasCities){
+      for(var i=0;i<window.CITY_POINTS.length;i++){
+        var p=projectCity(window.CITY_POINTS[i]); if(!p) continue;
+        var dx=p.x-cx, dy=p.y-cy, d=Math.sqrt(dx*dx+dy*dy);
+        if(d<bestD){ bestD=d; best=p; }
+      }
+    }
+    if(hasMarkers){
+      for(var i=0;i<g.markers.length;i++){
+        var p=projectMarker(g.markers[i]); if(!p) continue;
+        var dx=p.x-cx, dy=p.y-cy, d=Math.sqrt(dx*dx+dy*dy);
+        if(d<bestD){ bestD=d; best=p; }
+      }
     }
     return best;
   }
@@ -3007,14 +3007,14 @@ function setupCityHover(g){
   /* 桌面：鼠标移动即悬停 */
   cv.addEventListener('pointermove', function(e){
     if(e.pointerType && e.pointerType!=='mouse') return;
-    var c=nearestCity(e.clientX, e.clientY, 16);
+    var c=nearestPoint(e.clientX, e.clientY, 16);
     if(c) showTip(c); else hideTip();
   });
   cv.addEventListener('mouseleave', hideTip);
   /* 移动端：点击（tap）显示，点空白隐藏 */
   cv.addEventListener('pointerup', function(e){
     if(e.pointerType && e.pointerType==='mouse') return;
-    var c=nearestCity(e.clientX, e.clientY, 18);
+    var c=nearestPoint(e.clientX, e.clientY, 18);
     if(c) showTip(c); else hideTip();
   });
 }
