@@ -227,11 +227,11 @@ function addDataTools(){
   p.innerHTML =
     '<div style="font-weight:700;margin-bottom:8px">GitHub 数据同步</div>' +
     '<div style="font-size:11px;color:#9aa;margin:2px 0 6px">仓库已自动填好，你只需粘贴下方 Token：</div>' +
-    '<label style="display:block;margin:4px 0">用户名(owner)<input id="ghOwner" readonly style="width:100%;box-sizing:border-box;background:#eee"></label>' +
-    '<label style="display:block;margin:4px 0">仓库名(repo)<input id="ghRepo" readonly style="width:100%;box-sizing:border-box;background:#eee"></label>' +
-    '<label style="display:block;margin:4px 0">分支(branch)<input id="ghBranch" readonly value="main" style="width:100%;box-sizing:border-box;background:#eee"></label>' +
-    '<label style="display:block;margin:4px 0">数据文件路径<input id="ghPath" readonly value="data/lifedesk.json" style="width:100%;box-sizing:border-box;background:#eee"></label>' +
-    '<label style="display:block;margin:4px 0">Token（有 repo 权限，仅存本机）<input id="ghToken" type="password" style="width:100%;box-sizing:border-box"></label>' +
+    '<label style="display:block;margin:4px 0">用户名(owner)<input id="ghOwner" readonly value="Ciaorz" style="width:100%;box-sizing:border-box;background:#eee;color:#111"></label>' +
+    '<label style="display:block;margin:4px 0">仓库名(repo)<input id="ghRepo" readonly value="life-desk" style="width:100%;box-sizing:border-box;background:#eee;color:#111"></label>' +
+    '<label style="display:block;margin:4px 0">分支(branch)<input id="ghBranch" readonly value="main" style="width:100%;box-sizing:border-box;background:#eee;color:#111"></label>' +
+    '<label style="display:block;margin:4px 0">数据文件路径<input id="ghPath" readonly value="data/lifedesk.json" style="width:100%;box-sizing:border-box;background:#eee;color:#111"></label>' +
+    '<label style="display:block;margin:4px 0">Token（有 repo 权限，仅存本机）<input id="ghToken" type="password" style="width:100%;box-sizing:border-box;background:#fff;color:#111"></label>' +
     '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' +
       '<button type="button" id="ghSave">保存并连接</button>' +
       '<button type="button" id="ghUpload">上传本地数据</button>' +
@@ -241,7 +241,7 @@ function addDataTools(){
   p.style.cssText = 'display:none;position:fixed;right:14px;bottom:60px;z-index:10000;width:300px;background:#1b1b22;color:#eee;padding:14px;border:1px solid #444;border-radius:8px;font:12px/1.5 var(--sans)';
   document.body.appendChild(p);
   var cfg = ghConfig() || {};
-  $('ghOwner').value = cfg.owner || ''; $('ghRepo').value = cfg.repo || '';
+  $('ghOwner').value = cfg.owner || 'Ciaorz'; $('ghRepo').value = cfg.repo || 'life-desk';
   $('ghBranch').value = cfg.branch || 'main'; $('ghPath').value = cfg.path || 'data/lifedesk.json';
   $('ghToken').value = cfg.token || '';
   $('ghClose').onclick = function(){ p.style.display = 'none'; };
