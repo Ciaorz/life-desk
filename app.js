@@ -3135,16 +3135,39 @@ function _mkTex(color){
   var t=new THREE.CanvasTexture(c); _mkTexCache[color]=t; return t;
 }
 var _pinTexCache=null, _sproutTexCache=null;
-function _pinTex(){
-  if(_pinTexCache) return _pinTexCache;
-  /* 去过 = 红色小图钉 📌：圆头 + 尖尾，底部锚点 */
+var _pinImgLoading=false, _pinImgSize={w:64,h:80};
+/* 外部 PNG 加载失败/未加载完时的兜底：红色小图钉 */
+function _drawPinTex(){
   var c=document.createElement('canvas'); c.width=64; c.height=80; var x=c.getContext('2d');
   var px=32, top=24, r=13;
   x.fillStyle='#e23b3b';
   x.beginPath(); x.arc(px,top,r,0,6.283); x.fill();
   x.beginPath(); x.moveTo(px-r+2,top); x.lineTo(px+r-2,top); x.lineTo(px,74); x.closePath(); x.fill();
   x.fillStyle='#fff'; x.beginPath(); x.arc(px,top,5,0,6.283); x.fill();
-  var t=new THREE.CanvasTexture(c); t.center=new THREE.Vector2(0.5,1.0); _pinTexCache=t; return t;
+  var t=new THREE.CanvasTexture(c); t.center=new THREE.Vector2(0.5,1.0); return t;
+}
+function _pinTex(){
+  if(_pinTexCache) return _pinTexCache;
+  /* 尝试加载用户自定义去过图标；加载完成前用绘制图钉兜底，加载成功后重建 markers 使其生效 */
+  if (!_pinImgLoading){
+    _pinImgLoading = true;
+    var img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = function(){
+      var tex = new THREE.Texture(img);
+      tex.needsUpdate = true;
+      tex.center = new THREE.Vector2(0.5, 1.0);
+      _pinTexCache = tex;
+      _pinImgSize = { w: img.naturalWidth || 64, h: img.naturalHeight || 80 };
+      try { if (GLOBE && GLOBE.cv) rebuildMarkers(GLOBE); } catch(e){}
+    };
+    img.onerror = function(){
+      console.warn('images/pin-visited.png 加载失败，继续使用绘制图钉');
+      _pinImgLoading = false;  /* 下次调用再尝试 */
+    };
+    img.src = 'images/pin-visited.png';
+  }
+  return _drawPinTex();
 }
 function _sproutTex(){
   if(_sproutTexCache) return _sproutTexCache;
@@ -3190,7 +3213,13 @@ function rebuildMarkers(g){
     var spr=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:true, depthWrite:false}));
     spr.position.copy(pos);
     spr.center.set(0.5,1.0);                /* 底部中心锚点 */
-    spr.scale.set(0.011,0.014,1);           /* 比原小图钉再小一半；去过/想去 同尺寸 */
+    /* 去过图标使用外部 PNG，按图片宽高比保持比例；想去仍用程序绘制的小草苗 */
+    if (isVisited && _pinImgSize && _pinImgSize.h){
+      var bh = 0.014;                       /* 目标高度与想去小草苗一致 */
+      spr.scale.set(bh * (_pinImgSize.w / _pinImgSize.h), bh, 1);
+    } else {
+      spr.scale.set(0.011,0.014,1);         /* 比原小图钉再小一半；去过/想去 同尺寸 */
+    }
     spr.userData={id:m.id, name:(m.name || m['名称'] || ('目的地 '+m.id)), status:st, kind:'travelMarker'};
     g.markerGroup.add(spr);
     g._markerMeshes.push(spr);
