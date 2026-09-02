@@ -463,6 +463,16 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .earth-legend i{display:flex;align-items:center;gap:6px;font-size:11px;color:#cdd9f5;font-style:normal}
 .earth-legend u{width:9px;height:9px;border-radius:50%;display:inline-block}
 .earth-tip{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:11.5px;color:#8fa3d6;z-index:2;pointer-events:none}
+/* 常驻地球宿主：canvas 与覆盖层常驻于此，切 tab / 切筛选时只整块移动，不重建 WebGL */
+#globeSlot{position:absolute;inset:0}
+.globe-host{position:absolute;inset:0}
+.globe-host[hidden]{display:none}
+.globe-refresh{position:absolute;right:14px;bottom:14px;z-index:6;display:inline-flex;align-items:center;gap:6px;
+  padding:8px 14px;border:1px solid rgba(150,190,255,.22);border-radius:999px;background:rgba(16,24,44,.72);
+  color:#eaf1ff;font-size:12.5px;font-family:inherit;cursor:pointer;backdrop-filter:blur(6px);
+  box-shadow:0 4px 16px rgba(0,0,0,.35);transition:background .18s,transform .12s}
+.globe-refresh:hover{background:rgba(38,54,96,.92)}
+.globe-refresh:active{transform:scale(.96)}
 .sheet.pick .pickwrap{position:relative;height:46vh;background:#05060f;border-radius:14px;overflow:hidden;margin:6px 0}
 .sheet.pick .earth-canvas{cursor:crosshair}
 .sheet.pick .picktip{position:absolute;left:0;right:0;bottom:10px;text-align:center;font-size:11.5px;color:#8fa3d6;pointer-events:none}

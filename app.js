@@ -1300,16 +1300,7 @@ function renderTravel(){
     '<div class="stat"><u>去过</u><b>'+cnt['去过']+'</b><i>处</i></div>'+
     '<div class="stat"><u>心愿里的天数</u><b>'+(function(){var t=0;s.rows.forEach(function(r){t+=num(r['预计天数']);});return t;})()+'</b><i>天</i></div>'+
     '</div></section>';
-  h += '<section class="earth-hero" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl">'+
-    '<canvas id="earthCanvas" class="earth-canvas"></canvas>'+
-
-    '<div class="earth-overlay"><div class="earth-title">去过的地方，都亮起来了</div>'+
-    '<div class="earth-sub" id="earthStat"></div></div>'+
-    '<div class="earth-legend">'+
-      '<i><u style="background:#3b78d9"></u>去过（小图钉）</i>'+
-      '<i><u style="background:#3aa55a"></u>想去（小草苗）</i></div>'+
-    '<div class="earth-tip">拖动旋转 · 点亮的都是你去过 / 计划去的地方</div>'+
-    '</section>';
+  h += '<section class="earth-hero" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div id="globeSlot"></div></section>';
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div class="panel-head"><div><h2>目的地</h2>'+
     '<div class="hint">按状态和心愿等级排</div></div></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
@@ -1497,8 +1488,10 @@ function render(){
   else if (key==='study') h=renderStudyRoom();
   else if (key==='food') h=renderFoodTwoCol();
   else if (key==='idea') h=renderIdeaSky();
+  /* 重建 stage 前先把常驻地球宿主移出文档（挂回 body），避免被 innerHTML 销毁导致 WebGL 上下文丢失 */
+  var _gh=$('globeHost'); if(_gh && _gh.parentNode){ _gh.parentNode.removeChild(_gh); document.body.appendChild(_gh); _gh.hidden=true; }
   $('stage').innerHTML=h;
-  if (key==='travel'){ initGlobe(); } else { stopGlobe(); }
+  if (key==='travel'){ attachGlobe(); } else { detachGlobe(); }
   if (key==='study'){ /* 书房暂无常驻 3D 场景 */ }
   if (key==='idea'){ initFireworks(); } else { stopFireworks(); }
   if (key==='food'){ initFoodMap(); } else { stopFoodMap(); }
@@ -3683,11 +3676,14 @@ function showGlobeFallback(cv){
     wrap.appendChild(note);
   }catch(e){}
 }
-function initGlobe(){
-  var cv=$('earthCanvas'); if (!cv){ stopGlobe(); return; }
+function attachGlobe(){
+  var host=$('globeHost'), slot=$('globeSlot');
+  if (!host || !slot){ stopGlobe(); return; }
+  if (host.parentNode!==slot) slot.appendChild(host);  // 移动常驻宿主进当前 slot（不重建 canvas，不丢失 WebGL 上下文）
+  host.hidden=false;
+  var cv=$('earthCanvas'); if(!cv){ stopGlobe(); return; }
   ensureEarth();
-  if (!GLOBE || GLOBE.cv!==cv){
-    if (GLOBE && GLOBE.raf){ try{ cancelAnimationFrame(GLOBE.raf); }catch(_){} }
+  if (!GLOBE){
     try {
       GLOBE=makeGlobe(cv,{ry:-2.4, rx:-0.30, markers:loadTravelMarkers()});
     } catch(e){
@@ -3700,11 +3696,31 @@ function initGlobe(){
       GLOBE_RESIZE=function(){ if (GLOBE) sizeG(GLOBE); };
       window.addEventListener('resize', GLOBE_RESIZE);
     }
+    /* 首次挂载时布局可能尚未稳定，下一帧再校准一次画布尺寸 */
+    try { requestAnimationFrame(function(){ if (GLOBE) sizeG(GLOBE); }); } catch(_){}
   } else {
-    GLOBE.markers=loadTravelMarkers();
-    rebuildMarkers(GLOBE);
+    /* 已初始化：仅恢复渲染循环，不重建地球、不重建标记 —— 切换 tab / 筛选时地球纹丝不动 */
+    sizeG(GLOBE); loopG(GLOBE);
   }
   updateEarthStat();
+  bindGlobeRefresh();
+}
+function detachGlobe(){
+  stopGlobe();
+  var host=$('globeHost'); if(host) host.hidden=true;
+}
+function refreshGlobe(){
+  if (!GLOBE){ attachGlobe(); return; }
+  GLOBE.markers = loadTravelMarkers();   // 手动刷新：重新读取目的地并重建标记，反映新添加 / 修改的城市
+  rebuildMarkers(GLOBE);
+  GLOBE._mk = GLOBE.markers.map(function(m){ return m.id+':'+(m.status||''); }).join('|');
+  updateEarthStat();
+  toast('地球已刷新 · 已加载最新目的地');
+}
+function bindGlobeRefresh(){
+  var b=$('globeRefresh'); if(!b || b._bound) return;
+  b._bound=true;
+  b.onclick=function(){ refreshGlobe(); };
 }
 function stopGlobe(){
   if (GLOBE && GLOBE.raf){ cancelAnimationFrame(GLOBE.raf); GLOBE.raf=null; }

@@ -96,6 +96,18 @@
 <div class="backdrop" id="sheetHost" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<!-- ===== 旅行地球：常驻宿主（不在 stage 内，避免 render 时被 innerHTML 销毁重建） ===== -->
+<div class="globe-host" id="globeHost" hidden>
+  <canvas id="earthCanvas" class="earth-canvas"></canvas>
+  <div class="earth-overlay"><div class="earth-title">去过的地方，都亮起来了</div><div class="earth-sub" id="earthStat"></div></div>
+  <div class="earth-legend">
+    <i><u style="background:#e23b3b"></u>去过（小红旗）</i>
+    <i><u style="background:#3aa55a"></u>想去（小草苗）</i>
+  </div>
+  <div class="earth-tip">拖动旋转 · 点亮的都是你去过 / 计划去的地方</div>
+  <button id="globeRefresh" class="globe-refresh" type="button" title="重新加载已添加的目的地">↻ 刷新地球</button>
+</div>
+
 <!-- ===== 3D 地球模型：按设备加载不同纹理 ===== -->
 <script>
 (function(){
