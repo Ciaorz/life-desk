@@ -2305,11 +2305,23 @@ function openForm(key, id, opts){
     });
     if (bad){ toast('「'+bad.k+'」还没填'); return; }
     var after = formAfter; formAfter = null;
-    if (id) updateRow(key, id, editing.vals, after);
-    else addRow(key, editing.vals, after);
-    try { localStorage.removeItem('lifedesk_draft_' + key + (id ? '_' + id : '')); } catch(e){}
-    closeSheet();
-    if (MODE === 'db') toast('已保存', null, null);
+    var doSave = function(){
+      if (id) updateRow(key, id, editing.vals, after);
+      else addRow(key, editing.vals, after);
+      try { localStorage.removeItem('lifedesk_draft_' + key + (id ? '_' + id : '')); } catch(e){}
+      closeSheet();
+      if (MODE === 'db') toast('已保存', null, null);
+    };
+    /* 旅行：没填坐标时，自动按地点名地理编码，让目的地在地球上自动亮起来（查不到也不影响保存） */
+    if (key==='travel' && !(Number(editing.vals['纬度']) && Number(editing.vals['经度']))){
+      toast('正在按地点名定位坐标…');
+      geocodeTravel(editing.vals, function(coords){
+        if (coords){ editing.vals['纬度']=Math.round(coords.lat*100)/100; editing.vals['经度']=Math.round(coords.lon*100)/100; }
+        doSave();
+      });
+    } else {
+      doSave();
+    }
   };
   var del=$('delBtn');
   if (del) del.onclick=function(){
@@ -3236,6 +3248,22 @@ function loadTravelMarkers(){
     out.push({lat:lat, lon:lon, name:r['地点']||'', status:r['状态']||'', id:r._id});
   });
   return out;
+}
+/* 旅行保存时：按「地点 / 国家地区」自动地理编码拿经纬度（best-effort，失败不影响保存）。
+   用于让目的地在地球上自动亮起来——无需手动点地球选坐标。 */
+function geocodeTravel(vals, cb){
+  var q = [vals['地点'], vals['国家地区']].filter(function(s){ return s && String(s).trim(); })
+            .map(function(s){ return String(s).trim(); }).join(', ');
+  if (!q){ cb(null); return; }
+  var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q);
+  try {
+    var ctrl = ('AbortController' in window) ? new AbortController() : null;
+    var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 5000);
+    fetch(url, { headers: { 'Accept':'application/json' }, signal: ctrl ? ctrl.signal : undefined })
+      .then(function(r){ return r.ok ? r.json() : []; })
+      .then(function(arr){ clearTimeout(timer); if (arr && arr.length && arr[0].lat && arr[0].lon) cb({ lat:parseFloat(arr[0].lat), lon:parseFloat(arr[0].lon) }); else cb(null); })
+      .catch(function(){ clearTimeout(timer); cb(null); });
+  } catch(e){ cb(null); }
 }
 function showGlobeFallback(cv){
   try{
