@@ -11,7 +11,7 @@
  *      绝不让一个资源 404 把整个页面卡死。
  * ============================================================ */
 
-const CACHE = 'lifedesk-v12-2026-09-03';
+const CACHE = 'lifedesk-v13-2026-09-03';
 
 // 只缓存已知存在的、必须的子资源（白名单）。绝不强制 addAll 整个列表
 // （之前 v5 因为引用了 4 个 404 文件导致整个 install 失败、SW 永远装不上）
@@ -26,6 +26,7 @@ const PRECACHE_URLS = [
   './icon-192.png',
   './icon-512.png',
   './images/pin-visited.png',
+  './images/sprout-wish.png',
   // 3D 模型文件较大，由 fetch handler 按需懒缓存，不预下载
 ];
 
