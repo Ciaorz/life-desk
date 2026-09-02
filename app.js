@@ -2317,6 +2317,7 @@ function openForm(key, id, opts){
       toast('正在按地点名定位坐标…');
       geocodeTravel(editing.vals, function(coords){
         if (coords){ editing.vals['纬度']=Math.round(coords.lat*100)/100; editing.vals['经度']=Math.round(coords.lon*100)/100; }
+        else { toast('未自动找到坐标，请点「📍在地球上点选坐标」手动定位'); }
         doSave();
       });
     } else {
@@ -2635,7 +2636,7 @@ function latLonVec3(lat, lon, r){
 var _lblTexCache = {};
 function _labelTex(text, opts){
   opts = opts || {};
-  var key = text + '|' + (opts.color||'#fff') + '|' + (opts.size||128) + '|' + (opts.outline||'#000');
+  var key = text + '|' + (opts.color||'#fff') + '|' + (opts.size||128) + '|' + (opts.outline||'#000') + '|' + (opts.bg||'');
   if (_lblTexCache[key]) return _lblTexCache[key];
   var size = opts.size || 128;
   var pad = 16;
@@ -2651,6 +2652,29 @@ function _labelTex(text, opts){
   x.font = 'bold ' + fs + 'px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
   x.textBaseline = 'middle';
   x.textAlign = 'center';
+  /* 气泡背景（深色圆角） */
+  if (opts.bg){
+    var rx = c.width/2, ry = c.height/2;
+    var rw = w0 + pad * 1.4, rh = size * 0.72;
+    var rr = Math.min(rh/2, size*0.18);
+    x.fillStyle = opts.bg;
+    x.beginPath();
+    if (x.roundRect) {
+      x.roundRect(rx - rw/2, ry - rh/2, rw, rh, rr);
+    } else {
+      x.moveTo(rx - rw/2 + rr, ry - rh/2);
+      x.lineTo(rx + rw/2 - rr, ry - rh/2);
+      x.quadraticCurveTo(rx + rw/2, ry - rh/2, rx + rw/2, ry - rh/2 + rr);
+      x.lineTo(rx + rw/2, ry + rh/2 - rr);
+      x.quadraticCurveTo(rx + rw/2, ry + rh/2, rx + rw/2 - rr, ry + rh/2);
+      x.lineTo(rx - rw/2 + rr, ry + rh/2);
+      x.quadraticCurveTo(rx - rw/2, ry + rh/2, rx - rw/2, ry + rh/2 - rr);
+      x.lineTo(rx - rw/2, ry - rh/2 + rr);
+      x.quadraticCurveTo(rx - rw/2, ry - rh/2, rx - rw/2 + rr, ry - rh/2);
+      x.closePath();
+    }
+    x.fill();
+  }
   /* 描边 */
   if (opts.outline){
     x.lineWidth = Math.max(2, fs * 0.12);
@@ -2902,12 +2926,12 @@ function rebuildMarkers(g){
     var spr=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:true, depthWrite:false}));
     spr.position.copy(pos); spr.scale.set(0.058,0.072,1);
     var name = m.name || m['名称'] || ('目的地 '+m.id);
-    var colL = (st==='去过') ? '#7fb3ff' : '#3aa55a';
-    var txt = new THREE.Sprite(new THREE.SpriteMaterial({map:_labelTex(name, {color:colL, outline:'#08101e', size:128}), transparent:true, depthTest:false, depthWrite:false}));
-    txt.position.set(pos.x, pos.y + 0.08, pos.z);
-    var w = name.length*0.035 + 0.20;
-    if (w < 0.24) w = 0.24;
-    if (w > 0.50) w = 0.50;
+    /* 标签统一为深色气泡 + 白色文字，和城市名标签风格一致 */
+    var txt = new THREE.Sprite(new THREE.SpriteMaterial({map:_labelTex(name, {color:'#fff', bg:'rgba(22,26,36,0.88)', size:96}), transparent:true, depthTest:false, depthWrite:false}));
+    txt.position.set(pos.x, pos.y + 0.085, pos.z);
+    var w = name.length*0.026 + 0.16;
+    if (w < 0.18) w = 0.18;
+    if (w > 0.42) w = 0.42;
     txt.scale.set(w, w*0.42, 1);
     spr.userData={id:m.id}; txt.userData={id:m.id};
     g.markerGroup.add(spr); g.markerGroup.add(txt);
@@ -3250,11 +3274,36 @@ function loadTravelMarkers(){
   return out;
 }
 /* 旅行保存时：按「地点 / 国家地区」自动地理编码拿经纬度（best-effort，失败不影响保存）。
-   用于让目的地在地球上自动亮起来——无需手动点地球选坐标。 */
-function geocodeTravel(vals, cb){
-  var q = [vals['地点'], vals['国家地区']].filter(function(s){ return s && String(s).trim(); })
-            .map(function(s){ return String(s).trim(); }).join(', ');
-  if (!q){ cb(null); return; }
+   用于让目的地在地球上自动亮起来——无需手动点地球选坐标。
+   策略：中文原始查询 → 仅地点 → 常用外文别名 → 英文国家/地区名组合。 */
+var GEOCODE_COUNTRY_EN = {
+  '中国':'China','中国大陆':'China','中华人民共和国':'China',
+  '日本':'Japan','韩国':'South Korea','朝鲜':'North Korea',
+  '泰国':'Thailand','新加坡':'Singapore','马来西亚':'Malaysia','越南':'Vietnam','印度尼西亚':'Indonesia','印尼':'Indonesia',
+  '菲律宾':'Philippines','柬埔寨':'Cambodia','老挝':'Laos','缅甸':'Myanmar','尼泊尔':'Nepal','不丹':'Bhutan',
+  '印度':'India','斯里兰卡':'Sri Lanka','马尔代夫':'Maldives','阿联酋':'United Arab Emirates','迪拜':'Dubai',
+  '伊朗':'Iran','以色列':'Israel','土耳其':'Turkey','卡塔尔':'Qatar','约旦':'Jordan',
+  '英国':'United Kingdom','英格兰':'England','苏格兰':'Scotland','爱尔兰':'Ireland',
+  '法国':'France','德国':'Germany','意大利':'Italy','西班牙':'Spain','葡萄牙':'Portugal',
+  '荷兰':'Netherlands','比利时':'Belgium','瑞士':'Switzerland','奥地利':'Austria','希腊':'Greece',
+  '瑞典':'Sweden','挪威':'Norway','丹麦':'Denmark','芬兰':'Finland','冰岛':'Iceland',
+  '波兰':'Poland','捷克':'Czech Republic','匈牙利':'Hungary','克罗地亚':'Croatia','斯洛文尼亚':'Slovenia',
+  '俄罗斯':'Russia','乌克兰':'Ukraine',
+  '美国':'United States','美国本土':'United States','美':'United States',
+  '加拿大':'Canada','墨西哥':'Mexico','古巴':'Cuba','巴西':'Brazil','阿根廷':'Argentina','智利':'Chile','秘鲁':'Peru',
+  '澳大利亚':'Australia','新西兰':'New Zealand','斐济':'Fiji',
+  '埃及':'Egypt','南非':'South Africa','摩洛哥':'Morocco','肯尼亚':'Kenya','坦桑尼亚':'Tanzania',
+  '南极':'Antarctica','北极':'Arctic'
+};
+var GEOCODE_ALIAS = {
+  '多洛米蒂':'Dolomites','多洛米蒂山脉':'Dolomites','圣托里尼':'Santorini','马尔代夫':'Maldives',
+  '大堡礁':'Great Barrier Reef','马丘比丘':'Machu Picchu','吴哥窟':'Angkor Wat','蒲甘':'Bagan',
+  '阿尔卑斯':'Alps','阿尔卑斯山':'Alps','富士山':'Mount Fuji','乞力马扎罗':'Kilimanjaro',
+  '黄石':'Yellowstone','黄石公园':'Yellowstone National Park','大峡谷':'Grand Canyon',
+  '班夫':'Banff','班夫国家公园':'Banff National Park','雷克雅未克':'Reykjavik','极光':'Aurora',
+  '撒哈拉':'Sahara','撒哈拉沙漠':'Sahara Desert','纳米布沙漠':'Namib Desert'
+};
+function _geocodeOne(q, cb){
   var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q);
   try {
     var ctrl = ('AbortController' in window) ? new AbortController() : null;
@@ -3264,6 +3313,37 @@ function geocodeTravel(vals, cb){
       .then(function(arr){ clearTimeout(timer); if (arr && arr.length && arr[0].lat && arr[0].lon) cb({ lat:parseFloat(arr[0].lat), lon:parseFloat(arr[0].lon) }); else cb(null); })
       .catch(function(){ clearTimeout(timer); cb(null); });
   } catch(e){ cb(null); }
+}
+function geocodeTravel(vals, cb){
+  var loc = String(vals['地点']||'').trim();
+  var country = String(vals['国家地区']||'').trim();
+  if (!loc){ cb(null); return; }
+
+  var queries = [];
+  function add(q){ if (q && queries.indexOf(q)<0) queries.push(q); }
+  /* 1) 中文原词 */
+  add(country ? (loc + ', ' + country) : loc);
+  /* 2) 仅地点 */
+  add(loc);
+  /* 3) 常见外文别名 + 英文国家 */
+  var alias = GEOCODE_ALIAS[loc];
+  if (alias) {
+    add(alias);
+    if (country && GEOCODE_COUNTRY_EN[country]) add(alias + ', ' + GEOCODE_COUNTRY_EN[country]);
+  }
+  /* 4) 英文国家名组合 */
+  if (country && GEOCODE_COUNTRY_EN[country]) add(loc + ', ' + GEOCODE_COUNTRY_EN[country]);
+
+  var i = 0;
+  function next(){
+    if (i >= queries.length){ cb(null); return; }
+    var q = queries[i++];
+    _geocodeOne(q, function(coords){
+      if (coords) cb(coords);
+      else next();
+    });
+  }
+  next();
 }
 function showGlobeFallback(cv){
   try{
