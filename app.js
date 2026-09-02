@@ -3116,6 +3116,26 @@ function nearestMarker(g,ll){
   for(var i=0;i<g.markers.length;i++){ var m=g.markers[i]; var d2=Math.abs(m.lat-ll.lat)+Math.abs(m.lon-ll.lon); if(d2<bd){bd=d2;best=m;} }
   return best;
 }
+/* 屏幕像素坐标系下找最近的 marker sprite，用于长按拖拽的命中检测（比 lat/lon 度数距离精确） */
+function nearestScreenMarker(g, cssX, cssY, maxPx){
+  if (!g._markerMeshes || !g._markerMeshes.length) return null;
+  var rect = g.cv.getBoundingClientRect();
+  var v = new THREE.Vector3();
+  var best = null, bd = maxPx;
+  for (var i=0;i<g._markerMeshes.length;i++){
+    var s = g._markerMeshes[i];
+    s.updateWorldMatrix(true, false);
+    v.copy(s.position).applyMatrix4(s.matrixWorld);
+    v.project(g.camera);
+    if (v.z > 1) continue;   /* 球体背面 */
+    var sx = rect.left + (v.x * 0.5 + 0.5) * rect.width;
+    var sy = rect.top  + (1 - (v.y * 0.5 + 0.5)) * rect.height;
+    var dx = sx - cssX, dy = sy - cssY;
+    var d = Math.sqrt(dx*dx + dy*dy);
+    if (d < bd){ bd = d; best = s; }
+  }
+  return best;
+}
 
 var _mkTexCache={};
 function _mkTex(color){
@@ -3182,21 +3202,24 @@ function rebuildMarkers(g){
   for(var i=g.markerGroup.children.length-1;i>=0;i--) g.markerGroup.remove(g.markerGroup.children[i]);
   g._markerMeshes=[];
   if(!g.markers) return;
+  var hasTerrain = !!(g.terrainR);
   g.markers.forEach(function(m){
     var st = (m.status==='已订') ? '想去' : (m.status||'想去');
     var isVisited = st==='去过';
-    /* 图标底部锚点在地表 + 0.003，扎在地球上不浮空 */
-    var pos=latLonVec3(m.lat,m.lon,1.003);
+    /* roff 跟地形起伏：参考国境线与城市点的做法（terrainR+小量抬升），使标记贴在地表上 */
+    var rr = hasTerrain ? (g.terrainR(m.lat, m.lon) + 0.006) : 1.006;
+    var pos=latLonVec3(m.lat,m.lon,rr);
     var tex = isVisited ? _pinTex() : _sproutTex();
     var spr=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:true, depthWrite:false}));
     spr.position.copy(pos);
     spr.center.set(0.5,1.0);                /* 底部中心锚点 */
-    /* 去过/想去 都使用外部 PNG，按统一高度 0.010 缩放，保持各自宽高比；很小很小 */
+    /* 去过/想去 都使用外部 PNG。草苗比红旗大 1.2 倍；高度都很小，比例由 PNG 宽高比决定 */
     var size = isVisited ? _pinImg : _sproutImg;
-    var bh = 0.010;                         /* 统一目标高度：比上一轮 0.014 更小 */
+    var bh = isVisited ? 0.010 : 0.012;     /* 草苗 0.012 = 红旗 0.010 × 1.2 */
     var ratio = (size.h > 0) ? (size.w / size.h) : 1;
     spr.scale.set(bh * ratio, bh, 1);
-    spr.userData={id:m.id, name:(m.name || m['名称'] || ('目的地 '+m.id)), status:st, kind:'travelMarker'};
+    spr.userData={id:m.id, name:(m.name || m['名称'] || ('目的地 '+m.id)), status:st, kind:'travelMarker',
+      lat:m.lat, lon:m.lon, _dragLift:0};
     g.markerGroup.add(spr);
     g._markerMeshes.push(spr);
   });
@@ -3205,11 +3228,58 @@ function rebuildMarkers(g){
 function bindG(g){
   var cv=g.cv; cv.style.touchAction='none';
   function rotateBy(dx,dy){ g.ry+=dx*0.006; g.rx+=dy*0.006; if(g.rx>1.2)g.rx=1.2; if(g.rx<-1.2)g.rx=-1.2; }
+  /* 抬高/放下 marker：拖动时临时把 r 增大一点，视觉上"跳起来" */
+  function liftSprite(spr, lift){
+    if (!spr || !spr.userData) return;
+    spr.userData._dragLift = lift;
+    var lat = spr.userData.lat, lon = spr.userData.lon;
+    var rr = (g.terrainR ? g.terrainR(lat,lon) + 0.006 : 1.006) + lift;
+    spr.position.copy(latLonVec3(lat, lon, rr));
+  }
+  function cancelLongPress(){
+    if (g._lpTimer){ clearTimeout(g._lpTimer); g._lpTimer = null; }
+    g._lpTarget = null; g._lpXY = null; g._lpMoved = 0;
+  }
+  function endDrag(commit){
+    var spr = g._dragTarget;
+    if (spr){
+      var m = spr.userData;
+      liftSprite(spr, 0);   /* 放下，恢复原 roff */
+      if (commit){
+        /* 写回 store.travel 并持久化（FSA 模式直接落盘；gh 模式由后续同步流程上推） */
+        var row = (store.travel && store.travel.rows || []).find(function(r){ return String(r._id)===String(m.id); });
+        if (row){
+          row['纬度'] = m.lat; row['经度'] = m.lon;
+          if (MODE === 'localfile' && typeof queueLocalSave === 'function') queueLocalSave();
+          toast('位置已更新：'+(m.name||'')+' · '+m.lat.toFixed(2)+', '+m.lon.toFixed(2));
+          if (typeof _globeRefreshNow === 'function') _globeRefreshNow(true);
+        }
+      }
+    }
+    g._dragTarget = null; g._dragging = false;
+  }
   cv.addEventListener('pointerdown', function(e){
     g.pointers[e.pointerId]={x:e.clientX,y:e.clientY};
     var ids=Object.keys(g.pointers);
-    if(ids.length>=2){ g.pinchPrev=pinchDistG(g); g.dragging=false; return; }
-    g.dragging=true; g.lx=e.clientX; g.ly=e.clientY; g.moved=0;
+    if(ids.length>=2){ g.pinchPrev=pinchDistG(g); g.dragging=false; cancelLongPress(); return; }
+    /* 先用屏幕像素距离试命中 marker：命中则进入长按检测；未命中才旋转地球 */
+    var hit = nearestScreenMarker(g, e.clientX, e.clientY, 14);
+    if (hit){
+      g.dragging = false;   /* 长按期间不旋转 */
+      g._lpTarget = hit;
+      g._lpXY = {x:e.clientX, y:e.clientY};
+      g._lpMoved = 0;
+      g._lpTimer = setTimeout(function(){
+        if (g._lpTarget === hit && !g._dragging){
+          g._dragging = true;
+          g._dragTarget = hit;
+          liftSprite(hit, 0.025);   /* 跳起来：ro0ff 上浮 0.025 */
+          toast('已抓起 · 拖到新位置后松开');
+        }
+      }, 2000);
+    } else {
+      g.dragging=true; g.lx=e.clientX; g.ly=e.clientY; g.moved=0;
+    }
     if(cv.setPointerCapture) try{cv.setPointerCapture(e.pointerId);}catch(_){}
   });
   cv.addEventListener('pointermove', function(e){
@@ -3217,6 +3287,27 @@ function bindG(g){
     g.pointers[e.pointerId]={x:e.clientX,y:e.clientY};
     var ids=Object.keys(g.pointers);
     if(ids.length>=2){ var d=pinchDistG(g); if(g.pinchPrev){ g.zoomTarget=clampZoom(g.zoomTarget*(d/g.pinchPrev)); } g.pinchPrev=d; return; }
+    /* 拖动中：实时更新位置（仍按 roff 跟地形） */
+    if (g._dragging && g._dragTarget){
+      var ll = pickLatLon(g, e.clientX, e.clientY);
+      if (ll){
+        var m = g._dragTarget.userData;
+        m.lat = Math.round(ll.lat*100)/100;
+        m.lon = Math.round(ll.lon*100)/100;
+        liftSprite(g._dragTarget, m._dragLift || 0.025);
+      }
+      return;
+    }
+    /* 长按检测中：累计移动，超过阈值（>6px）则取消长按、回退为旋转地球 */
+    if (g._lpTarget){
+      g._lpMoved += Math.abs(e.clientX - g._lpXY.x) + Math.abs(e.clientY - g._lpXY.y);
+      g._lpXY = {x:e.clientX, y:e.clientY};
+      if (g._lpMoved > 6){
+        cancelLongPress();
+        g.dragging = true; g.lx = e.clientX; g.ly = e.clientY; g.moved = 6;
+      }
+      return;
+    }
     if(!g.dragging) return;
     var dx=e.clientX-g.lx, dy=e.clientY-g.ly;
     g.moved+=Math.abs(dx)+Math.abs(dy); rotateBy(dx,dy); g.lx=e.clientX; g.ly=e.clientY;
@@ -3224,13 +3315,19 @@ function bindG(g){
   function endPtr(e){ delete g.pointers[e.pointerId]; if(Object.keys(g.pointers).length<2) g.pinchPrev=0; }
   cv.addEventListener('pointerup', function(e){
     endPtr(e);
+    if (g._dragging){ endDrag(true); return; }
+    cancelLongPress();
     if(!g.dragging) return; g.dragging=false;
     if(g.moved<6){
       if(g.pick && g.onPick){ var ll=pickLatLon(g,e.clientX,e.clientY); if(ll) g.onPick(ll); }
       else if(g.markers && g.markers.length){ var ll2=screenToLatLon(g,e.clientX,e.clientY); var m=ll2?nearestMarker(g,ll2):null; if(m&&m.id){ openForm('travel',m.id); } }
     }
   });
-  cv.addEventListener('pointercancel', endPtr);
+  cv.addEventListener('pointercancel', function(e){
+    endPtr(e);
+    if (g._dragging) endDrag(false);   /* 拖动被系统取消：不写回 */
+    cancelLongPress();
+  });
   cv.addEventListener('wheel', function(e){ e.preventDefault(); var f=e.deltaY<0?1.12:1/1.12; g.zoomTarget=clampZoom(g.zoomTarget*f); }, {passive:false});
 }
 
@@ -3713,13 +3810,17 @@ function detachGlobe(){
   stopGlobe();
   var host=$('globeHost'); if(host) host.hidden=true;
 }
-function refreshGlobe(){
-  if (!GLOBE){ attachGlobe(); return; }
-  GLOBE.markers = loadTravelMarkers();   // 手动刷新：重新读取目的地并重建标记，反映新添加 / 修改的城市
+function _globeRefreshNow(silent){
+  if (!GLOBE) return;
+  GLOBE.markers = loadTravelMarkers();   // 重新读取目的地并重建标记
   rebuildMarkers(GLOBE);
   GLOBE._mk = GLOBE.markers.map(function(m){ return m.id+':'+(m.status||''); }).join('|');
   updateEarthStat();
-  toast('地球已刷新 · 已加载最新目的地');
+  if (!silent) toast('地球已刷新 · 已加载最新目的地');
+}
+function refreshGlobe(){
+  if (!GLOBE){ attachGlobe(); return; }
+  _globeRefreshNow(false);
 }
 function bindGlobeRefresh(){
   var b=$('globeRefresh'); if(!b || b._bound) return;
