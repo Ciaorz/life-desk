@@ -3145,6 +3145,10 @@ function _loadMarkerTex(src, intoCache, otherCache){
     var tex = new THREE.Texture(img);
     tex.needsUpdate = true;
     tex.center = new THREE.Vector2(0.5, 1.0);
+    /* 与 renderer.outputEncoding 对齐，避免图标颜色发灰发暗 */
+    if (THREE.sRGBEncoding !== undefined) tex.encoding = THREE.sRGBEncoding;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
     intoCache.tex = tex;
     intoCache.w = img.naturalWidth || 64;
     intoCache.h = img.naturalHeight || 64;
@@ -3159,17 +3163,17 @@ function _loadMarkerTex(src, intoCache, otherCache){
 var _pinImg  = { tex:null, w:64, h:64, started:false, err:false };
 var _sproutImg = { tex:null, w:64, h:64, started:false, err:false };
 function _pinTex(){
+  if (_pinImg.tex) return _pinImg.tex;        /* 真图已加载 → 优先用真图（必须放在兜底缓存判断之前） */
   if(_pinTexCache) return _pinTexCache;
   _pinTexCache = _fallbackMarkerTex();
   if (!_pinImg.started){ _pinImg.started = true; _loadMarkerTex('images/pin-visited.png', _pinImg); }
-  if (_pinImg.tex){ _pinTexCache = _pinImg.tex; }
   return _pinTexCache;
 }
 function _sproutTex(){
+  if (_sproutImg.tex) return _sproutImg.tex;  /* 同上 */
   if(_sproutTexCache) return _sproutTexCache;
   _sproutTexCache = _fallbackMarkerTex();
   if (!_sproutImg.started){ _sproutImg.started = true; _loadMarkerTex('images/sprout-wish.png', _sproutImg); }
-  if (_sproutImg.tex){ _sproutTexCache = _sproutImg.tex; }
   return _sproutTexCache;
 }
 
