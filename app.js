@@ -123,7 +123,11 @@ function ghGetAll(cb){
     .then(function(j){
       if (j === undefined) return;
       _ghSha = j.sha;
-      var obj = JSON.parse(b64decodeUtf8(j.content));
+      var obj = {};
+      try {
+        var raw = (j.content ? b64decodeUtf8(j.content) : '').trim();
+        if (raw) obj = JSON.parse(raw);
+      } catch(e){ obj = {}; } /* 文件不是合法 JSON（如空文件/只剩换行）时，当作空数据，避免整条连接崩掉 */
       cb(obj, j.sha);
     })
     .catch(function(e){ cb(null, null, (e && e.message) ? e.message : 'network'); });
