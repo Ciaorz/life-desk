@@ -126,7 +126,7 @@ function ghGetAll(cb){
       var obj = JSON.parse(b64decodeUtf8(j.content));
       cb(obj, j.sha);
     })
-    .catch(function(){ cb(null, null); });
+    .catch(function(e){ cb(null, null, (e && e.message) ? e.message : 'network'); });
 }
 function ghSaveAll(obj, cb){
   if (!GH || !GH.token){ if (cb) cb(false); return; }
@@ -251,8 +251,16 @@ function addDataTools(){
     $('ghHint').textContent = '连接中…';
     try { localStorage.setItem('lifedesk_gh', JSON.stringify(c)); } catch(e){}
     GH = c; MODE = 'gh'; _ghCache = null; _ghSha = null;
-    ghGetAll(function(all){
-      if (all === null){ $('ghHint').textContent = '连接失败：检查仓库名 / Token 权限 / 仓库是否公开可读'; return; }
+    ghGetAll(function(all, sha, err){
+      if (all === null){
+        var m = '连接失败';
+        if (err === 'network') m += '：浏览器访问 api.github.com 被网络阻断/超时（国内常见）。建议改用「资料库」模式，或挂代理后再试。';
+        else if (err && /401|Bad credentials/.test(err)) m += '：Token 无效或已失效，请重新生成有 repo 权限的 Token。';
+        else if (err && /403/.test(err)) m += '：可能被限流或无权限，稍后重试或检查 Token。';
+        else m += '：' + (err || '检查仓库名 / Token 权限 / 仓库是否公开可读');
+        $('ghHint').textContent = m;
+        return;
+      }
       $('ghHint').textContent = '连接成功！已读到仓库数据。点「上传本地数据」可把本机现有数据推上去。';
       bootBanner(); loadAll();
     });
