@@ -1557,6 +1557,25 @@ document.addEventListener('click', function(ev){
   var act = node.getAttribute('data-act');
   var key = node.getAttribute('data-key');
   if (act==='geopick'){ openGlobePicker(); return; }
+  if (act==='georeloc'){
+    if (!editing || editing.key!=='travel'){ toast('先打开一个目的地，再点这里定位'); return; }
+    var locv=String(editing.vals['地点']||'').trim();
+    if (!locv){ toast('先填「地点」再按名称定位'); return; }
+    toast('正在按地点名重新定位…');
+    geocodeTravel(editing.vals, function(coords){
+      if (coords){
+        editing.vals['纬度']=Math.round(coords.lat*100)/100;
+        editing.vals['经度']=Math.round(coords.lon*100)/100;
+        var la=document.querySelector('[data-f="纬度"]'), lo=document.querySelector('[data-f="经度"]');
+        if (la) la.value=editing.vals['纬度'];
+        if (lo) lo.value=editing.vals['经度'];
+        toast('已重新定位到 '+editing.vals['纬度']+'°N, '+editing.vals['经度']+'°E（点保存生效）');
+      } else {
+        toast('没找到坐标，请手动点地球选位置');
+      }
+    });
+    return;
+  }
   if (act==='go'){ ui.view=key; if(key==='collection'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; } window.scrollTo(0,0); render(); return; }
   if (act==='add'){ openForm(key, null); return; }
   if (act==='edit'){ openForm(key, node.getAttribute('data-id')); return; }
@@ -2603,7 +2622,8 @@ function fieldHTML(f, v){
       '</div>';
   } else if (f.t==='geopick'){
     body='<button type="button" class="btn ghost sm" data-act="geopick">📍 在地球上点选坐标</button>'+
-      '<span class="imgnote">点开地球，点一下要去的那个位置</span>';
+      '<button type="button" class="btn ghost sm" data-act="georeloc">🌍 重新按名称定位</button>'+
+      '<span class="imgnote">点开地球选位置，或按「地点/国家」自动定位（纠正旧坐标就点它）</span>';
   } else if (f.t==='check'){
     body='<label class="checkrow"><input data-f="'+f.k+'" type="checkbox"'+(v?' checked':'')+'>'+esc(f.k)+'</label>';
   }
@@ -3565,14 +3585,50 @@ var GEOCODE_ALIAS = {
   '班夫':'Banff','班夫国家公园':'Banff National Park','雷克雅未克':'Reykjavik','极光':'Aurora',
   '撒哈拉':'Sahara','撒哈拉沙漠':'Sahara Desert','纳米布沙漠':'Namib Desert'
 };
-function _geocodeOne(q, cb){
-  var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q);
+/* 地理编码数据源：Open-Meteo Geocoding（基于 GeoNames，免费、无需 Key、浏览器可跨域、中文地名覆盖好）
+ * 替换旧版 Nominatim 自由文本搜索——后者中文地标（如「黄山」）常被匹配到错误省份/同名村镇。
+ * 返回 results[]：{ name, latitude, longitude, country, country_code, admin1 }，按相关度排序，[0] 通常即规范地名。
+ * 多结果时按「名称匹配 + 国家码匹配」精选，避免同名多地误钉。 */
+var GEOCODE_COUNTRY_ISO = {
+  '中国':'CN','日本':'JP','韩国':'KR','朝鲜':'KP','蒙古':'MN','越南':'VN','老挝':'LA','柬埔寨':'KH',
+  '泰国':'TH','缅甸':'MM','马来西亚':'MY','新加坡':'SG','印度尼西亚':'ID','菲律宾':'PH','印度':'IN',
+  '尼泊尔':'NP','斯里兰卡':'LK','巴基斯坦':'PK','孟加拉国':'BD','哈萨克斯坦':'KZ','俄罗斯':'RU',
+  '美国':'US','加拿大':'CA','墨西哥':'MX','古巴':'CU','巴西':'BR','阿根廷':'AR','智利':'CL','秘鲁':'PE',
+  '英国':'GB','法国':'FR','德国':'DE','意大利':'IT','西班牙':'ES','葡萄牙':'PT','荷兰':'NL','比利时':'BE',
+  '瑞士':'CH','奥地利':'AT','希腊':'GR','土耳其':'TR','克罗地亚':'HR','斯洛文尼亚':'SI','捷克':'CZ',
+  '波兰':'PL','匈牙利':'HU','挪威':'NO','瑞典':'SE','丹麦':'DK','芬兰':'FI','冰岛':'IS',
+  '澳大利亚':'AU','新西兰':'NZ','斐济':'FJ','埃及':'EG','南非':'ZA','摩洛哥':'MA','肯尼亚':'KE','坦桑尼亚':'TZ'
+};
+function _geocodeOne(q, preferName, preferCC, cb){
+  var url = 'https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(q)
+          + '&count=10&language=zh&format=json';
   try {
     var ctrl = ('AbortController' in window) ? new AbortController() : null;
-    var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 5000);
-    fetch(url, { headers: { 'Accept':'application/json' }, signal: ctrl ? ctrl.signal : undefined })
-      .then(function(r){ return r.ok ? r.json() : []; })
-      .then(function(arr){ clearTimeout(timer); if (arr && arr.length && arr[0].lat && arr[0].lon) cb({ lat:parseFloat(arr[0].lat), lon:parseFloat(arr[0].lon) }); else cb(null); })
+    var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 6000);
+    fetch(url, { signal: ctrl ? ctrl.signal : undefined })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(js){
+        clearTimeout(timer);
+        var arr = (js && Array.isArray(js.results)) ? js.results : [];
+        if (!arr.length){ cb(null); return; }
+        /* 名称匹配：双向包含（用户输入「黄山风景区」也能命中 API 返回的「黄山」） */
+        function nameOk(n){ return !preferName || n === preferName || (n||'').indexOf(preferName) >= 0 || preferName.indexOf(n||'') >= 0; }
+        var pick = null;
+        /* 1) 名称匹配 + 国家匹配（最精确） */
+        for (var i=0;i<arr.length && !pick;i++){
+          var it = arr[i];
+          if (nameOk(it.name) && (!preferCC || it.country_code === preferCC)) pick = it;
+        }
+        /* 2) 仅名称匹配（放宽国家） */
+        if (!pick && preferName){
+          for (var j=0;j<arr.length && !pick;j++){ if (nameOk(arr[j].name)) pick = arr[j]; }
+        }
+        /* 3) 没有名称命中的结果 → 放弃本 query（cb(null)），交给上层尝试下一个 query；
+         *    绝不盲取第一个，避免同名错地（如 Dolomites 误钉到美国水坝）。 */
+        if (pick && pick.latitude != null && pick.longitude != null){
+          cb({ lat: parseFloat(pick.latitude), lon: parseFloat(pick.longitude) });
+        } else cb(null);
+      })
       .catch(function(){ clearTimeout(timer); cb(null); });
   } catch(e){ cb(null); }
 }
@@ -3580,10 +3636,11 @@ function geocodeTravel(vals, cb){
   var loc = String(vals['地点']||'').trim();
   var country = String(vals['国家地区']||'').trim();
   if (!loc){ cb(null); return; }
+  var cc = GEOCODE_COUNTRY_ISO[country] || null;   /* 国家码，用于服务端/客户端过滤同名多地 */
 
   var queries = [];
   function add(q){ if (q && queries.indexOf(q)<0) queries.push(q); }
-  /* 1) 中文原词 */
+  /* 1) 中文原词（优先带国家） */
   add(country ? (loc + ', ' + country) : loc);
   /* 2) 仅地点 */
   add(loc);
@@ -3600,7 +3657,7 @@ function geocodeTravel(vals, cb){
   function next(){
     if (i >= queries.length){ cb(null); return; }
     var q = queries[i++];
-    _geocodeOne(q, function(coords){
+    _geocodeOne(q, loc, cc, function(coords){
       if (coords) cb(coords);
       else next();
     });
