@@ -226,19 +226,19 @@ function addDataTools(){
   p.id = 'ghPanel';
   p.innerHTML =
     '<div style="font-weight:700;margin-bottom:8px">GitHub 数据同步</div>' +
-    '<div style="font-size:11px;color:#9aa;margin:2px 0 6px">仓库已自动填好，你只需粘贴下方 Token：</div>' +
-    '<label style="display:block;margin:4px 0">用户名(owner)<input id="ghOwner" readonly value="Ciaorz" style="width:100%;box-sizing:border-box;background:#eee;color:#111"></label>' +
-    '<label style="display:block;margin:4px 0">仓库名(repo)<input id="ghRepo" readonly value="life-desk" style="width:100%;box-sizing:border-box;background:#eee;color:#111"></label>' +
-    '<label style="display:block;margin:4px 0">分支(branch)<input id="ghBranch" readonly value="main" style="width:100%;box-sizing:border-box;background:#eee;color:#111"></label>' +
-    '<label style="display:block;margin:4px 0">数据文件路径<input id="ghPath" readonly value="data/lifedesk.json" style="width:100%;box-sizing:border-box;background:#eee;color:#111"></label>' +
-    '<label style="display:block;margin:4px 0">Token（有 repo 权限，仅存本机）<input id="ghToken" type="password" style="width:100%;box-sizing:border-box;background:#fff;color:#111"></label>' +
+    '<div style="font-size:11px;color:#666;margin:2px 0 6px">仓库已自动填好，你只需粘贴下方 Token：</div>' +
+    '<label style="display:block;margin:4px 0">用户名(owner)<input id="ghOwner" readonly value="Ciaorz" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    '<label style="display:block;margin:4px 0">仓库名(repo)<input id="ghRepo" readonly value="life-desk" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    '<label style="display:block;margin:4px 0">分支(branch)<input id="ghBranch" readonly value="main" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    '<label style="display:block;margin:4px 0">数据文件路径<input id="ghPath" readonly value="data/lifedesk.json" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    '<label style="display:block;margin:4px 0">Token（有 repo 权限，仅存本机）<input id="ghToken" type="password" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
     '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' +
-      '<button type="button" id="ghSave">保存并连接</button>' +
-      '<button type="button" id="ghUpload">上传本地数据</button>' +
-      '<button type="button" id="ghClose">关闭</button>' +
+      '<button type="button" id="ghSave" style="padding:7px 12px;border:1px solid #4d3045;border-radius:7px;background:#4d3045;color:#fff;cursor:pointer;font-size:12px">保存并连接</button>' +
+      '<button type="button" id="ghUpload" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">上传本地数据</button>' +
+      '<button type="button" id="ghClose" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">关闭</button>' +
     '</div>' +
-    '<div id="ghHint" style="margin-top:8px;color:#9aa;font-size:11px;line-height:1.5"></div>';
-  p.style.cssText = 'display:none;position:fixed;right:14px;bottom:60px;z-index:10000;width:300px;background:#1b1b22;color:#eee;padding:14px;border:1px solid #444;border-radius:8px;font:12px/1.5 var(--sans)';
+    '<div id="ghHint" style="margin-top:8px;color:#666;font-size:11px;line-height:1.5"></div>';
+  p.style.cssText = 'display:none;position:fixed;right:14px;bottom:60px;z-index:10000;width:300px;background:#ffffff;color:#111;padding:14px;border:1px solid #d8d2c7;border-radius:8px;font:12px/1.5 var(--sans);box-shadow:0 10px 30px rgba(0,0,0,.18)';
   document.body.appendChild(p);
   var cfg = ghConfig() || {};
   $('ghOwner').value = cfg.owner || 'Ciaorz'; $('ghRepo').value = cfg.repo || 'life-desk';
