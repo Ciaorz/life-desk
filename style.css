@@ -126,6 +126,21 @@ input.search:focus{border-color:var(--accent);background:#fff}
   background:#f2ece0;border:1px solid var(--line);font-size:12.5px;color:var(--muted)}
 .offline.show{display:block}
 
+/* GitHub 同步状态指示器（常驻小药丸，左下角） */
+.ghstatus{display:none;position:fixed;left:14px;bottom:14px;z-index:9998;
+  align-items:center;gap:7px;padding:7px 12px;border-radius:999px;
+  font:12px/1 var(--sans);color:#111;background:#fff;border:1px solid #d8d2c7;
+  box-shadow:0 4px 16px rgba(0,0,0,.12);pointer-events:none;max-width:80vw}
+.ghstatus.show{display:flex}
+.ghstatus .dot{width:8px;height:8px;border-radius:50%;background:#9aa;flex:0 0 auto}
+.ghstatus.saving .dot{background:#e0a020;animation:ghpulse 1s infinite}
+.ghstatus.synced .dot{background:#2e9e5b}
+.ghstatus.failed .dot{background:#d23b3b}
+.ghstatus.noconn .dot,.ghstatus.local .dot{background:#9aa}
+.ghstatus.db .dot{background:#4a7fd0}
+.ghstatus.localfile .dot{background:#2e9e5b}
+@keyframes ghpulse{0%,100%{opacity:1}50%{opacity:.3}}
+
 /* status strip */
 .strip{display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:11.5px;color:var(--muted);
   letter-spacing:.03em;min-height:26px}
