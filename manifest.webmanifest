@@ -1,0 +1,17 @@
+{
+  "name": "日常集 · 生活工作台",
+  "short_name": "日常集",
+  "description": "个人生活管理：书籍、手办、电影、旅行、灵感、美食等模块，3D 地球可视化旅行目的地。",
+  "lang": "zh-CN",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}

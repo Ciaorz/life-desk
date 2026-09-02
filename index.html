@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- 关键：viewport-fit=cover 让 iPhone 灵动岛/全面屏的 env(safe-area-inset-*) 生效 -->
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#f5f0e8">
+<title>日常集 · 生活工作台</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+
+<!-- ===== 样式（拆分自原 HTML） ===== -->
+<link rel="stylesheet" href="style.css">
+
+<!-- ===== 致命错误可视化层（必须最前，捕获后续脚本一切错误） ===== -->
+<script>
+/* 全局致命错误可视化：把任何 JS 报错显示到页面，避免 iOS 主屏 standalone 白屏无信息。 */
+(function(){
+  function show(msg){
+    var el=document.getElementById('__fatal');
+    if(!el){
+      el=document.createElement('div'); el.id='__fatal';
+      el.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#16181d;color:#ff7b7b;font:13px/1.6 ui-monospace,Menlo,Consolas,monospace;padding:18px;white-space:pre-wrap;overflow:auto;';
+      (document.documentElement||document.body||document).appendChild(el);
+      el.appendChild(document.createTextNode('【页面报错可视化】若此框出现，说明页面 JS 抛错（白屏根因）：\n'));
+    }
+    el.appendChild(document.createTextNode(msg+'\n'));
+  }
+  window.__fatalShow=show;
+  window.addEventListener('error',function(e){
+    show('[error] '+(e.message||e.error||e)+(e.filename?(' @ '+e.filename+':'+e.lineno+':'+e.colno):''));
+  });
+  window.addEventListener('unhandledrejection',function(e){
+    var r=e.reason; show('[promise] '+((r&&(r.stack||r.message))||r));
+  });
+})();
+</script>
+
+<!-- ===== 设备检测（必须在纹理切换之前） ===== -->
+<script>
+(function(){
+  try{
+    var ua=navigator.userAgent||'';
+    var mob=/iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(ua);
+    var small=Math.min(window.innerWidth||9999, window.innerHeight||9999)<=820;
+    var coarse=('ontouchstart' in window)||(navigator.maxTouchPoints>0);
+    window.__IS_MOBILE__=(mob&&coarse)||(small&&coarse);
+  }catch(e){ window.__IS_MOBILE__=false; }
+})();
+</script>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar">
+    <button class="brand" id="brandBtn" type="button">
+      <i id="brandMark">日</i>
+      <span style="flex:1"><b id="brandName">日常集</b><span id="brandTag">生活有迹可循</span></span>
+    </button>
+    <nav class="nav" id="nav"></nav>
+    <div class="sep"></div>
+    <div class="side-foot">
+      <b>数据存在线上</b>
+      换设备、换浏览器打开，<br>内容都还在。
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="tabbar" id="tabbar"></div>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow" id="mEyebrow">总览</p>
+        <h1 id="mTitle">日常集</h1>
+        <p class="sub" id="mDesc">把日子过成一册可以翻回去的东西。</p>
+      </div>
+      <div class="top-actions" id="mActions"></div>
+    </header>
+
+    <div class="offline" id="offlineBox"></div>
+    <div class="syncbar" id="syncbar">
+      <b id="syncText"></b>
+      <button class="btn sm" type="button" id="syncRetry">重试同步</button>
+      <button class="btn sm" type="button" id="syncDrop">放弃这些改动</button>
+    </div>
+
+    <div id="stage"></div>
+  </main>
+</div>
+
+<div class="backdrop" id="sheetHost" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- ===== 3D 地球模型：按设备加载不同纹理 ===== -->
+<script>
+(function(){
+  // defer 顺序：先 three，再纹理/数据，再 app
+  var earthJS = window.__IS_MOBILE__ ? 'earth_color_8k.js' : 'earth_color_16k.js';
+  document.write('<script defer src="' + earthJS + '"><\/script>');
+  document.write('<script defer src="earth_height_4k.js"><\/script>');
+  document.write('<script defer src="borders0.js"><\/script>');
+  document.write('<script defer src="borders1.js"><\/script>');
+  document.write('<script defer src="borders_cn_prov.js"><\/script>');
+  document.write('<script defer src="cities.js"><\/script>');
+})();
+</script>
+
+<!-- ===== three.js（外置）+ 主应用 ===== -->
+<script defer src="three.min.js"></script>
+<script defer src="app.js"></script>
+
+<!-- ===== Service Worker（绝不会再导致白屏：网络优先+逐文件容错） ===== -->
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    // 用相对路径，匹配当前页面所在目录；本地 file:// 也会跳过
+    if (location.protocol === 'http:' || location.protocol === 'https:') {
+      navigator.serviceWorker.register('sw.js').catch(function(e){
+        if (window.__fatalShow) window.__fatalShow('[SW] 注册失败（不影响页面打开）：' + (e && e.message ? e.message : e));
+      });
+    }
+  });
+}
+</script>
+
+</body>
+</html>
