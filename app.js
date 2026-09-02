@@ -3116,20 +3116,29 @@ function nearestMarker(g,ll){
   for(var i=0;i<g.markers.length;i++){ var m=g.markers[i]; var d2=Math.abs(m.lat-ll.lat)+Math.abs(m.lon-ll.lon); if(d2<bd){bd=d2;best=m;} }
   return best;
 }
-/* 屏幕像素坐标系下找最近的 marker sprite，用于长按拖拽的命中检测（比 lat/lon 度数距离精确） */
+/* 屏幕像素坐标系下找最近的 marker sprite，用于长按拖拽的命中检测。
+   投影方式与 setupCityHover 的 projectMarker 保持一致：
+   latLonVec3(经纬度, roff) → earth.localToWorld → project(camera)。
+   注意：不能直接对 sprite 用 position + matrixWorld，那会双重应用 position。 */
 function nearestScreenMarker(g, cssX, cssY, maxPx){
   if (!g._markerMeshes || !g._markerMeshes.length) return null;
   var rect = g.cv.getBoundingClientRect();
   var v = new THREE.Vector3();
   var best = null, bd = maxPx;
+  g.earth.updateWorldMatrix(true, false);
   for (var i=0;i<g._markerMeshes.length;i++){
     var s = g._markerMeshes[i];
-    s.updateWorldMatrix(true, false);
-    v.copy(s.position).applyMatrix4(s.matrixWorld);
-    v.project(g.camera);
-    if (v.z > 1) continue;   /* 球体背面 */
-    var sx = rect.left + (v.x * 0.5 + 0.5) * rect.width;
-    var sy = rect.top  + (1 - (v.y * 0.5 + 0.5)) * rect.height;
+    if (!s.userData) continue;
+    var lat = s.userData.lat, lon = s.userData.lon;
+    if (lat == null || lon == null) continue;
+    var rr = (g.terrainR ? g.terrainR(lat, lon) + 0.006 : 1.006) + (s.userData._dragLift || 0);
+    v.copy(latLonVec3(lat, lon, rr));
+    g.earth.localToWorld(v);
+    if (v.z <= 0) continue;                 /* 背面剔除 */
+    var ndc = v.clone().project(g.camera);
+    if (ndc.z > 1 || ndc.z < -1) continue;
+    var sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width;
+    var sy = rect.top  + (-ndc.y * 0.5 + 0.5) * rect.height;
     var dx = sx - cssX, dy = sy - cssY;
     var d = Math.sqrt(dx*dx + dy*dy);
     if (d < bd){ bd = d; best = s; }
@@ -3158,17 +3167,45 @@ function _fallbackMarkerTex(){
   x.beginPath(); x.arc(32,32,10,0,6.283); x.stroke();
   var t=new THREE.CanvasTexture(c); t.center=new THREE.Vector2(0.5,1.0); return t;
 }
+/* 自动检测图标「底部尖端」的横向位置（0~1 归一化），用作 Sprite 锚点：
+   红旗 → 旗杆末端（原图在最左，0.0）；草苗 → 草根（原图约 0.41）。
+   这样尖端会精确落在标记点上，而不是用图片中心去对位。 */
+function _detectTipX(img){
+  try {
+    var c = document.createElement('canvas');
+    c.width = img.naturalWidth || 64; c.height = img.naturalHeight || 64;
+    var ctx = c.getContext('2d', { willReadFrequently:true });
+    ctx.drawImage(img, 0, 0);
+    var w = c.width, h = c.height;
+    var d = ctx.getImageData(0, 0, w, h).data;
+    var yb = -1;
+    for (var y = h - 1; y >= 0; y--){
+      var hit = false;
+      for (var x = 0; x < w; x++){ if (d[(y*w+x)*4+3] > 60){ hit = true; break; } }
+      if (hit){ yb = y; break; }
+    }
+    if (yb < 0) return 0.5;
+    var sum = 0, n = 0;                       /* 取最底 3 行求中点，抗锯齿更稳 */
+    for (var y2 = Math.max(0, yb - 2); y2 <= yb; y2++){
+      for (var x2 = 0; x2 < w; x2++){
+        if (d[(y2*w+x2)*4+3] > 60){ sum += x2 + 0.5; n++; }
+      }
+    }
+    if (!n) return 0.5;
+    return (sum / n) / w;
+  } catch(e){ return 0.5; }                   /* canvas 被污染（跨域 / file://）时回退居中 */
+}
 function _loadMarkerTex(src, intoCache, otherCache){
   var img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = function(){
     var tex = new THREE.Texture(img);
     tex.needsUpdate = true;
-    tex.center = new THREE.Vector2(0.5, 1.0);
     /* 与 renderer.outputEncoding 对齐，避免图标颜色发灰发暗 */
     if (THREE.sRGBEncoding !== undefined) tex.encoding = THREE.sRGBEncoding;
     tex.minFilter = THREE.LinearFilter;
     tex.magFilter = THREE.LinearFilter;
+    intoCache.tipX = _detectTipX(img);        /* 底部尖端归一化位置，供 Sprite 锚点使用 */
     intoCache.tex = tex;
     intoCache.w = img.naturalWidth || 64;
     intoCache.h = img.naturalHeight || 64;
@@ -3180,8 +3217,8 @@ function _loadMarkerTex(src, intoCache, otherCache){
   };
   img.src = src;
 }
-var _pinImg  = { tex:null, w:64, h:64, started:false, err:false };
-var _sproutImg = { tex:null, w:64, h:64, started:false, err:false };
+var _pinImg  = { tex:null, w:64, h:64, started:false, err:false, tipX:0.5 };
+var _sproutImg = { tex:null, w:64, h:64, started:false, err:false, tipX:0.5 };
 function _pinTex(){
   if (_pinImg.tex) return _pinImg.tex;        /* 真图已加载 → 优先用真图（必须放在兜底缓存判断之前） */
   if(_pinTexCache) return _pinTexCache;
@@ -3212,9 +3249,10 @@ function rebuildMarkers(g){
     var tex = isVisited ? _pinTex() : _sproutTex();
     var spr=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthTest:true, depthWrite:false}));
     spr.position.copy(pos);
-    spr.center.set(0.5,1.0);                /* 底部中心锚点 */
     /* 去过/想去 都使用外部 PNG。草苗比红旗大 1.2 倍；高度都很小，比例由 PNG 宽高比决定 */
     var size = isVisited ? _pinImg : _sproutImg;
+    /* 锚点 = 底部尖端（旗杆末端 / 草根），使其精确指向标记点，而不是图片中心 */
+    spr.center.set((size.tipX != null ? size.tipX : 0.5), 1.0);
     var bh = isVisited ? 0.010 : 0.012;     /* 草苗 0.012 = 红旗 0.010 × 1.2 */
     var ratio = (size.h > 0) ? (size.w / size.h) : 1;
     spr.scale.set(bh * ratio, bh, 1);
@@ -3359,7 +3397,9 @@ function setupCityHover(g){
   }
   function projectMarker(m){
     g.earth.updateWorldMatrix(true,false);
-    var v=latLonVec3(m.lat,m.lon,1.003);
+    /* roff 与 rebuildMarkers 保持一致（贴地形），否则悬停提示会与实际标记错位 */
+    var mr = (g.terrainR ? g.terrainR(m.lat, m.lon) + 0.006 : 1.006);
+    var v=latLonVec3(m.lat,m.lon,mr);
     g.earth.localToWorld(v);
     if(v.z<=0) return null;
     var ndc=v.clone().project(g.camera);
