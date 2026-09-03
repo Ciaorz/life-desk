@@ -1662,3 +1662,13 @@ input.search{margin-bottom:12px}
   .mtab{padding:7px 12px}
   .map-card{top:52px;left:12px;right:auto;width:calc(100% - 24px);max-height:62%}
 }
+
+/* ============ v49：扫码录入书籍（ISBN / 二维码） ============ */
+.scanbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 12px;padding:10px 12px;background:var(--sage-soft);border:1px solid var(--line);border-radius:12px}
+.scanbar .imgnote{margin:0}
+.r-overlay .scanwrap{position:relative;width:min(92vw,440px);max-width:100%;border-radius:14px;overflow:hidden;background:#000}
+.r-overlay .scanwrap video{display:block;width:100%;height:auto;max-height:60vh;object-fit:cover;background:#000}
+.r-overlay .scanwrap .scanframe{position:absolute;left:50%;top:50%;width:64%;max-width:260px;height:30%;transform:translate(-50%,-50%);border:2px solid #fff;border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,.45);pointer-events:none}
+.r-overlay .scanwrap .scanbar{position:absolute;left:0;right:0;bottom:0;margin:0;border:0;border-radius:0;background:rgba(0,0,0,.55);color:#fff}
+.r-overlay .scanwrap .scanbar .imgnote{color:#eee}
+.r-overlay .scanwrap .scanbar .btn.ghost{color:#fff;border-color:rgba(255,255,255,.6)}

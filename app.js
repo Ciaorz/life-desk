@@ -1590,6 +1590,37 @@ var MODS = {
       {k:'封面',t:'img',ph:'一张照片的链接（可选）',full:1}
     ]}
 };
+
+/* v49：书籍 / 杂志 专用录入字段。它们仍存在 collection 里、用「大类」区分；
+   书名 / 刊物名 复用「名称」字段，这样文渊斋书柜才能按 名称 展示封面与标题。 */
+var BOOK_FIELDS = [
+  {k:'名称', lab:'书名', t:'text', req:1, ph:'书名', full:1},
+  {k:'作者', t:'text', ph:'作者 / 译者', full:1},
+  {k:'出版社', t:'text', ph:'出版社'},
+  {k:'出版年', t:'text', ph:'如 2023'},
+  {k:'版次', t:'text', ph:'如 第3版 / 2023-05'},
+  {k:'ISBN', t:'text', ph:'13 位 ISBN（扫码自动填）'},
+  {k:'存放位置', t:'dyn', src:'loc'},
+  {k:'册数', t:'number', min:1, def:1, ph:'1'},
+  {k:'价格', t:'currency', ph:'0.00'},
+  {k:'标签分类', t:'text', ph:'如 文学 / 工具书 / 教材'}
+];
+var MAG_FIELDS = [
+  {k:'名称', lab:'刊物名', t:'text', req:1, ph:'刊物名', full:1},
+  {k:'年份', t:'text', ph:'如 2024'},
+  {k:'卷期号', t:'text', ph:'如 Vol.12 No.3 / 2024-05'},
+  {k:'本期专题', t:'text', ph:'本期专题'},
+  {k:'存放位置', t:'dyn', src:'loc'}
+];
+/* 按当前 大类 返回 collection 实际要用的字段集；其它模块原样返回 */
+function activeFields(key, vals){
+  if (key==='collection' && vals){
+    var c = vals['大类'];
+    if (c==='书籍') return BOOK_FIELDS;
+    if (c==='杂志') return MAG_FIELDS;
+  }
+  return (MODS[key] && MODS[key].fields) ? MODS[key].fields : [];
+}
 var ORDER = ['overview','collection','travel','av','study','food','idea'];
 var EXTRA = ['ip','series','loc','checkin','recipe'];   /* 不单独进导航：ip/series/loc 在「藏品」里管理；checkin 在「遐方坞」里管理；recipe 在「馐馔坊」里管理（v48 拆分） */
 
@@ -1883,7 +1914,7 @@ function propsFrom(fields, vals, key){
 function localUpsert(key, id, vals){
   if (!store[key]) return;
   var row={_id:id};
-  MODS[key].fields.forEach(function(f){
+  activeFields(key, vals).forEach(function(f){
     if (f.t==='geopick') return;
     var v=vals[f.k];
     if (f.t==='img'){
@@ -1896,6 +1927,9 @@ function localUpsert(key, id, vals){
     else if (f.t==='date') row[f.k] = v ? String(v) : null;
     else row[f.k] = (v===''||v==null) ? null : v;
   });
+  /* v49：collection 的书籍/杂志录入 schema 不渲染「大类」字段，但存储仍需 大类，
+     否则文渊斋「我的书架」按 大类 过滤时找不到它们 */
+  if (key==='collection' && vals && vals['大类']) row['大类'] = vals['大类'];
   /* v48：food / recipe 在 db 模式下暂时共表，用隐藏字段 _module 区分；本地模式下也保留，方便后续拆分 */
   if (key==='food' || key==='recipe') row['_module'] = key;
   /* food 的经纬度通过 geopick 预填进 vals，但 fields 里已删除经纬度输入框，这里额外写回 row */
@@ -3238,6 +3272,7 @@ document.addEventListener('click', function(ev){
     });
     return;
   }
+  if (act==='scanisbn'){ openBookScanner(); return; }
   if (act==='go'){ ui.view=key; if(key==='collection'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; } window.scrollTo(0,0); render(); return; }
   if (act==='add'){ openForm(key, null); return; }
   if (act==='edit'){ openForm(key, node.getAttribute('data-id')); return; }
@@ -3940,7 +3975,7 @@ function openForm(key, id, opts){
   var row=null;
   if (id){ var arr=store[key].rows.filter(function(r){ return String(r._id)===String(id); }); row=arr[0]||null; }
   editing={key:key,id:id,vals:{}};
-  m.fields.forEach(function(f){ editing.vals[f.k]=fieldVal(row,f); });
+  activeFields(key, row||{}).forEach(function(f){ editing.vals[f.k]=fieldVal(row,f); });
 
   /* 外部预填（比如在某个 IP 下添加时，把 IP 先带上） */
   if (opts && opts.prefill){
@@ -3962,7 +3997,8 @@ function openForm(key, id, opts){
   var h='<div class="sheet"><div class="sheet-head"><div>'+
     '<p>'+esc(m.eyebrow)+'</p><h2>'+(id?'编辑':'添加')+' · '+esc(m.name)+'</h2></div>'+
     '<button class="x" type="button" data-x="1" aria-label="关闭">×</button></div>'+
-    '<div class="fgrid">'+m.fields.map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('')+'</div>'+
+    '<div class="fgrid">'+activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('')+'</div>'+
+    (key==='collection' && editing.vals['大类']==='书籍' ? '<div class="scanbar"><button type="button" class="btn primary sm" data-act="scanisbn">📷 扫码录入（ISBN / 二维码）</button><span class="imgnote">手机打开本页，扫书背条码或书上二维码，自动填书名·作者·出版社</span></div>' : '')+
     '<div class="sheet-actions">'+
     (id?'<button class="btn ghost" type="button" id="delBtn" style="margin-right:auto;color:var(--red)">删除</button>':'')+
     '<button class="btn ghost" type="button" data-x="1">取消</button>'+
@@ -3982,7 +4018,7 @@ function openForm(key, id, opts){
 
   $('saveBtn').onclick=function(){
     var bad=null;
-    m.fields.forEach(function(f){
+    activeFields(key, editing.vals).forEach(function(f){
       if (f.req){
         var v=editing.vals[f.k];
         if (v==null || String(v).trim()===''){
@@ -4019,8 +4055,9 @@ function openForm(key, id, opts){
   var del=$('delBtn');
   if (del) del.onclick=function(){
     closeSheet();
-    askConfirm('删除「'+String(row&&(row[m.fields[0].k])||'这条记录')+'」？删掉就找不回来了。', function(){
-      deleteRow(key, id, String(row&&row[m.fields[0].k]||''));
+    var _f0 = activeFields(key, editing.vals)[0];
+    askConfirm('删除「'+String(row&&(row[_f0.k])||'这条记录')+'」？删掉就找不回来了。', function(){
+      deleteRow(key, id, String(row&&row[_f0.k]||''));
     });
   };
 }
@@ -4099,11 +4136,95 @@ function fieldHTML(f, v){
   } else if (f.t==='check'){
     body='<label class="checkrow"><input data-f="'+f.k+'" type="checkbox"'+(v?' checked':'')+'>'+esc(f.k)+'</label>';
   }
-  var lab = f.t==='geopick' ? '' : '<label>'+esc(f.k)+(f.req?' *':'')+'</label>';
+  var lab = f.t==='geopick' ? '' : '<label>'+esc(f.lab||f.k)+(f.req?' *':'')+'</label>';
   return '<div class="'+cls+'">'+lab+body+
     (f.req?'<span class="err">这一项必填</span>':'')+'</div>';
 }
 function closeSheet(){ $('sheetHost').hidden=true; $('sheetHost').innerHTML=''; editing=null; formAfter=null; }
+
+/* ============ v49：手机扫码录入书籍（ISBN 条码 / 二维码）→ 查书自动填表 ============ */
+function normIsbn(s){
+  s=String(s||'').replace(/[\s-]/g,'').toUpperCase();
+  if (/^\d{10}$/.test(s)){
+    var sum=0; for(var i=0;i<9;i++) sum+=(i+1)*parseInt(s.charAt(i),10);
+    var c=(11-(sum%11))%11, check=(c===10?'X':String(c));
+    s='978'+s.slice(0,9)+check;
+  }
+  return /^\d{13}$/.test(s) ? s : '';
+}
+function mapOL(doc, isbn){
+  var yr=''; if(doc.publish_date&&doc.publish_date[0]){ var m=String(doc.publish_date[0]).match(/\d{4}/); if(m) yr=m[0]; }
+  return {
+    名称: doc.title||'',
+    作者: (doc.author_name||[]).join(' / '),
+    出版社: (doc.publisher&&doc.publisher[0])||'',
+    出版年: yr,
+    ISBN: isbn
+  };
+}
+function lookupBookByISBN(isbn, cb){
+  /* Open Library（免费、CORS、无需 key）优先；失败再退 Google Books */
+  var ol='https://openlibrary.org/search.json?q=isbn:'+encodeURIComponent(isbn)+'&fields=title,author_name,publish_date,publisher,isbn';
+  fetch(ol).then(function(r){ return r.ok?r.json():null; }).then(function(d){
+    var doc = d && d.docs && d.docs[0];
+    if (doc && (doc.title || (doc.author_name&&doc.author_name.length))) return cb(mapOL(doc, isbn));
+    return lookupGB(isbn, cb);
+  }).catch(function(){ lookupGB(isbn, cb); });
+}
+function lookupGB(isbn, cb){
+  var url='https://www.googleapis.com/books/v1/volumes?q=isbn:'+encodeURIComponent(isbn);
+  fetch(url).then(function(r){ return r.ok?r.json():null; }).then(function(d){
+    var v=d&&d.items&&d.items[0]&&d.items[0].volumeInfo;
+    if(!v||!v.title){ cb(null); return; }
+    var pd=v.publishedDate||'', yr=(pd.match(/\d{4}/)||[''])[0];
+    cb({ 名称:v.title, 作者:(v.authors||[]).join(' / '), 出版社:v.publisher||'', 出版年:yr, ISBN:isbn });
+  }).catch(function(){ cb(null); });
+}
+function openBookScanner(){
+  if (!('BarcodeDetector' in window) || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    toast('当前浏览器不支持扫码：需 HTTPS + 较新的 Chrome / Edge / Safari；请手动填 ISBN'); return;
+  }
+  var html='<div class="scanwrap">'+
+    '<video id="scanVid" playsinline autoplay muted></video>'+
+    '<div class="scanframe"></div>'+
+    '<div class="scanbar"><button type="button" class="btn ghost sm" id="scanCancel">取消</button>'+
+    '<span id="scanMsg" class="imgnote" style="margin:0">对准书背的 ISBN 条码，或书上的二维码</span></div>'+
+    '</div>';
+  rShowOverlay(html);
+  var vid=document.getElementById('scanVid'), msg=document.getElementById('scanMsg');
+  var stream=null, raf=0, det=null, done=false;
+  BarcodeDetector.getSupportedFormats().then(function(fmts){
+    det=new BarcodeDetector({formats: fmts.filter(function(f){ return ['ean_13','ean_8','upc_a','qr_code','code_128'].indexOf(f)>=0; })});
+  }).catch(function(){ try{ det=new BarcodeDetector(); }catch(e){ msg.textContent='此浏览器无法初始化扫码器'; } });
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(function(s){
+    stream=s; vid.srcObject=s; vid.play(); scanLoop();
+  }).catch(function(e){ if(msg) msg.textContent='无法打开摄像头：'+(e&&e.message||e)+'（需 HTTPS 与相机权限）'; });
+  function scanLoop(){
+    if(done) return;
+    if(vid.readyState>=2 && det){
+      det.detect(vid).then(function(res){ if(res&&res.length) onDetect(res[0].rawValue); }).catch(function(){});
+    }
+    raf=requestAnimationFrame(scanLoop);
+  }
+  function stopAll(){ done=true; if(raf) cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(function(t){t.stop();}); rCloseOverlay(); }
+  function onDetect(raw){
+    if(done) return; stopAll();
+    var isbn=normIsbn(raw);
+    if(!isbn && /^https?:\/\//i.test(raw)){
+      var m=raw.match(/isbn[=_]?(\d{13}|\d{10})/i) || raw.match(/(\d{13})/);
+      if(m) isbn=normIsbn(m[1]);
+    }
+    if(!isbn){ toast('没认出 ISBN，可手动填：'+raw.slice(0,40)); return; }
+    if(msg) msg.textContent='正在查书…';
+    lookupBookByISBN(isbn, function(book){
+      if(!book){ toast('没查到这本书，请手动填（ISBN '+isbn+'）'); return; }
+      var merged=Object.assign({}, editing.vals, book);
+      openForm('collection', null, {prefill:merged});
+      toast('已填入：'+(book.名称||''));
+    });
+  }
+  var cbtn=document.getElementById('scanCancel'); if(cbtn) cbtn.onclick=stopAll;
+}
 
 /* ---------- 藏品详情：点开看购入信息和存放位置 ---------- */
 function openItemDetail(key, id){
