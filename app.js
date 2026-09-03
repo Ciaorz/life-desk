@@ -1603,14 +1603,16 @@ var BOOK_FIELDS = [
   {k:'存放位置', t:'dyn', src:'loc'},
   {k:'册数', t:'number', min:1, def:1, ph:'1'},
   {k:'价格', t:'currency', ph:'0.00'},
-  {k:'标签分类', t:'text', ph:'如 文学 / 工具书 / 教材'}
+  {k:'标签分类', t:'text', ph:'如 文学 / 工具书 / 教材'},
+  {k:'照片', t:'img', ph:'封面图（可选，扫码会自动带）', full:1}
 ];
 var MAG_FIELDS = [
   {k:'名称', lab:'刊物名', t:'text', req:1, ph:'刊物名', full:1},
   {k:'年份', t:'text', ph:'如 2024'},
   {k:'卷期号', t:'text', ph:'如 Vol.12 No.3 / 2024-05'},
   {k:'本期专题', t:'text', ph:'本期专题'},
-  {k:'存放位置', t:'dyn', src:'loc'}
+  {k:'存放位置', t:'dyn', src:'loc'},
+  {k:'照片', t:'img', ph:'封面图（可选）', full:1}
 ];
 /* 按当前 大类 返回 collection 实际要用的字段集；其它模块原样返回 */
 function activeFields(key, vals){
@@ -4186,11 +4188,21 @@ function fillBookFromISBN(isbn){
   toast('正在查书…');
   lookupBookByISBN(isbn, function(book){
     if (!book){ toast('没查到这本书（ISBN '+isbn+'）'); return; }
-    var base = (editing && editing.vals) ? Object.assign({}, editing.vals) : {};
-    if (!base['大类']) base['大类'] = '书籍';
-    var merged = Object.assign({}, base, book);
-    openForm('collection', null, {prefill: merged});
-    toast('已填入：'+(book.名称||''));
+    // 自动带封面：Open Library 按 ISBN 取图，无图则跳过（用 Image 探测，避免裂图）
+    var coverUrl='https://covers.openlibrary.org/b/isbn/'+isbn+'-L.jpg?default=false';
+    var done=false;
+    function finish(){
+      if(done) return; done=true;
+      var base = (editing && editing.vals) ? Object.assign({}, editing.vals) : {};
+      if (!base['大类']) base['大类'] = '书籍';
+      var merged = Object.assign({}, base, book);
+      openForm('collection', null, {prefill: merged});
+      toast('已填入：'+(book.名称||''));
+    }
+    var probe=new Image();
+    probe.onload=function(){ if(!done) book['照片']=coverUrl; finish(); };
+    probe.onerror=function(){ finish(); };
+    probe.src=coverUrl;
   });
 }
 function openBookScanner(){
