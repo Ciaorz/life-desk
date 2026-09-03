@@ -4180,9 +4180,46 @@ function lookupGB(isbn, cb){
     cb({ 名称:v.title, 作者:(v.authors||[]).join(' / '), 出版社:v.publisher||'', 出版年:yr, ISBN:isbn });
   }).catch(function(){ cb(null); });
 }
+function fillBookFromISBN(isbn){
+  isbn = normIsbn(String(isbn||''));
+  if (!isbn){ toast('ISBN 格式不对'); return; }
+  toast('正在查书…');
+  lookupBookByISBN(isbn, function(book){
+    if (!book){ toast('没查到这本书（ISBN '+isbn+'）'); return; }
+    var base = (editing && editing.vals) ? Object.assign({}, editing.vals) : {};
+    if (!base['大类']) base['大类'] = '书籍';
+    var merged = Object.assign({}, base, book);
+    openForm('collection', null, {prefill: merged});
+    toast('已填入：'+(book.名称||''));
+  });
+}
 function openBookScanner(){
-  if (!('BarcodeDetector' in window) || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    toast('当前浏览器不支持扫码：需 HTTPS + 较新的 Chrome / Edge / Safari；请手动填 ISBN'); return;
+  var hasCam = ('BarcodeDetector' in window) && navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+  if (!hasCam){
+    var html='<div class="scanwrap" style="display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:28px 22px;text-align:center">'+
+      '<div style="font-size:48px;line-height:1">⌨️</div>'+
+      '<h3 style="margin:0;font-family:var(--serif);font-size:18px;color:var(--ink)">当前浏览器无法调用摄像头</h3>'+
+      '<p class="imgnote" style="max-width:320px;margin:0 auto;line-height:1.6">微信等内置浏览器不支持扫码。请手动输入书背 ISBN，系统会自动查书并填表。</p>'+
+      '<div style="width:100%;max-width:300px;display:flex;flex-direction:column;gap:10px;margin-top:6px">'+
+        '<input type="text" id="manualIsbn" class="search" placeholder="如 9787544253994" inputmode="numeric" autocomplete="off" style="text-align:center;font-size:16px;letter-spacing:1px">'+
+        '<button type="button" class="btn primary" id="manualLookup">查书并填入</button>'+
+        '<button type="button" class="btn ghost sm" id="scanCancel">取消</button>'+
+      '</div>'+
+    '</div>';
+    rShowOverlay(html);
+    var inp=document.getElementById('manualIsbn'), btn=document.getElementById('manualLookup'), cancel=document.getElementById('scanCancel');
+    if (inp) setTimeout(function(){ inp.focus(); }, 80);
+    function doManual(){
+      if(!inp) return;
+      var v=normIsbn(inp.value);
+      if(!v){ toast('请输入正确的 ISBN（10 或 13 位数字）'); inp.focus(); return; }
+      rCloseOverlay();
+      fillBookFromISBN(v);
+    }
+    if(btn) btn.onclick=doManual;
+    if(inp) inp.addEventListener('keydown', function(e){ if(e.key==='Enter') doManual(); });
+    if(cancel) cancel.onclick=rCloseOverlay;
+    return;
   }
   var html='<div class="scanwrap">'+
     '<video id="scanVid" playsinline autoplay muted></video>'+
@@ -4215,13 +4252,7 @@ function openBookScanner(){
       if(m) isbn=normIsbn(m[1]);
     }
     if(!isbn){ toast('没认出 ISBN，可手动填：'+raw.slice(0,40)); return; }
-    if(msg) msg.textContent='正在查书…';
-    lookupBookByISBN(isbn, function(book){
-      if(!book){ toast('没查到这本书，请手动填（ISBN '+isbn+'）'); return; }
-      var merged=Object.assign({}, editing.vals, book);
-      openForm('collection', null, {prefill:merged});
-      toast('已填入：'+(book.名称||''));
-    });
+    fillBookFromISBN(isbn);
   }
   var cbtn=document.getElementById('scanCancel'); if(cbtn) cbtn.onclick=stopAll;
 }

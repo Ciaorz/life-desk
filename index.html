@@ -132,7 +132,21 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', function () {
     // 用相对路径，匹配当前页面所在目录；本地 file:// 也会跳过
     if (location.protocol === 'http:' || location.protocol === 'https:') {
-      navigator.serviceWorker.register('sw.js').catch(function(e){
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        // v50：新版本装好后自动刷新，避免一直停在旧缓存里看不到更新
+        var _reloaded = false;
+        reg.addEventListener('updatefound', function () {
+          var nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener('statechange', function () {
+            // 已存在旧 SW 控制时，新 SW 安装完成 → 自动刷新拉取新版
+            if (nw.state === 'installed' && navigator.serviceWorker.controller && !_reloaded) {
+              _reloaded = true;
+              window.location.reload();
+            }
+          });
+        });
+      }).catch(function(e){
         if (window.__fatalShow) window.__fatalShow('[SW] 注册失败（不影响页面打开）：' + (e && e.message ? e.message : e));
       });
     }
