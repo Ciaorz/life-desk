@@ -1550,8 +1550,37 @@ input.search{margin-bottom:12px}
 .mk-dot::after{content:"";position:absolute;left:50%;bottom:-5px;transform:translateX(-50%);
   border:5px solid transparent;border-top-color:var(--mc,#4a90d9);border-bottom:0}
 
+/* 打卡点卡片（与想去/去过同款 .trip 风格，点一下即编辑） */
+.trip.ck{cursor:pointer}
+.trip.ck:before{background:#ff7043}
+.ck-pill{display:inline-block;font-size:11px;font-weight:600;line-height:1;padding:4px 9px;border-radius:10px;
+  color:#ff7043;background:rgba(255,112,67,.12)}
+.ck-del{position:absolute;top:10px;right:12px;z-index:3;width:26px;height:26px;border:0;border-radius:50%;
+  background:rgba(40,30,20,.45);color:#fff;font-size:16px;line-height:1;cursor:pointer;
+  display:flex;align-items:center;justify-content:center}
+.ck-del:hover{background:rgba(229,72,77,.85)}
+.muted{color:var(--muted);font-size:13px}
+
+/* 地图模式：点击标记弹出的展示卡（右上角） */
+.map-card{position:absolute;top:56px;right:14px;z-index:8;width:262px;max-height:calc(100% - 80px);overflow:auto;
+  background:#fff;border-radius:16px;box-shadow:0 18px 44px rgba(15,23,42,.34);border:1px solid rgba(255,255,255,.6);
+  font-size:13px;color:#2a2419}
+.map-card[hidden]{display:none}
+.map-card .mc-x{position:absolute;top:8px;right:10px;z-index:2;width:26px;height:26px;border:0;border-radius:50%;
+  background:rgba(255,255,255,.78);color:#3a342a;font-size:17px;line-height:1;cursor:pointer;
+  display:flex;align-items:center;justify-content:center}
+.map-card .mc-x:hover{background:#fff}
+.map-card .mc-cover{height:120px;background-size:cover;background-position:center;background-color:#eef1ea}
+.map-card .mc-cover.mc-grad{background:linear-gradient(152deg,hsl(28,40%,62%),hsl(200,30%,45%))}
+.map-card .mc-body{padding:12px 14px 14px}
+.map-card .mc-body>b{font-size:15px;display:block;margin-bottom:6px;padding-right:24px}
+.map-card .mc-meta{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;color:#7a8aa0;margin-bottom:8px}
+.map-card .mc-note{font-size:13px;line-height:1.6;color:#4a463a;white-space:pre-wrap;margin-bottom:10px}
+.map-card .mc-ops{display:flex;gap:8px}
+
 @media (max-width:640px){
   .ck-map{height:320px}
   .map-tabs{top:10px;right:10px;left:auto}
   .mtab{padding:7px 12px}
+  .map-card{top:52px;left:12px;right:12px;width:auto;max-height:62%}
 }

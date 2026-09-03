@@ -615,9 +615,10 @@ async function resolveOneImage(u){
   return null;
 }
 async function resolveImagesFor(rows){
-  if (!_fsaHandle || !rows || !rows.length) return;
+  if (!rows || !rows.length) return;
   for (var i = 0; i < rows.length; i++){
     var r = rows[i]; if (!r) continue;
+    var pending = [];   /* 待解析的相对路径（数组字段 + 打卡点字符串字段） */
     for (var j = 0; j < IMG_FIELDS.length; j++){
       var arr = r[IMG_FIELDS[j]];
       if (!arr || !arr.length) continue;
@@ -627,8 +628,26 @@ async function resolveImagesFor(rows){
         if (!u) continue;
         if (/^(data|blob):/.test(u) || /^https?:/i.test(u)) continue;
         if (_imgUrlCache[u]) continue;
-        var bu = await resolveOneImage(u);
-        if (bu) _imgUrlCache[u] = bu;
+        pending.push(u);
+      }
+    }
+    /* 打卡点的封面是字符串字段「封面图片」（非数组），同样需要解析成可显示 URL */
+    var su = normalizeImgPath(r['封面图片'] || '');
+    if (su && !/^(data|blob):/.test(su) && !/^https?:/i.test(su) && !_imgUrlCache[su]) pending.push(su);
+    if (!pending.length) continue;
+    if (_fsaHandle){
+      /* FSA 模式：用文件句柄解析（含文件名模糊兜底） */
+      for (var p = 0; p < pending.length; p++){
+        var bu = await resolveOneImage(pending[p]);
+        if (bu) _imgUrlCache[pending[p]] = bu;
+      }
+    } else {
+      /* 非 FSA（local / gh / 静态托管）：用 fetch 把相对路径转成 blob，保证能显示 */
+      for (var q = 0; q < pending.length; q++){
+        try {
+          var resp = await fetch(pending[q]);
+          if (resp && resp.ok){ var bl = await resp.blob(); _imgUrlCache[pending[q]] = URL.createObjectURL(bl); }
+        } catch(_){ /* 取不到就保留原相对路径，浏览器自行尝试 */ }
       }
     }
   }
@@ -1353,6 +1372,18 @@ function coverStyle(row,title){
   var h = hue(title), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
+/* 打卡点的封面是「字符串」字段「封面图片」（非数组），需要单独的辅助函数 */
+function findCheckin(id){ return ((store.checkin && store.checkin.rows)||[]).filter(function(r){ return String(r._id)===String(id); })[0]; }
+function ckCoverUrl(row){
+  var u = row && row['封面图片'] || '';
+  return u ? resolveImgUrl(u) : '';
+}
+function ckCoverBg(row){
+  var u = ckCoverUrl(row);
+  if (u) return 'background-image:url("'+u.replace(/[\"'()\\]/g,'')+'")';
+  var h = hue(row['地点名字']||''), h2 = (h+26)%360;
+  return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
+}
 function mdText(v){ return dstr(v).slice(5).replace('-','.'); }
 
 /* ============ 模块定义 ============ */
@@ -1546,7 +1577,7 @@ var ui = {
   view:'overview',
   collection:{ mode:'cat', cat:'', sub:'', q:'', view:'wall', ipId:null, seriesId:null, inbox:false, classic:false, editing:false },
   av:{ cat:'', sub:'', q:'' },
-  travel:{ status:'', q:'', mapTab:'earth', ckNew:false },
+  travel:{ status:'', q:'', mapTab:'earth', ckNew:false, ckEditId:false },
   study:{ field:'', q:'', tab:'home', cat:'' },               /* v18：tab=home/书籍/杂志，子层 cat 是当前显示的分类 */
   food:{ type:'', q:'' },
   idea:{ cat:'', star:false, q:'' },
@@ -1696,9 +1727,11 @@ function loadAll(){
   keys.forEach(function(k){
     store[k]={rows:[],status:'loading'};
     fetchAll(k, function(rows){
-      if (rows===null){ store[k].status='error'; }
-      else { store[k].rows=normalizeRows(rows); store[k].status= rows.length? 'ok' : 'empty'; }
-      render();
+      if (rows===null){ store[k].status='error'; render(); return; }
+      store[k].rows=normalizeRows(rows);
+      store[k].status= rows.length? 'ok' : 'empty';
+      /* 关键：所有模式（含 local / gh）都要把相对路径封面解析成可显示 URL，否则封面整块空白 */
+      resolveImagesFor(store[k].rows).then(function(){ render(); });
     });
   });
   render();
@@ -2273,9 +2306,15 @@ function mkContent(color, label){
 }
 /* ---------- 新建打卡点：独立全屏地图页 ---------- */
 function renderCheckinNew(){
-  var t = new Date().toISOString().slice(0,10);
+  var editing = !!(ui.travel && ui.travel.ckEditId);
+  var er = editing ? findCheckin(ui.travel.ckEditId) : null;
+  var t = (er && er['日期']) ? er['日期'] : new Date().toISOString().slice(0,10);
+  var nameV = er ? (er['地点名字']||'') : '';
+  var cityV = er ? (er['城市景区']||'') : '';
+  var coverV = er ? (er['封面图片']||'') : '';
+  var contentV = er ? (er['内容']||'') : '';
   var h = '<div class="strip">'+stripHTML('travel')+'</div>';
-  h += '<section class="panel"><div class="panel-head"><div><h2>新建打卡点</h2>'+
+  h += '<section class="panel"><div class="panel-head"><div><h2>'+(editing?'编辑打卡点':'新建打卡点')+'</h2>'+
        '<div class="hint">先搜城市 / 景区，在地图上点一下标位置，再填好信息</div></div>'+
        '<button class="btn ghost sm" data-act="ckcancel">← 返回</button></div>';
   h += '<div class="ck-search"><input id="ckSearch" class="search" autocomplete="off" placeholder="搜索城市 / 景区，如：西湖、成都、京都">'+
@@ -2283,19 +2322,20 @@ function renderCheckinNew(){
   h += '<div id="ckMap" class="ck-map"></div><div id="ckTip" class="ck-tip"></div>';
   h += '<div class="ck-form">'+
        '<div class="fgrid">'+
-       '  <div class="f"><label>地点名字 *</label><input id="ckName" type="text" autocomplete="off" placeholder="如 西湖断桥"></div>'+
-       '  <div class="f"><label>日期</label><input id="ckDate" type="date" value="'+t+'"></div>'+
-       '  <div class="f"><label>城市 / 景区</label><input id="ckCity" type="text" autocomplete="off" placeholder="搜索后自动填，也可手填"></div>'+
-       '  <div class="f"><label>封面图片</label><div class="imgrow"><input id="ckCover" type="text" autocomplete="off" placeholder="图片链接，或点右侧上传（可选）">'+
+       '  <div class="f"><label>地点名字 *</label><input id="ckName" type="text" autocomplete="off" placeholder="如 西湖断桥" value="'+esc(nameV)+'"></div>'+
+       '  <div class="f"><label>日期</label><input id="ckDate" type="date" value="'+esc(t)+'"></div>'+
+       '  <div class="f"><label>城市 / 景区</label><input id="ckCity" type="text" autocomplete="off" placeholder="搜索后自动填，也可手填" value="'+esc(cityV)+'"></div>'+
+       '  <div class="f"><label>封面图片</label><div class="imgrow"><input id="ckCover" type="text" autocomplete="off" placeholder="图片链接，或点右侧上传（可选）" value="'+esc(coverV)+'">'+
        '<label class="btn ghost sm upl" for="ckCoverFile">上传<input id="ckCoverFile" type="file" accept="image/*" hidden></label></div>'+
-       '<div id="ckCovPrev" class="ckcovprev"></div>'+
+       '<div id="ckCovPrev" class="ckcovprev">'+(coverV?'<img src="'+esc(resolveImgUrl(coverV))+'" alt="封面预览">':'')+'</div>'+
        '<span class="imgnote">上传的图会先在浏览器里压到长边 800px 再存</span></div>'+
        '</div>'+
-       '<div class="f" style="margin-top:8px"><label>内容</label><textarea id="ckContent" placeholder="当时的心情、发生了什么…"></textarea></div>'+
+       '<div class="f" style="margin-top:8px"><label>内容</label><textarea id="ckContent" placeholder="当时的心情、发生了什么…">'+esc(contentV)+'</textarea></div>'+
        '<div id="ckErr" class="ck-err"></div>'+
        '<div class="sheet-actions" style="margin-top:14px">'+
+       (editing?'<button class="btn ghost danger" type="button" data-act="ckdel" data-id="'+esc(ui.travel.ckEditId)+'">删除</button>':'')+
        '  <button class="btn ghost" type="button" data-act="ckcancel">取消</button>'+
-       '  <button class="btn primary" type="button" data-act="cksave">保存打卡点</button></div>'+
+       '  <button class="btn primary" type="button" data-act="cksave">'+(editing?'保存修改':'保存打卡点')+'</button></div>'+
        '</div></section>';
   return h;
 }
@@ -2331,6 +2371,13 @@ function attachCkMap(){
         var g=wgs84ToGcj02(w.lat,w.lon);
         if(marker){ marker.setPosition([g.lon,g.lat]); }
         else { marker=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent('#ff7043','打卡点'), anchor:'bottom-center' }); map.add(marker); }
+      }
+      /* 编辑模式：把标记放到打卡点原坐标 */
+      var _eId = ui.travel && ui.travel.ckEditId;
+      var _eRow = _eId ? findCheckin(_eId) : null;
+      if (_eRow){
+        var _eLat=Number(_eRow['纬度']), _eLon=Number(_eRow['经度']);
+        if (_eLat||_eLon){ var _eg=wgs84ToGcj02(_eLat,_eLon); setMarker(_eg.lon,_eg.lat); }
       }
       map.on('click', function(e){ if(e&&e.lnglat) setMarker(e.lnglat.lng, e.lnglat.lat); });
       AMap.plugin(['AMap.PlaceSearch'], function(){
@@ -2375,10 +2422,18 @@ function saveCheckin(){
     经度: Math.round(ckDraft.lon*100000)/100000
   };
   if(!store.checkin) store.checkin={rows:[]};
-  store.checkin.rows.unshift(row);
+  if (ui.travel && ui.travel.ckEditId){
+    var _i=-1;
+    for (var _k=0;_k<store.checkin.rows.length;_k++){ if(String(store.checkin.rows[_k]._id)===String(ui.travel.ckEditId)){ _i=_k; break; } }
+    if(_i>=0){ row._id=store.checkin.rows[_i]._id; store.checkin.rows[_i]=row; }
+    ui.travel.ckEditId=false;
+    toast('已更新打卡点：'+name);
+  } else {
+    store.checkin.rows.unshift(row);
+    toast('已保存打卡点：'+name);
+  }
   if (MODE==='localfile'){ queueLocalSave(); } else { persistAll(); }
   ui.travel.ckNew=false;
-  toast('已保存打卡点：'+name);
   render();
 }
 /* ---------- 展示框「地图」模式：高德中国地图，显示想去 / 去过 / 打卡点 ---------- */
@@ -2406,16 +2461,21 @@ function attachChinaMap(){
         if(!(lat&&lon)){ var c=CITY_LOOKUP[String(r['地点']||'').trim()]; if(c){lat=c[0];lon=c[1];} else return; }
         var g=wgs84ToGcj02(lat,lon);
         var col = r['状态']==='去过' ? '#3bb273' : '#4a90d9';
-        map.add(new AMap.Marker({ position:[g.lon,g.lat], content:mkContent(col, r['地点']||''), anchor:'bottom-center' }));
+        var mk=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent(col, r['地点']||''), anchor:'bottom-center' });
+        mk.on('click', function(){ showMapCard(r, 'travel'); });
+        map.add(mk);
       });
       /* 打卡点：橙 */
       ((store.checkin && store.checkin.rows)||[]).forEach(function(r){
         var lat=Number(r['纬度']), lon=Number(r['经度']);
         if(!(lat&&lon)) return;
         var g=wgs84ToGcj02(lat,lon);
-        map.add(new AMap.Marker({ position:[g.lon,g.lat], content:mkContent('#ff7043', r['地点名字']||'打卡点'), anchor:'bottom-center' }));
+        var mk=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent('#ff7043', r['地点名字']||'打卡点'), anchor:'bottom-center' });
+        mk.on('click', function(){ showMapCard(r, 'checkin'); });
+        map.add(mk);
       });
-      if(tip) tip.textContent='蓝=想去 · 绿=去过 · 橙=打卡点（可滚轮缩放看城市）';
+      map.on('click', function(){ var c=document.getElementById('mapCard'); if(c) c.hidden=true; });
+      if(tip) tip.textContent='蓝=想去 · 绿=去过 · 橙=打卡点（点标记看详情，滚轮缩放看城市）';
     }catch(e){ if(tip) tip.innerHTML='地图初始化失败：'+((e&&e.message)||e); }
   });
 }
@@ -2423,11 +2483,38 @@ function attachChinaMap(){
 
 /* 打卡点封面加载失败时，隐藏破图并显示提示（供内联 onerror 调用） */
 function ckImgErr(img){ if(!img) return; img.style.display='none'; var s=document.createElement('span'); s.className='ckfail'; s.textContent='加载失败'; if(img.parentNode) img.parentNode.appendChild(s); }
+/* 地图模式下点击标记，在地图右上角弹出该地点的展示卡（含封面与已录入信息） */
+function showMapCard(row, kind){
+  var c=document.getElementById('mapCard'); if(!c) return;
+  var cov = kind==='checkin' ? ckCoverUrl(row) : coverImg(row);
+  var name = kind==='checkin' ? (row['地点名字']||'未命名') : (row['地点']||'未命名');
+  var meta=[];
+  if (kind==='checkin'){
+    if(row['城市景区']) meta.push(esc(row['城市景区']));
+    if(row['日期']) meta.push(esc(dstr(row['日期'])));
+  } else {
+    if(row['国家地区']) meta.push(esc(row['国家地区']));
+    if(row['状态']) meta.push(esc(row['状态']));
+  }
+  var editAct = kind==='checkin'
+    ? '<button class="btn ghost sm" type="button" data-act="ckedit" data-id="'+esc(row._id)+'">编辑</button>'
+    : '<button class="btn ghost sm" type="button" data-act="edit" data-key="travel" data-id="'+esc(row._id)+'">编辑</button>';
+  c.innerHTML = '<button class="mc-x" type="button" aria-label="关闭">×</button>'+
+    (cov ? '<div class="mc-cover" style="background-image:url(\''+cov.replace(/[\"'()\\]/g,'')+'\')"></div>'
+         : '<div class="mc-cover mc-grad"></div>')+
+    '<div class="mc-body"><b>'+esc(name)+'</b>'+
+      (meta.length?'<div class="mc-meta">'+meta.join(' · ')+'</div>':'')+
+      (row['内容']?'<div class="mc-note">'+esc(row['内容'])+'</div>':'')+
+      '<div class="mc-ops">'+editAct+'</div>'+
+    '</div>';
+  var x=c.querySelector('.mc-x'); if(x) x.onclick=function(){ c.hidden=true; };
+  c.hidden=false;
+}
 
 function renderTravel(){
   var f=ui.travel, rows=filtered('travel'), s=store.travel;
   /* 新建打卡点：独立全屏地图页 */
-  if (f.ckNew) return renderCheckinNew();
+  if (f.ckNew || f.ckEditId) return renderCheckinNew();
   var h='<div class="strip">'+stripHTML('travel')+'</div>';
   var cnt={ '想去':0,'去过':0 };
   s.rows.forEach(function(r){ if(cnt[r['状态']]!=null) cnt[r['状态']]++; });
@@ -2443,7 +2530,7 @@ function renderTravel(){
       '<button class="mtab'+(f.mapTab==='map'?' on':'')+'" type="button" data-act="maptab" data-v="map">地图</button>'+
     '</div>'+
     '<div class="earth-panel"'+(f.mapTab==='map'?' hidden':'')+'><div id="globeSlot"></div></div>'+
-    '<div class="map-panel"'+(f.mapTab!=='map'?' hidden':'')+'><div id="chinaMap" class="china-map"></div><div id="chinaTip" class="map-tip"></div></div>'+
+    '<div class="map-panel"'+(f.mapTab!=='map'?' hidden':'')+'><div id="chinaMap" class="china-map"></div><div id="chinaTip" class="map-tip"></div><div id="mapCard" class="map-card" hidden></div></div>'+
     '</section>';
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div class="panel-head"><div><h2>目的地</h2>'+
     '<div class="hint">按状态和心愿等级排</div></div></div>'+
@@ -2473,27 +2560,25 @@ function renderTravel(){
       '</div>';
   }).join('')+'</div>';
   h += '</section>';   /* 闭合目的地面板，使下面的打卡点面板成为相邻兄弟，享有 .panel+.panel 间距 */
-  /* 打卡点列表：封面 / 名字 / 日期 / 城市 / 内容，可在地图上看、也能删 */
+  /* 打卡点列表：与「想去 / 去过」卡片同款样式，点一下即可编辑 */
   var ckrows=(store.checkin && store.checkin.rows)||[];
   if (ckrows.length){
     h += '<section class="panel"><div class="panel-head"><div><h2>打卡点</h2>'+
-         '<div class="hint">封面跟着显示在地图「地图」模式里</div></div></div>'+
-         '<div class="cklist">';
+         '<div class="hint">点一下卡片就能改 · 在地图「地图」模式里也能看</div></div>'+
+         '<span class="muted">'+ckrows.length+' 个</span></div>'+
+         '<div class="trips">';
     ckrows.forEach(function(r){
-      var cov=resolveImgUrl(r['封面图片']||'');
-      h += '<div class="ckitem">'+
-        '<div class="ckcov">'+(cov?'<img src="'+esc(cov)+'" alt="封面" onerror="ckImgErr(this)">':'<span class="ckfail">无封面</span>')+'</div>'+
-        '<div class="ckbody"><b>'+esc(r['地点名字']||'未命名')+'</b>'+
-          '<div class="ckmeta">'+
-            (r['城市景区']?'<span>'+esc(r['城市景区'])+'</span>':'')+
-            (r['日期']?'<span>'+esc(dstr(r['日期']))+'</span>':'')+
-          '</div>'+
-          (r['内容']?'<div class="cknote">'+esc(r['内容'])+'</div>':'')+
-        '</div>'+
-        '<div class="ckops">'+
-          (cov?'':'<button class="btn ghost sm" type="button" data-act="ckupcov" data-id="'+esc(r._id)+'">补封面</button>')+
-          '<button class="btn ghost sm" type="button" data-act="ckdel" data-id="'+esc(r._id)+'">删除</button>'+
-        '</div>'+
+      var cov=ckCoverUrl(r);
+      var meta=[];
+      if (r['城市景区']) meta.push('<span>'+esc(r['城市景区'])+'</span>');
+      if (r['日期']) meta.push('<span>'+esc(dstr(r['日期']))+'</span>');
+      h += '<div class="trip ck" data-act="ckedit" data-id="'+esc(r._id)+'">'+
+        (cov?'<div class="coverimg" style="'+ckCoverBg(r)+'"></div>':'')+
+        '<button class="ck-del" type="button" data-act="ckdel" data-id="'+esc(r._id)+'" title="删除" aria-label="删除">×</button>'+
+        '<div class="top"><h4>'+esc(r['地点名字']||'未命名')+'</h4><span class="ck-pill">打卡点</span></div>'+
+        (r['城市景区']?'<div class="where">'+esc(r['城市景区'])+'</div>':'')+
+        (meta.length?'<div class="meta">'+meta.join('')+'</div>':'')+
+        (r['内容']?'<div class="note">'+esc(r['内容'])+'</div>':'')+
       '</div>';
     });
     h += '</div></section>';
@@ -2665,7 +2750,7 @@ function render(){
   if (key==='study'){ /* 文渊斋暂无常驻 3D 场景 */ }
   if (key==='idea'){ initFireworks(); } else { stopFireworks(); }
   if (key==='food'){ initFoodMap(); } else { stopFoodMap(); }
-  if (key==='travel' && ui.travel && ui.travel.ckNew){ attachCkMap(); } else { stopCkMap(); }
+  if (key==='travel' && ui.travel && (ui.travel.ckNew || ui.travel.ckEditId)){ attachCkMap(); } else { stopCkMap(); }
   if (key==='collection'){ applyMuseumLayout(); }
 
   bindStage();
@@ -2748,13 +2833,15 @@ document.addEventListener('click', function(ev){
   if (act==='reloadall'){ loadAll(); toast('正在重新拉取线上数据'); return; }
   if (act==='brand'){ openBrand(); return; }
   if (act==='addcheckin'){ ui.travel.ckNew=true; window.scrollTo(0,0); render(); return; }
+  if (act==='ckedit'){ ui.travel.ckEditId=node.getAttribute('data-id'); ui.travel.ckNew=false; window.scrollTo(0,0); render(); return; }
   if (act==='maptab'){ ui.travel.mapTab = node.getAttribute('data-v') || 'earth'; render(); return; }
-  if (act==='ckcancel'){ ui.travel.ckNew=false; render(); return; }
+  if (act==='ckcancel'){ ui.travel.ckNew=false; ui.travel.ckEditId=false; render(); return; }
   if (act==='cksave'){ saveCheckin(); return; }
   if (act==='ckdel'){
     var cid=node.getAttribute('data-id');
     if (cid && store.checkin && store.checkin.rows){
       store.checkin.rows = store.checkin.rows.filter(function(r){ return String(r._id)!==String(cid); });
+      if (String(ui.travel.ckEditId)===String(cid)) ui.travel.ckEditId=false;
       if (MODE==='localfile'){ queueLocalSave(); } else { persistAll(); }
       toast('已删除该打卡点'); render();
     }
