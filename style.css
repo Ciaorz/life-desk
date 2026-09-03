@@ -1561,8 +1561,8 @@ input.search{margin-bottom:12px}
 .ck-del:hover{background:rgba(229,72,77,.85)}
 .muted{color:var(--muted);font-size:13px}
 
-/* 地图模式：点击标记弹出的展示卡（右上角） */
-.map-card{position:absolute;top:56px;right:14px;z-index:8;width:262px;max-height:calc(100% - 80px);overflow:auto;
+/* 地图模式：点击标记弹出的展示卡（左上角） */
+.map-card{position:absolute;top:56px;left:14px;right:auto;z-index:8;width:262px;max-height:calc(100% - 80px);overflow:auto;
   background:#fff;border-radius:16px;box-shadow:0 18px 44px rgba(15,23,42,.34);border:1px solid rgba(255,255,255,.6);
   font-size:13px;color:#2a2419}
 .map-card[hidden]{display:none}
@@ -1582,5 +1582,5 @@ input.search{margin-bottom:12px}
   .ck-map{height:320px}
   .map-tabs{top:10px;right:10px;left:auto}
   .mtab{padding:7px 12px}
-  .map-card{top:52px;left:12px;right:12px;width:auto;max-height:62%}
+  .map-card{top:52px;left:12px;right:auto;width:calc(100% - 24px);max-height:62%}
 }

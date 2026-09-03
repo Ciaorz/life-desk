@@ -1367,8 +1367,8 @@ function coverImg(row){
 function hasCover(row){ return !!coverImg(row); }
 function coverStyle(row,title){
   var u = coverImg(row);
-  /* 注意引号必须成对：之前结尾误写成双引号，导致整条 background-image 声明无效（封面全都不显示） */
-  if (u) return 'background-image:url("'+u.replace(/[\"'()\\]/g,'')+'")';
+  /* 用单引号包裹 URL：外部 HTML 的 style 属性使用双引号，内部若再用双引号会截断属性，导致封面整片空白 */
+  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"')";
   var h = hue(title), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -1380,7 +1380,7 @@ function ckCoverUrl(row){
 }
 function ckCoverBg(row){
   var u = ckCoverUrl(row);
-  if (u) return 'background-image:url("'+u.replace(/[\"'()\\]/g,'')+'")';
+  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"')";
   var h = hue(row['地点名字']||''), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -2825,6 +2825,45 @@ document.addEventListener('click', function(ev){
     });
     return;
   }
+  if (act==='amapsearch'){
+    if (!editing || editing.key!=='travel'){ toast('先打开一个目的地，再点这里定位'); return; }
+    var box = document.querySelector('[data-amap-search]');
+    var q = (box && box.value.trim()) || String(editing.vals['地点']||'').trim();
+    if (!q){ toast('先填「地点」或输入搜索词'); return; }
+    var akey = amapKey();
+    if (!akey){ toast('还没配置高德地图 Key：到右下角「⚙ 同步设置」填入 Key 和安全密钥'); return; }
+    toast('正在用高德搜索「'+q+'」…');
+    loadAMap(akey, amapSecret(), function(ok){
+      if (!ok){ toast('高德地图加载失败，检查 Key / 安全密钥与域名白名单'); return; }
+      try {
+        AMap.plugin(['AMap.PlaceSearch'], function(){
+          var ps = new AMap.PlaceSearch({ pageSize:5, pageIndex:1, city:'全国' });
+          ps.search(q, function(st, res){
+            if (st==='complete' && res && res.poiList && res.poiList.pois && res.poiList.pois.length){
+              var p = res.poiList.pois[0];
+              if (!p || !p.location){ toast('高德返回结果缺少坐标'); return; }
+              var w = gcj02ToWgs84(p.location.lat, p.location.lng);
+              editing.vals['纬度'] = Math.round(w.lat*100)/100;
+              editing.vals['经度'] = Math.round(w.lon*100)/100;
+              if (p.name && !editing.vals['地点']) editing.vals['地点'] = p.name;
+              var region = p.pname || p.cityname || p.adname || p.city || '';
+              if (region && !editing.vals['国家地区']){ editing.vals['国家地区'] = region; }
+              var la = document.querySelector('[data-f="纬度"]'), lo = document.querySelector('[data-f="经度"]');
+              var na = document.querySelector('[data-f="地点"]'), co = document.querySelector('[data-f="国家地区"]');
+              if (la) la.value = editing.vals['纬度'];
+              if (lo) lo.value = editing.vals['经度'];
+              if (na && !na.value) na.value = editing.vals['地点'];
+              if (co && !co.value) co.value = editing.vals['国家地区'];
+              toast('已定位到「'+p.name+'」：'+editing.vals['纬度']+'°N, '+editing.vals['经度']+'°E（点保存生效）');
+            } else {
+              toast('高德没搜到「'+q+'」，换词试试或手动选位置');
+            }
+          });
+        });
+      } catch(e){ toast('高德搜索出错：'+((e&&e.message)||e)); }
+    });
+    return;
+  }
   if (act==='go'){ ui.view=key; if(key==='collection'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; } window.scrollTo(0,0); render(); return; }
   if (act==='add'){ openForm(key, null); return; }
   if (act==='edit'){ openForm(key, node.getAttribute('data-id')); return; }
@@ -3078,7 +3117,7 @@ function wireFormControls(host, saveDraft){
     inp.addEventListener('input', function(){
       var k=inp.getAttribute('data-f');
       var prev=host.querySelector('[data-img-prev="'+k+'"]');
-      if (prev) prev.style.backgroundImage = inp.value ? 'url("'+inp.value+'")' : '';
+      if (prev) prev.style.backgroundImage = inp.value ? 'url("'+inp.value+')"' : '';
     });
   });
   host.querySelectorAll('[data-img-file]').forEach(function(inp){
@@ -3092,7 +3131,7 @@ function wireFormControls(host, saveDraft){
         editing.vals[k]=dataUrl;
         var urlInput=host.querySelector('[data-f="'+k+'"]'); if (urlInput) urlInput.value=dataUrl;
         var prev=host.querySelector('[data-img-prev="'+k+'"]');
-        if (prev) prev.style.backgroundImage='url("'+dataUrl+'")';
+        if (prev) prev.style.backgroundImage='url("'+dataUrl+')"';
         if (note) note.textContent='已压到约 '+Math.round(dataUrl.length/1024)+' KB';
         if (saveDraft) saveDraft();
       });
@@ -3401,6 +3440,11 @@ function openForm(key, id, opts){
   host.innerHTML=h; host.hidden=false;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
   host.onclick=function(e){ if(e.target===host) closeSheet(); };
+  /* 目的地表单的「高德搜索」框默认带当前地点名，减少重复输入 */
+  if (key==='travel'){
+    var as = host.querySelector('[data-amap-search]');
+    if (as && editing.vals['地点']) as.value = String(editing.vals['地点']);
+  }
 
   wireFormControls(host, function(){
     try { localStorage.setItem('lifedesk_draft_' + key + (id ? '_' + id : ''), JSON.stringify(editing.vals)); } catch(e){}
@@ -3485,9 +3529,13 @@ function fieldHTML(f, v){
       '<input data-dyn-cus="'+f.k+'" type="text" placeholder="自定义…" style="display:none" autocomplete="off">'+
       '</div>';
   } else if (f.t==='geopick'){
-    body='<button type="button" class="btn ghost sm" data-act="geopick">📍 在地球上点选坐标</button>'+
-      '<button type="button" class="btn ghost sm" data-act="georeloc">🌍 重新按名称定位</button>'+
-      '<span class="imgnote">点开地球选位置，或按「地点/国家」自动定位（纠正旧坐标就点它）</span>';
+    body='<div style="display:flex;gap:8px;margin:2px 0 8px">'+
+      '<input type="text" class="search" data-amap-search placeholder="如：黄山风景区，或直接点下方按钮" style="flex:1" autocomplete="off">'+
+      '<button class="btn primary sm" type="button" data-act="amapsearch">🔍 高德搜索</button>'+
+      '</div>'+
+      '<button type="button" class="btn ghost sm" data-act="geopick">📍 在地球上点选坐标</button>'+
+      '<button type="button" class="btn ghost sm" data-act="georeloc">🌍 按名称重新定位</button>'+
+      '<span class="imgnote">输入地点名搜高德自动填坐标，或在地球上手动选</span>';
   } else if (f.t==='check'){
     body='<label class="checkrow"><input data-f="'+f.k+'" type="checkbox"'+(v?' checked':'')+'>'+esc(f.k)+'</label>';
   }
