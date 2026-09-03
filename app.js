@@ -555,6 +555,65 @@ async function readRelPathAsBlobUrl(rel){
     return URL.createObjectURL(f);
   } catch(e){ return null; }
 }
+/* 把 File 对象转成 data: URL（失败时兜底，避免封面整块空白） */
+async function fileToDataUrl(f){
+  try {
+    var buf = await f.arrayBuffer();
+    var bytes = new Uint8Array(buf);
+    var bin = '';
+    var CH = 0x8000;
+    for (var i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+    var ext = String((f && f.name || '').split('.').pop() || 'jpg').toLowerCase();
+    var mime = ext === 'png' ? 'image/png' : (ext === 'webp' ? 'image/webp' : (ext === 'gif' ? 'image/gif' : 'image/jpeg'));
+    return 'data:' + mime + ';base64,' + btoa(bin);
+  } catch(e){ return null; }
+}
+/* 兜底：blob 在某些情况下拿不到（如中文目录名 / 沙箱限制），改用 data: URL */
+async function readRelPathAsDataUrl(rel){
+  if (!_fsaHandle) return null;
+  var parts = String(normalizeImgPath(rel)).split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  if (parts[0] === DATA_PREFIX) parts.shift();
+  if (parts.length < 2) return null;
+  var name = parts.pop();
+  var dir = await _fsaGetDir(parts, false); if (!dir) return null;
+  try {
+    var fh = await dir.getFileHandle(name);
+    return fileToDataUrl(await fh.getFile());
+  } catch(e){ return null; }
+}
+/* 图片文件名 → 文件句柄 的索引（遍历 data/images 建立一次，供「按文件名模糊兜底」用，
+   这样即使目录名/前缀因历史遗留对不上，也能凭文件名把封面显示出来） */
+var _imgNameIndex = null;
+async function ensureImageIndex(){
+  if (_imgNameIndex || !_fsaHandle) return;
+  _imgNameIndex = {};
+  try {
+    var root = await _fsaGetDir([IMG_DIR], false);
+    if (!root) return;
+    var list = await walkDirFiles(root, '', []);
+    for (var i = 0; i < list.length; i++){
+      var nm = String(list[i].rel || '').split('/').pop();
+      if (nm) _imgNameIndex[nm] = list[i].handle;
+    }
+  } catch(e){ _imgNameIndex = _imgNameIndex || {}; }
+}
+/* 三层兜底解析一张封面：精确 blob → 精确 data → 按文件名模糊（用索引里的句柄直读） */
+async function resolveOneImage(u){
+  if (!u) return null;
+  var name = String(u).split('/').pop();
+  var bu = await readRelPathAsBlobUrl(u);
+  if (bu) return bu;
+  bu = await readRelPathAsDataUrl(u);
+  if (bu) return bu;
+  await ensureImageIndex();
+  var h = _imgNameIndex && _imgNameIndex[name];
+  if (h){
+    try { var f = await h.getFile(); if (f) return URL.createObjectURL(f); } catch(_){}
+    try { var f2 = await h.getFile(); if (f2) return await fileToDataUrl(f2); } catch(_){}
+  }
+  return null;
+}
 async function resolveImagesFor(rows){
   if (!_fsaHandle || !rows || !rows.length) return;
   for (var i = 0; i < rows.length; i++){
@@ -568,7 +627,7 @@ async function resolveImagesFor(rows){
         if (!u) continue;
         if (/^(data|blob):/.test(u) || /^https?:/i.test(u)) continue;
         if (_imgUrlCache[u]) continue;
-        var bu = await readRelPathAsBlobUrl(u);
+        var bu = await resolveOneImage(u);
         if (bu) _imgUrlCache[u] = bu;
       }
     }
@@ -2229,6 +2288,7 @@ function renderCheckinNew(){
        '  <div class="f"><label>城市 / 景区</label><input id="ckCity" type="text" autocomplete="off" placeholder="搜索后自动填，也可手填"></div>'+
        '  <div class="f"><label>封面图片</label><div class="imgrow"><input id="ckCover" type="text" autocomplete="off" placeholder="图片链接，或点右侧上传（可选）">'+
        '<label class="btn ghost sm upl" for="ckCoverFile">上传<input id="ckCoverFile" type="file" accept="image/*" hidden></label></div>'+
+       '<div id="ckCovPrev" class="ckcovprev"></div>'+
        '<span class="imgnote">上传的图会先在浏览器里压到长边 800px 再存</span></div>'+
        '</div>'+
        '<div class="f" style="margin-top:8px"><label>内容</label><textarea id="ckContent" placeholder="当时的心情、发生了什么…"></textarea></div>'+
@@ -2252,6 +2312,7 @@ function attachCkMap(){
     compressImage(file, 800, function(dataUrl){
       if(!dataUrl){ if(tip) tip.textContent='这张图读不出来，换个文件试试'; return; }
       var ci=document.getElementById('ckCover'); if(ci) ci.value=dataUrl;
+      var pv=document.getElementById('ckCovPrev'); if(pv){ pv.innerHTML='<img src="'+dataUrl+'" alt="封面预览">'; }
       if(tip) tip.textContent='封面已选好：'+file.name;
     });
   }; }
@@ -2360,6 +2421,9 @@ function attachChinaMap(){
 }
 
 
+/* 打卡点封面加载失败时，隐藏破图并显示提示（供内联 onerror 调用） */
+function ckImgErr(img){ if(!img) return; img.style.display='none'; var s=document.createElement('span'); s.className='ckfail'; s.textContent='加载失败'; if(img.parentNode) img.parentNode.appendChild(s); }
+
 function renderTravel(){
   var f=ui.travel, rows=filtered('travel'), s=store.travel;
   /* 新建打卡点：独立全屏地图页 */
@@ -2408,6 +2472,7 @@ function renderTravel(){
       (r['备注']?'<div class="note">'+esc(r['备注'])+'</div>':'')+
       '</div>';
   }).join('')+'</div>';
+  h += '</section>';   /* 闭合目的地面板，使下面的打卡点面板成为相邻兄弟，享有 .panel+.panel 间距 */
   /* 打卡点列表：封面 / 名字 / 日期 / 城市 / 内容，可在地图上看、也能删 */
   var ckrows=(store.checkin && store.checkin.rows)||[];
   if (ckrows.length){
@@ -2417,7 +2482,7 @@ function renderTravel(){
     ckrows.forEach(function(r){
       var cov=resolveImgUrl(r['封面图片']||'');
       h += '<div class="ckitem">'+
-        '<div class="ckcov">'+(cov?'<img src="'+esc(cov)+'" alt="封面" onerror="this.style.display=\'none\'">':'无封面')+'</div>'+
+        '<div class="ckcov">'+(cov?'<img src="'+esc(cov)+'" alt="封面" onerror="ckImgErr(this)">':'<span class="ckfail">无封面</span>')+'</div>'+
         '<div class="ckbody"><b>'+esc(r['地点名字']||'未命名')+'</b>'+
           '<div class="ckmeta">'+
             (r['城市景区']?'<span>'+esc(r['城市景区'])+'</span>':'')+
@@ -2425,12 +2490,15 @@ function renderTravel(){
           '</div>'+
           (r['内容']?'<div class="cknote">'+esc(r['内容'])+'</div>':'')+
         '</div>'+
-        '<button class="btn ghost sm" type="button" data-act="ckdel" data-id="'+esc(r._id)+'">删除</button>'+
+        '<div class="ckops">'+
+          (cov?'':'<button class="btn ghost sm" type="button" data-act="ckupcov" data-id="'+esc(r._id)+'">补封面</button>')+
+          '<button class="btn ghost sm" type="button" data-act="ckdel" data-id="'+esc(r._id)+'">删除</button>'+
+        '</div>'+
       '</div>';
     });
     h += '</div></section>';
   }
-  return h+'</section>';
+  return h;
 }
 
 
@@ -2690,6 +2758,20 @@ document.addEventListener('click', function(ev){
       if (MODE==='localfile'){ queueLocalSave(); } else { persistAll(); }
       toast('已删除该打卡点'); render();
     }
+    return;
+  }
+  if (act==='ckupcov'){
+    var upid=node.getAttribute('data-id');
+    var finp=document.createElement('input'); finp.type='file'; finp.accept='image/*';
+    finp.onchange=function(){
+      var ff=finp.files && finp.files[0]; if(!ff) return;
+      compressImage(ff, 800, function(d){
+        if(!d){ toast('这张图读不出来，换个文件试试'); return; }
+        var rw=((store.checkin&&store.checkin.rows)||[]).filter(function(r){ return String(r._id)===String(upid); })[0];
+        if(rw){ rw['封面图片']=d; if(MODE==='localfile'){ queueLocalSave(); } else { persistAll(); } toast('封面已更新'); render(); }
+      });
+    };
+    finp.click();
     return;
   }
   if (act==='view'){ ui[ui.view].view=node.getAttribute('data-v'); render(); return; }
