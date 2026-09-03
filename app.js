@@ -2354,10 +2354,15 @@ function loadAMap(key, secret, cb){
 }
 /*（旧版「在目的地里嵌套打卡点」的流程已废弃，改用「遐方坞 → +打卡点」的独立全屏地图页，见 renderCheckinNew / attachCkMap / saveCheckin）*/
 
-/* 地图标记的小圆点（蓝=想去 / 绿=去过 / 橙=打卡点） */
-function mkContent(color, label){
+/* 地图标记的小圆点（蓝=想去 / 绿=去过 / 橙=打卡点）；badge=同城打卡点数量（>0 时右上角显示） */
+function mkContent(color, label, badge){
   var txt = (label||'').length>6 ? (String(label).slice(0,6)+'…') : (label||'');
-  return '<div class="mk-dot" style="--mc:'+color+'"><span>'+esc(txt)+'</span></div>';
+  var badgeHtml = (badge>0) ? '<span class="mk-badge" title="'+badge+' 个打卡点">'+badge+'</span>' : '';
+  return '<div class="mk-dot" style="--mc:'+color+'"><span>'+esc(txt)+'</span>'+badgeHtml+'</div>';
+}
+/* 聚合数字气泡（多个目的地重叠时显示数量，点击后放大铺开） */
+function mkClusterContent(count){
+  return '<div class="mk-cluster"><span>'+count+'</span></div>';
 }
 /* ---------- 新建打卡点：独立全屏地图页 ---------- */
 function renderCheckinNew(){
@@ -2551,9 +2556,107 @@ function saveCheckin(){
   ui.travel.ckNew=false;
   render();
 }
-/* ---------- 展示框「地图」模式：高德中国地图，显示想去 / 去过 / 打卡点 ---------- */
-var CHINAMAP=null;
-function stopChinaMap(){ if (CHINAMAP){ try{ CHINAMAP.destroy(); }catch(e){} } CHINAMAP=null; }
+/* ---------- 展示框「地图」模式：高德中国地图，显示想去 / 去过（打卡点按需展开） ---------- */
+var CHINAMAP=null, MAP_MARKERS=[], MAP_EXPAND_KEY=null;
+function stopChinaMap(){ if (CHINAMAP){ try{ CHINAMAP.destroy(); }catch(e){} } CHINAMAP=null; MAP_MARKERS=[]; MAP_EXPAND_KEY=null; }
+function clearMapMarkers(){
+  if (CHINAMAP && MAP_MARKERS.length){ try{ CHINAMAP.remove(MAP_MARKERS); }catch(e){} MAP_MARKERS=[]; }
+}
+/* 城市关联键：优先用「地区（城市）」，否则用「地点名」 */
+function cityKey(row){
+  return (row['地区']||'').trim() || (row['地点']||'').trim();
+}
+/* 返回与某目的地同城（按 cityKey 精确匹配）的打卡点 */
+function findCityCheckins(key){
+  var out=[]; if (!key) return out;
+  ((store.checkin && store.checkin.rows)||[]).forEach(function(ck){
+    var ckKey=(ck['地区']||'').trim() || (ck['地点名字']||'').trim();
+    if (ckKey && ckKey===key) out.push(ck);
+  });
+  return out;
+}
+/* 收集地图上应显示的点（仅目的地；打卡点按需展开，不常驻） */
+function collectMapPoints(){
+  var pts=[];
+  ((store.travel && store.travel.rows)||[]).forEach(function(r){
+    var lat=Number(r['纬度']), lon=Number(r['经度']);
+    if (!(lat && lon)){
+      var c=CITY_LOOKUP[String(r['地点']||r['地区']||'').trim()];
+      if (c){ lat=c[0]; lon=c[1]; } else return;
+    }
+    var g=wgs84ToGcj02(lat, lon);
+    var key=cityKey(r);
+    pts.push({row:r, kind:'travel', color:(r['状态']==='去过' ? '#3bb273' : '#4a90d9'), name:(r['地点']||r['地区']||''), g:g, cityKey:key, ckCount:findCityCheckins(key).length});
+  });
+  return pts;
+}
+/* 按屏幕像素网格聚合目的地；单点标记右上角显示同城打卡点数量；点击放大并铺开同城打卡点 */
+function renderMapMarkers(){
+  if (!CHINAMAP) return;
+  clearMapMarkers();
+  var size=CHINAMAP.getSize();
+  if (!size || size.width<10 || size.height<10) return;
+  var pts=collectMapPoints();
+  var threshold=56; /* px，同一网格内视为重叠 */
+  var grid={};
+  pts.forEach(function(p){
+    try {
+      var px=CHINAMAP.lngLatToContainer([p.g.lon, p.g.lat]);
+      var gx=Math.floor(px.x/threshold), gy=Math.floor(px.y/threshold);
+      var key=gx+','+gy;
+      var cell=grid[key];
+      if (!cell){ cell={x:0, y:0, items:[]}; grid[key]=cell; }
+      cell.x=(cell.x*cell.items.length + px.x)/(cell.items.length+1);
+      cell.y=(cell.y*cell.items.length + px.y)/(cell.items.length+1);
+      cell.items.push(p);
+    } catch(e){}
+  });
+  Object.keys(grid).forEach(function(k){
+    var cell=grid[k];
+    if (cell.items.length===1){
+      var p=cell.items[0];
+      var mk=new AMap.Marker({ position:[p.g.lon, p.g.lat], content:mkContent(p.color, p.name, p.ckCount), anchor:'bottom-center', extData:{items:[p]} });
+      mk.on('click', function(){ onTravelMarkerClick(p); });
+      MAP_MARKERS.push(mk);
+    } else {
+      var n=cell.items.length, sumLat=0, sumLon=0;
+      cell.items.forEach(function(it){ sumLat+=it.g.lat; sumLon+=it.g.lon; });
+      var mk=new AMap.Marker({ position:[sumLon/n, sumLat/n], content:mkClusterContent(n), anchor:'center', extData:{items:cell.items} });
+      mk.on('click', function(){
+        var bounds=new AMap.Bounds();
+        cell.items.forEach(function(it){ bounds.extend([it.g.lon, it.g.lat]); });
+        try { CHINAMAP.setBounds(bounds, [60, 60, 60, 60]); } catch(e){}
+      });
+      MAP_MARKERS.push(mk);
+    }
+  });
+  /* 展开模式：把某城市的打卡点作为橙色点铺开 */
+  if (MAP_EXPAND_KEY){
+    findCityCheckins(MAP_EXPAND_KEY).forEach(function(ck){
+      var lat=Number(ck['纬度']), lon=Number(ck['经度']);
+      if (!(lat && lon)) return;
+      var g=wgs84ToGcj02(lat, lon);
+      var mk=new AMap.Marker({ position:[g.lon, g.lat], content:mkContent('#ff7043', ck['地点名字']||'打卡点', 0), anchor:'bottom-center' });
+      mk.on('click', function(){ showMapCard(ck, 'checkin'); });
+      MAP_MARKERS.push(mk);
+    });
+  }
+  if (MAP_MARKERS.length) CHINAMAP.add(MAP_MARKERS);
+}
+/* 点击目的地标记：弹卡片 + 若有同城打卡点则放大铺开 */
+function onTravelMarkerClick(p){
+  showMapCard(p.row, 'travel');
+  if (p.cityKey && p.ckCount>0){
+    MAP_EXPAND_KEY=p.cityKey;
+    var bounds=new AMap.Bounds();
+    bounds.extend([p.g.lon, p.g.lat]);
+    findCityCheckins(p.cityKey).forEach(function(ck){
+      var lat=Number(ck['纬度']), lon=Number(ck['经度']);
+      if (lat && lon){ var g=wgs84ToGcj02(lat, lon); bounds.extend([g.lon, g.lat]); }
+    });
+    try { CHINAMAP.setBounds(bounds, [60, 60, 60, 60]); } catch(e){ renderMapMarkers(); }
+  }
+}
 function attachChinaMap(){
   stopChinaMap();
   var cv=document.getElementById('chinaMap'); if(!cv) return;
@@ -2570,27 +2673,13 @@ function attachChinaMap(){
       map.addControl(new AMap.Scale());
       map.addControl(new AMap.ToolBar({ position:{ right:'16px', bottom:'48px' } }));
       CHINAMAP=map;
-      /* 目的地：蓝=想去 / 绿=去过 */
-      ((store.travel && store.travel.rows)||[]).forEach(function(r){
-        var lat=Number(r['纬度']), lon=Number(r['经度']);
-        if(!(lat&&lon)){ var c=CITY_LOOKUP[String(r['地点']||r['地区']||'').trim()]; if(c){lat=c[0];lon=c[1];} else return; }
-        var g=wgs84ToGcj02(lat,lon);
-        var col = r['状态']==='去过' ? '#3bb273' : '#4a90d9';
-        var mk=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent(col, r['地点']||r['地区']||''), anchor:'bottom-center' });
-        mk.on('click', function(){ showMapCard(r, 'travel'); });
-        map.add(mk);
-      });
-      /* 打卡点：橙 */
-      ((store.checkin && store.checkin.rows)||[]).forEach(function(r){
-        var lat=Number(r['纬度']), lon=Number(r['经度']);
-        if(!(lat&&lon)) return;
-        var g=wgs84ToGcj02(lat,lon);
-        var mk=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent('#ff7043', r['地点名字']||'打卡点'), anchor:'bottom-center' });
-        mk.on('click', function(){ showMapCard(r, 'checkin'); });
-        map.add(mk);
-      });
-      map.on('click', function(){ var c=document.getElementById('mapCard'); if(c) c.hidden=true; });
-      if(tip) tip.textContent='蓝=想去 · 绿=去过 · 橙=打卡点（点标记看详情，滚轮缩放看城市）';
+      renderMapMarkers();
+      map.on('click', function(){ var c=document.getElementById('mapCard'); if(c) c.hidden=true; MAP_EXPAND_KEY=null; renderMapMarkers(); });
+      var clusterTimer=null;
+      function scheduleRender(){ clearTimeout(clusterTimer); clusterTimer=setTimeout(renderMapMarkers, 120); }
+      map.on('zoomend', scheduleRender);
+      map.on('moveend', scheduleRender);
+      if(tip) tip.textContent='蓝=想去 · 绿=去过（标记右上角数字=该地打卡点数，点标记放大并铺开打卡点）';
     }catch(e){ if(tip) tip.innerHTML='地图初始化失败：'+((e&&e.message)||e); }
   });
 }
@@ -6099,5 +6188,10 @@ function showIdeaDetail(id){
     '</div>';
   rShowOverlay(html);
 }
+
+/* ---------- 内联事件属性（onclick / onerror）在全局作用域执行 ---------- */
+/* 整个 app.js 包在 IIFE 内，下面这些被 HTML 字符串里的 onclick/onerror 直接调用的函数必须暴露到 window */
+window.rCloseOverlay = rCloseOverlay;
+window.ckImgErr = ckImgErr;
 
 })();
