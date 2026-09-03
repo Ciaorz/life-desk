@@ -476,16 +476,18 @@ async function scanMaxImageSeqFor(dirName){
   try {
     var dir = await _fsaGetDir([IMG_DIR, dirName], false);
     if (dir){
-      /* File System Access API 的迭代器 */
+      /* File System Access API 的迭代器。
+         文件名形如「去过的地方-0001.jpg」，数字在中间（前缀是中文+连字符），
+         必须用 /-(\d+)\.[^.]+$/ 提取末尾编号，而不是 ^(\d+)\. （要求以数字开头，永远匹配不到）。 */
       if (typeof dir.entries === 'function'){
         for await (var [name] of dir.entries()){
-          var mm = /^(\d{4,})\./.exec(name);
+          var mm = /-(\d{1,})\.[^.]+$/i.exec(name);
           if (mm){ var v = parseInt(mm[1], 10); if (isFinite(v) && v > max) max = v; }
         }
       } else if (typeof dir.values === 'function'){
         for await (var fh of dir.values()){
           var name = fh.name || '';
-          var mm = /^(\d{4,})\./.exec(name);
+          var mm = /-(\d{1,})\.[^.]+$/i.exec(name);
           if (mm){ var v = parseInt(mm[1], 10); if (isFinite(v) && v > max) max = v; }
         }
       }
@@ -2671,7 +2673,8 @@ function renderTravel(){
     return '<div class="trip '+cls+'" data-act="edit" data-key="travel" data-id="'+esc(r._id)+'" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl">'+
       (hasCover(r)?'<div class="coverimg" style="'+coverStyle(r,locName)+'"></div>':'')+
       '<div class="top"><h4>'+locName+'</h4>'+statusPill(r['状态'])+'</div>'+
-      '<div class="where">'+(locSub?locSub:'')+(locRegion?(locSub?' · ':'')+locRegion:'')+(hearts?((locSub||locRegion)?' · ':'')+hearts:'')+'</div>'+
+      '<div class="where">'+(locSub?locSub:'')+(locRegion?(locSub?' · ':'')+locRegion:'')+'</div>'+
+      (hearts?'<div class="hearts">'+hearts+'</div>':'')+
       (meta.length?'<div class="meta">'+meta.join('')+'</div>':'')+
       (r['备注']?'<div class="note">'+esc(r['备注'])+'</div>':'')+
       '</div>';
@@ -2690,12 +2693,13 @@ function renderTravel(){
       if (r['国家']) meta.push('<span>'+esc(r['国家'])+'</span>');
       if (r['地区']||r['城市景区']) meta.push('<span>'+esc(r['地区']||r['城市景区'])+'</span>');
       if (r['日期']) meta.push('<span>'+esc(dstr(r['日期']))+'</span>');
-      if (num(r['心级'])) meta.push(heartPills(r['心级']));
+      var ckHearts = num(r['心级']) ? heartPills(r['心级']) : '';
       h += '<div class="trip ck" data-act="ckedit" data-id="'+esc(r._id)+'">'+
         (cov?'<div class="coverimg" style="'+ckCoverBg(r)+'"></div>':'')+
         '<div class="top"><h4>'+esc(r['地点名字']||'未命名')+'</h4><span class="ck-pill">打卡点</span></div>'+
         ((r['国家']||r['地区']||r['城市景区'])?'<div class="where">'+(r['国家']?esc(r['国家']):'')+((r['国家']&&(r['地区']||r['城市景区']))?' · ':'')+esc(r['地区']||r['城市景区']||'')+'</div>':'')+
         (meta.length?'<div class="meta">'+meta.join('')+'</div>':'')+
+        (ckHearts?'<div class="hearts">'+ckHearts+'</div>':'')+
         (r['内容']?'<div class="note">'+esc(r['内容'])+'</div>':'')+
       '</div>';
     });
