@@ -98,7 +98,7 @@ input,select,textarea{font:inherit;color:inherit}
 .seg button{min-height:30px;padding:0 12px;border:0;border-radius:9px;background:transparent;font-size:11.5px;
   font-weight:650;color:var(--muted);cursor:pointer}
 .seg button.on{background:var(--accent);color:#fff}
-.chips{display:flex;gap:7px;flex-wrap:wrap}
+.chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:16px}
 .chip{padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:rgba(255,252,247,.72);
   font-size:11.5px;font-weight:600;color:var(--muted);cursor:pointer;transition:.16s}
 .chip:hover{border-color:#c9bdac}
@@ -159,7 +159,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
 
 /* ---------- stats ---------- */
-.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px}
+.statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:16px}
 .stat{padding:15px 16px;border-radius:16px;background:#fbf7f1;border:1px solid rgba(111,89,67,.07)}
 .stat u{display:block;text-decoration:none;color:var(--muted);font-size:10.5px;letter-spacing:.13em;margin-bottom:7px}
 .stat b{font:700 26px/1 "Songti SC",serif;letter-spacing:.01em}
@@ -570,7 +570,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 /* 影音厅：电影 / 留声机两个展柜整体向上移 120px。
    移动 .museum-side（展柜的定位容器）而不是 .mcase-persp 本身，
    这样不会覆盖展柜自身的 transform 与 hover 的 translateY 效果。 */
-.avhall .museum-side { transform: translateY(-120px); }
+.avhall .museum-side { transform: translateY(-180px); }
 
 /* 蒙右下角「AI生成」水印：用一块更深的玻璃块在最右下方托住，避免与原图水印打架 */
 .museum .wm-mask, .studyroom .wm-mask, .foodtwo .wm-mask, .avhall .wm-mask {
@@ -581,7 +581,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
   pointer-events: none;
 }
 
-/* --- 顶部抬头（统一外观：博物馆/书房/厨房的标题区都同一形态）------------------ */
+/* --- 顶部抬头（统一外观：博物馆/文渊斋/厨房的标题区都同一形态）------------------ */
 .mh, .st-head, .ft-head {
   position: relative;
   padding: 64px 32px 36px;
@@ -609,7 +609,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
   margin: 0;
   text-shadow: 0 1px 4px rgba(0,0,0,0.55);
 }
-/* 书房顶部：学习计划 / 书籍 / 杂志 三个录入入口并行 */
+/* 文渊斋顶部：学习计划 / 书籍 / 杂志 三个录入入口并行 */
 .study-acts {
   display: flex;
   gap: 12px;
@@ -633,7 +633,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
   box-shadow: 0 6px 18px rgba(0,0,0,0.35);
 }
 
-/* 书房：书籍(左) | 学习计划(中) | 杂志(右)，一字排开 */
+/* 文渊斋：书籍(左) | 学习计划(中) | 杂志(右)，一字排开 */
 .bookcase-rail {
   position: relative;
   display: flex;
@@ -812,8 +812,8 @@ input.search:focus{border-color:var(--accent);background:#fff}
   position: absolute;
   top: 0; height: 100%;
 }
-.museum-side.left  { left: 0;  width: 50%; }
-.museum-side.right { right: 0; width: 50%; }
+.museum-side.left  { left: 60px;  width: 50%; }
+.museum-side.right { right: 60px; width: 50%; }
 
 .mcase-persp {
   position: absolute;
@@ -1050,7 +1050,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
   text-align: center;
 }
 
-/* --- 书房：3D 立体书 + 阳光书房布局 ------------------------------------------- */
+/* --- 文渊斋：3D 立体书 + 阳光书房布局 ------------------------------------------- */
 .studyroom .book-floor {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 160px));
@@ -1419,10 +1419,55 @@ body {
 }
 
 /* ============================================================
+   全局间距规范化
+   ------------------------------------------------------------
+   原先若干区块之间缺少留白，导致内容框 / 标签卡与下方内容紧贴。
+   这里统一补齐各区块的下边距，避免以后再出现"糊在一起"的情况。
+   ============================================================ */
+/* 筛选标签卡与下方内容之间 */
+.chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:16px}
+/* 顶部状态条与首个内容块之间 */
+.strip{margin-bottom:16px}
+/* 区块：相邻面板、面板与地球/地图之间 */
+.panel + .panel{margin-top:18px}
+.panel + .earth-hero,
+.earth-hero + .panel{margin-top:18px}
+/* 面板内：标题与内容、搜索框与标签卡 */
+.panel-head + *{margin-top:0}
+input.search{margin-bottom:12px}
+/* 统计网格：与下一块之间留一点呼吸 */
+.statgrid{margin-bottom:2px}
+/* 列表类容器统一用 gap，避免子元素互相贴住 */
+.trips{display:grid;grid-template-columns:repeat(auto-fill,minmax(275px,1fr));gap:16px}
+.barlist{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+/* 空状态不要顶到上一块 */
+.empty, .emptyHTML{margin-top:4px}
+
+/* ============================================================
+   打卡点（旅行模块子页面）
+   ============================================================ */
+/* 统计卡作为入口时可点击 */
+.stat.clickable{cursor:pointer;transition:transform .15s ease, box-shadow .15s ease, background .15s ease}
+.stat.clickable:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(63,48,36,.10);background:#fff}
+.stat.clickable:active{transform:translateY(0)}
+
+.checkin-wrap{position:relative;margin-bottom:18px;border-radius:16px;overflow:hidden;
+  background:#eef1ea;border:1px solid rgba(111,89,67,.10)}
+.checkin-map{display:block;width:100%;height:380px;background:#eef1ea}
+.checkin-tip{position:absolute;left:0;right:0;bottom:10px;text-align:center;
+  font-size:12px;color:var(--muted);line-height:1.6;padding:0 16px;
+  pointer-events:none;z-index:2;text-shadow:0 1px 3px rgba(255,255,255,.8)}
+.checkin-list{display:flex;flex-direction:column;gap:10px}
+.checkin-row{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:12px;
+  background:#fbf7f1;border:1px solid rgba(111,89,67,.07);font-size:13px}
+.checkin-row b{font-weight:650}
+.checkin-row span{color:var(--muted);font-size:11.5px;flex:1}
+
+/* ============================================================
    小屏（手机）适配
    ============================================================ */
 @media (max-width: 600px) {
-  /* --- 美食记录：地图 + 菜谱册 ---
+  /* --- 馐馔坊：地图 + 菜谱册 ---
      .foodtwo 原本是 min-height:100%，父容器没有确定高度时这条不生效，
      容器会塌成内容高度、背景铺不开（表现就是「背景一直加载不出来」）。
      小屏下直接给视口高度，并把背景改为居中裁切。 */
@@ -1436,13 +1481,17 @@ body {
   /* canvas 由 JS 按容器宽度设定像素尺寸；这里防止窄屏溢出并保持宽高比 */
   .foodtwo canvas.foodmap { max-width: 100%; height: auto !important; }
 
-  /* --- 灵感捕捉：星空背景 --- */
+  /* --- 灵思阁：星空背景 --- */
   .ideasky { min-height: 0; }
   .ideasky canvas#ideaSky { max-width: 100%; height: auto !important; }
   .ideasky .idea-add { right: 16px !important; bottom: 16px !important; }
 
-  /* --- 影音厅：小屏下展柜整体再收一点，配合已有的 -120px 上移 --- */
-  .avhall .museum-side { transform: translateY(-120px) scale(.86); }
+  /* --- 打卡点：小屏地图高度收敛 --- */
+  .checkin-map { height: 300px; }
+  .checkin-row { flex-wrap: wrap; }
+
+  /* --- 影音厅：小屏下展柜配合 -180px 上移略缩 scale 防挤 --- */
+  .avhall .museum-side { transform: translateY(-180px) scale(.82); }
 
   /* --- 右下角「数据」折叠按钮：点「数据」向上展开 导入/导出 --- */
   .dt-group { position: relative; display: inline-flex; }

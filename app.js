@@ -265,6 +265,13 @@ async function localfsWrite(obj, cb){
    ============================================================ */
 var SCHEMA_V2 = 2;
 var IMG_DIR = 'images';
+/* 数据目录在站点下的路径前缀。
+   注意区分两种路径：
+   - 写文件时用的路径：相对于 FSA 数据目录，形如 images/{类目}-封面/0001.jpg
+   - 存进 JSON / 显示时用的路径：相对于站点根，必须带 data/ 前缀，
+     形如 data/images/{类目}-封面/0001.jpg
+     否则会打到站点根的 images/（那是应用自带图标目录），图片 404。 */
+var DATA_PREFIX = 'data';
 
 /* 每个模块用哪个字段当分片键 */
 var SHARD_FIELD = { travel:'状态', collection:'小类', study:'领域', food:'类型', idea:'分类' };
@@ -284,7 +291,7 @@ function safeFileName(s){
 function shardFileName(cat){ return safeFileName(cat) + '-data.json'; }
 /* 每个类目的封面图片文件夹：images/{类目}-封面/ */
 function coverDirName(cat){ return safeFileName(cat) + '-封面'; }
-function coverDirPath(cat){ return IMG_DIR + '/' + coverDirName(cat) + '/'; }
+function coverDirPath(cat){ return DATA_PREFIX + '/' + IMG_DIR + '/' + coverDirName(cat) + '/'; }
 
 /* ---------- 底层文件读写（FSA）---------- */
 async function fsReadJSON(name){
@@ -403,8 +410,17 @@ var IMG_FIELDS = ['封面', '照片', 'IP图像', '系列封面', '图片'];
 var _imgUrlCache = {};                 /* 相对路径 -> 可直接用于 <img>/CSS 的 URL */
 var _imgFetchFailed = 0;               /* 本次保存中「外链图片下载失败」的数量 */
 
-function resolveImgUrl(u){
+/* 兼容旧数据：早期存的路径缺 data/ 前缀（形如 images/...），这里补上 */
+function normalizeImgPath(u){
   u = String(u || '');
+  if (!u) return '';
+  if (/^(data|blob):/.test(u) || /^https?:/i.test(u) || u.indexOf('//') === 0) return u;
+  if (u.indexOf(DATA_PREFIX + '/') === 0) return u;              /* 已带前缀 */
+  if (u.indexOf(IMG_DIR + '/') === 0) return DATA_PREFIX + '/' + u;  /* 旧路径补前缀 */
+  return u;
+}
+function resolveImgUrl(u){
+  u = normalizeImgPath(u);
   if (!u) return '';
   if (/^(data|blob):/.test(u) || /^https?:/i.test(u) || u.indexOf('//') === 0) return u;
   return _imgUrlCache[u] || u;         /* 未解析完时先返回原值，不至于整块空白 */
@@ -531,7 +547,10 @@ async function externalizeImages(cat, rows, startSeq){
 /* 加载后：把相对路径解析成 blob URL 以便显示 */
 async function readRelPathAsBlobUrl(rel){
   if (!_fsaHandle) return null;
-  var parts = String(rel).split('/').filter(Boolean);
+  var parts = String(normalizeImgPath(rel)).split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  /* 去掉站点前缀 data/，剩下的才是相对于 FSA 数据目录的路径 */
+  if (parts[0] === DATA_PREFIX) parts.shift();
   if (parts.length < 2) return null;
   var name = parts.pop();
   var dir = await _fsaGetDir(parts, false); if (!dir) return null;
@@ -550,7 +569,8 @@ async function resolveImagesFor(rows){
       if (!arr || !arr.length) continue;
       for (var k = 0; k < arr.length; k++){
         var it = arr[k]; if (!it || !it.imageUrl) continue;
-        var u = String(it.imageUrl);
+        var u = normalizeImgPath(it.imageUrl);
+        if (!u) continue;
         if (/^(data|blob):/.test(u) || /^https?:/i.test(u)) continue;
         if (_imgUrlCache[u]) continue;
         var bu = await readRelPathAsBlobUrl(u);
@@ -1252,15 +1272,15 @@ function coverStyle(row,title){
 function mdText(v){ return dstr(v).slice(5).replace('-','.'); }
 
 /* ============ 模块定义 ============ */
-/* v16.0 藏品分类体系：6 大类在博物馆透视展厅里展示，电影/留声机已转到新模块「影音厅」；书籍/杂志在书房里 */
+/* v16.0 藏品分类体系：6 大类在博物馆透视展厅里展示，电影/留声机已转到新模块「影音厅」；书籍/杂志在文渊斋里 */
 var CATS = ['手办','周边','杯盏','毛绒','卡牌','着物'];  /* 博物馆展厅只用这 6 类：前 3 在展厅左侧，后 3 在右侧 */
 var AV_CATS = ['电影','留声机'];                          /* 影音厅（新模块，歌剧院背景） */
-var BOOK_CATS = ['书籍','杂志'];                          /* 书房里的书与杂志 */
+var BOOK_CATS = ['书籍','杂志'];                          /* 文渊斋里的书与杂志 */
 /* v13 重命名：观影→电影，音乐→留声机（与新封面图 + 用户 8 张图对齐） */
 var LEGACY_CATS = {'观影':'电影','音乐':'留声机','杯子':'杯盏','服装':'着物'};
-/* 表单「类别」下拉的完整可选项（博物馆 6 类 + 影音厅 2 类 + 书房 2 类） */
+/* 表单「类别」下拉的完整可选项（博物馆 6 类 + 影音厅 2 类 + 文渊斋 2 类） */
 var CATS_FORM = CATS.concat(AV_CATS).concat(BOOK_CATS);
-/* 旧"书籍/杂志"分类——已挪到书房，仅识别数据库里的旧数据用 */
+/* 旧"书籍/杂志"分类——已挪到文渊斋，仅识别数据库里的旧数据用 */
 var LEGACY_BOOK_CATS = BOOK_CATS;
 var SUBS = {
   '留声机':   ['黑胶','CD','磁带','复古机'],
@@ -1302,7 +1322,7 @@ var CAT_DECOR = {
 
 var MODS = {
   overview: { key:'overview', name:'总览', icon:'日', eyebrow:'Overview',
-    desc:'五个地方，装下正在过的日子。' },
+    desc:'六个地方，装下正在过的日子。' },
   collection: { key:'collection', db:DB.collection, name:'藏品馆', icon:'藏', eyebrow:'博物馆', unit:' 件',
     desc:'拥有的每一件，都有它自己的位置和来处。', addLabel:'添加藏品',
     fields:[
@@ -1811,7 +1831,7 @@ var MOD_BG = {
   collection: 'images/museum-bg.png',                                                          /* v16.0：替换为无水印博物馆背景图 */
   travel:     'images/earth-cover.png',                                                        /* v15.18：基于 16K 颜色 + 4K 高程的地球封面 */
   av:         'images/opera-bg.png',                                                          /* v16.0：新模块「影音厅」用歌剧院背景 */
-  study:      'images/study-bg.png',                                                          /* v15.19/v16.0：古典书房（无水印） */
+  study:      'images/study-bg.png',                                                          /* v15.19/v16.0：古典文渊斋（无水印） */
   food:       'images/mod_food.png',
   idea:       'images/idea-sky.png'                                                           /* v15.18：本地银河照片 */
 };
@@ -2501,7 +2521,7 @@ function render(){
   var _gh=$('globeHost'); if(_gh && _gh.parentNode){ _gh.parentNode.removeChild(_gh); document.body.appendChild(_gh); _gh.hidden=true; }
   $('stage').innerHTML=h;
   if (key==='travel'){ attachGlobe(); } else { detachGlobe(); }
-  if (key==='study'){ /* 书房暂无常驻 3D 场景 */ }
+  if (key==='study'){ /* 文渊斋暂无常驻 3D 场景 */ }
   if (key==='idea'){ initFireworks(); } else { stopFireworks(); }
   if (key==='food'){ initFoodMap(); } else { stopFoodMap(); }
   if (key==='travel' && ui.travel && ui.travel.checkinRow){ initCheckinMap(); } else { stopCheckinMap(); }
@@ -2523,7 +2543,7 @@ function renderNav(){
     }
     var on = ui.view===k;
     var bg = MOD_BG[k] || '';
-    /* 侧栏小图标：有封面图就用真实封面（博物馆/地球/书房/菜/星）作为缩略，
+    /* 侧栏小图标：有封面图就用真实封面（博物馆/地球/文渊斋/菜/星）作为缩略，
        没封面（如总览/子级）回退到原汉字单字，保持可视。 */
     var icon = bg
       ? '<em style="background-image:url(\''+bg+'\')" aria-hidden="true"></em>'
@@ -4889,7 +4909,7 @@ function stopGlobe(){
   if (GLOBE && GLOBE.raf){ cancelAnimationFrame(GLOBE.raf); GLOBE.raf=null; }
   if (GLOBE && GLOBE.viewer){ try{ GLOBE.viewer.useDefaultRenderLoop=false; }catch(_){} }
 }
-/* ---------- 书房中央：暂未常驻 3D 场景 ---------- */
+/* ---------- 文渊斋中央：暂未常驻 3D 场景 ---------- */
 function updateEarthStat(){
   var el=$('earthStat'); if (!el) return;
   var rows=(store.travel && store.travel.rows)||[];
@@ -5291,7 +5311,7 @@ function renderAVHall(){
 }
 
 /* ============================================================
-   学习计划 · 明媚书房（阳光书桌 + 3D 立体的书）
+   学习计划 · 明媚文渊斋（阳光书桌 + 3D 立体的书）
    ============================================================ */
 /* 古籍封面：有封面图用图，否则用真实皮革纹理 × 古色着色（不再纯色块） */
 var BOOK_TEX = 'images/book_tex.png';
@@ -5301,7 +5321,7 @@ function bookCoverBg(r, t){
   var c = PALETTE[Math.abs(hashStr(r._id||t))%PALETTE.length];
   return 'background-image:url(\''+BOOK_TEX+'\');background-color:'+c+';background-blend-mode:multiply;background-size:cover;background-position:center';
 }
-/* 书房展柜——书籍 / 杂志（封面用 img，宽度跟随封面） */
+/* 文渊斋展柜——书籍 / 杂志（封面用 img，宽度跟随封面） */
 function _bookCase(cat, cnt, opts){
   opts = opts || {};
   var cover = opts.cover || 'images/bookcase-cover.png';
@@ -5317,7 +5337,7 @@ function renderStudyRoom(){
   var active = rows.filter(function(r){ return r['状态']==='进行中' || r['状态']==='未开始'; });
   var deskBooks = active.length ? active : rows;
 
-  /* 书房主目录（学习计划 3D 书堆） */
+  /* 文渊斋主目录（学习计划 3D 书堆） */
   var booksHtml = '';
   if (rows.length){
     deskBooks.slice(0, 9).forEach(function(r){
@@ -5413,7 +5433,7 @@ function renderStudyRoom(){
     main = '<div class="bookcase-rail">'+
              _bookCase('书籍', cntBook, {flip:true})+
              '<div class="study-mid">'+
-               (rows.length ? booksHtml : '<div class="glass-card study-empty">书房还空着，去添一本「学习计划」吧。</div>')+
+               (rows.length ? booksHtml : '<div class="glass-card study-empty">文渊斋还空着，去添一本「学习计划」吧。</div>')+
              '</div>'+
              _bookCase('杂志', cntMag)+
            '</div>';
@@ -5426,7 +5446,7 @@ function renderStudyRoom(){
   return '<div class="studyroom">'+
     '<div class="wm-mask"></div>'+
     '<div class="st-head">'+
-      '<h1>'+ (tab==='home' ? '书 房' : ('书 房 <span class="st-sep">·</span> <span class="st-sub">'+esc(tab)+'</span>')) +'</h1>'+
+      '<h1>'+ (tab==='home' ? '文 渊 斋' : ('文 渊 斋 <span class="st-sep">·</span> <span class="st-sub">'+esc(tab)+'</span>')) +'</h1>'+
       '<p>'+ (tab==='home' ? 'L I B R A R Y · S T U D Y · R E A D' : 'S H E L F · '+esc(tab).toUpperCase()+' · C O L L E C T I O N') +'</p>'+
       (tab === 'home' ? '<div class="study-acts"><button class="r-btn" data-act="studyadd">＋ 学习计划</button></div>' : '')+
     '</div>'+
@@ -5503,7 +5523,7 @@ function renderFoodTwoCol(){
   return '<div class="foodtwo">'+
     '<div class="wm-mask"></div>'+
     '<div class="ft-head">'+
-      '<h1>美 食 记 录</h1>'+
+      '<h1>馐 馔 坊</h1>'+
       '<p>T A S T E · F L A V O R · L O C A L</p>'+
       '<div style="margin-top:14px">'+
         '<button class="r-btn" data-act="foodadd">+ 记一笔新美味</button>'+
@@ -5521,7 +5541,7 @@ function renderFoodTwoCol(){
       '<div class="right glass-card">'+
         '<h2>菜 谱 册</h2>'+
         '<div class="recipe-page" style="font-size:11px;letter-spacing:1px;color:var(--ink-faint);margin-bottom:8px">食 · 记 · 心 · 得</div>'+
-        (rows.length?('<div class="rc-list">'+rows.map(foodBookCard).join('')+'</div>'):emptyHTML('还没有美食记录','点上方「记一笔新美味」。'))+
+        (rows.length?('<div class="rc-list">'+rows.map(foodBookCard).join('')+'</div>'):emptyHTML('还没有馐馔坊记录','点上方「记一笔新美味」。'))+
       '</div>'+
     '</div>'+
   '</div>';
