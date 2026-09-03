@@ -282,6 +282,9 @@ function safeFileName(s){
   return String(s || '').replace(/[\\/:*?"<>|\r\n\t]/g, '_').trim().slice(0, 60) || '未命名';
 }
 function shardFileName(cat){ return safeFileName(cat) + '-data.json'; }
+/* 每个类目的封面图片文件夹：images/{类目}-封面/ */
+function coverDirName(cat){ return safeFileName(cat) + '-封面'; }
+function coverDirPath(cat){ return IMG_DIR + '/' + coverDirName(cat) + '/'; }
 
 /* ---------- 底层文件读写（FSA）---------- */
 async function fsReadJSON(name){
@@ -344,14 +347,17 @@ async function storageSaveV2(snapshot){
 
   /* 写分片：内容无变化则跳过 */
   var okAll = true;
+  /* 图片编号在整个保存过程中连续递增，跨类目不重号；最后统一写回主索引 */
+  var seq = await nextImageSeq();
   for (var cat in buckets){
     if (!Object.prototype.hasOwnProperty.call(buckets, cat)) continue;
     var sh = idx.shards[cat] || {};
     var file = sh.file || shardFileName(cat);
     sh.file = file; sh.module = buckets[cat].module;
+    if (!sh.coverDir) sh.coverDir = coverDirName(cat);
     idx.shards[cat] = sh;
-    /* 先把 base64 封面落盘成独立文件，row 内换成相对路径，再比较/写入 */
-    await externalizeImages(cat, buckets[cat].rows);
+    /* 先把 base64 / 外链封面落盘成独立文件，row 内换成相对路径，再比较/写入 */
+    seq = await externalizeImages(cat, buckets[cat].rows, seq);
     var oldObj = await fsReadJSON(file);
     var oldStr = oldObj ? JSON.stringify(oldObj.rows || []) : '';
     var newStr = JSON.stringify(buckets[cat].rows);
@@ -362,7 +368,9 @@ async function storageSaveV2(snapshot){
       if (!okw) okAll = false;
     }
   }
+  idx.imgSeq = seq;                 /* 记回主索引，下次从这里继续，保证编号全局唯一 */
   var oki = await fsWriteIndex(idx);
+  await writeReadme();          /* 顺带刷新说明文件里的类目清单与封面编号 */
   return okAll && oki;
 }
 /* 读主索引 + 全部分片，合并成扁平快照 {模块:[记录]} */
@@ -393,6 +401,7 @@ async function storageLoadV2(){
    这样 JSON 体积不再随图片数量线性膨胀。 */
 var IMG_FIELDS = ['封面', '照片', 'IP图像', '系列封面', '图片'];
 var _imgUrlCache = {};                 /* 相对路径 -> 可直接用于 <img>/CSS 的 URL */
+var _imgFetchFailed = 0;               /* 本次保存中「外链图片下载失败」的数量 */
 
 function resolveImgUrl(u){
   u = String(u || '');
@@ -426,10 +435,58 @@ function dataUrlToBytes(dataUrl){
     return arr;
   } catch(e){ return null; }
 }
-/* 保存前：把 rows 里的 base64 图片写成独立文件，row 内改为相对路径 */
-async function externalizeImages(cat, rows){
-  if (!_fsaHandle || !rows || !rows.length) return;
-  var catDir = safeFileName(cat);
+/* 下载外链图片为字节（失败返回 null，保留原链接不阻断） */
+async function fetchImageBytes(url){
+  try {
+    var r = await fetch(url, { mode: 'cors' });
+    if (!r || !r.ok) return null;
+    var blob = await r.blob();
+    var buf = await blob.arrayBuffer();
+    var bytes = new Uint8Array(buf);
+    var ext = 'jpg';
+    var ct = String(blob.type || '').toLowerCase();
+    if (ct.indexOf('png') >= 0) ext = 'png';
+    else if (ct.indexOf('webp') >= 0) ext = 'webp';
+    else if (ct.indexOf('gif') >= 0) ext = 'gif';
+    else {
+      var mm = /\.(png|jpe?g|webp|gif)(?:[?#]|$)/i.exec(url);
+      if (mm) ext = mm[1].replace('jpeg', 'jpg');
+    }
+    return { bytes: bytes, ext: ext };
+  } catch(e){ return null; }
+}
+function pad4(n){ n = String(n); while (n.length < 4) n = '0' + n; return n; }
+/* 扫描磁盘上已有的最大图片编号（主索引没有记录时的兜底） */
+async function scanMaxImageSeq(){
+  var max = 0;
+  try {
+    var imgDir = await _fsaGetDir([IMG_DIR], false);
+    if (imgDir){
+      var list = await walkDirFiles(imgDir, '', []);
+      for (var i = 0; i < list.length; i++){
+        var fn = String(list[i].rel).split('/').pop() || '';
+        var mm = /^(\d{4,})\./.exec(fn);
+        if (mm){ var v = parseInt(mm[1], 10); if (isFinite(v) && v > max) max = v; }
+      }
+    }
+  } catch(e){}
+  return max;
+}
+/* 下一个全局图片编号：主索引记录优先，缺失时扫描磁盘 */
+async function nextImageSeq(){
+  var idx = await fsReadIndex();
+  var n = parseInt(idx.imgSeq, 10);
+  if (!isFinite(n) || n <= 0) n = await scanMaxImageSeq();
+  return n;
+}
+/* 保存前：把 base64 或外链图片都落到本地磁盘，row 内改为相对路径。
+   文件名 0001.jpg / 0002.jpg … 全局递增，方便对照 git 已上传到几号。
+   传入起始编号、返回结束编号；索引的 imgSeq 由调用方统一写回
+   （避免多处各写各的、互相覆盖导致编号重复）。 */
+async function externalizeImages(cat, rows, startSeq){
+  if (!_fsaHandle || !rows || !rows.length) return startSeq;
+  var dirName = coverDirName(cat);
+  var seq = (typeof startSeq === 'number' && isFinite(startSeq)) ? startSeq : await nextImageSeq();
   for (var i = 0; i < rows.length; i++){
     var r = rows[i]; if (!r) continue;
     for (var j = 0; j < IMG_FIELDS.length; j++){
@@ -438,19 +495,38 @@ async function externalizeImages(cat, rows){
       for (var k = 0; k < arr.length; k++){
         var it = arr[k]; if (!it || !it.imageUrl) continue;
         var u = String(it.imageUrl);
-        if (u.indexOf('data:image/') !== 0) continue;   /* 已经是路径则跳过 */
-        var ext = u.indexOf('image/png') >= 0 ? 'png' : 'jpg';
-        var name = String(r._id || ('r' + i)) + '_' + j + '_' + k + '.' + ext;
-        var bytes = dataUrlToBytes(u); if (!bytes) continue;
-        var ok = await _fsaWriteBinary([IMG_DIR, catDir], name, bytes);
+        var isData = (u.indexOf('data:image/') === 0);
+        var isRemote = /^https?:/i.test(u);
+        if (!isData && !isRemote) continue;          /* 已经是本地相对路径 */
+        var bytes = null, ext = 'jpg';
+        if (isData){
+          ext = (u.indexOf('image/png') >= 0) ? 'png' : 'jpg';
+          bytes = dataUrlToBytes(u);
+        } else {
+          var got = await fetchImageBytes(u);
+          if (!got){
+            /* 外链取不到（防盗链 / 国内访问不了，如 gstatic.com）：保留原链接，不阻断保存 */
+            _imgFetchFailed++;
+            console.warn('外链图片下载失败，保留原链接：', u.slice(0, 80));
+            continue;
+          }
+          bytes = got.bytes; ext = got.ext;
+        }
+        if (!bytes || !bytes.length) continue;
+        seq++;
+        var name = safeFileName(cat) + '-' + pad4(seq) + '.' + ext;   /* 例：唱片-0001.jpg */
+        var rel = coverDirPath(cat) + name;
+        var ok = await _fsaWriteBinary([IMG_DIR, dirName], name, bytes);
         if (ok){
-          var rel = IMG_DIR + '/' + catDir + '/' + name;
-          _imgUrlCache[rel] = u;      /* 立刻可用：先用原 dataURL 顶上，避免闪空白 */
+          _imgUrlCache[rel] = u;      /* 立刻可用：先用原图顶上，避免闪空白 */
           it.imageUrl = rel;          /* JSON 里只留相对路径 */
+        } else {
+          seq--;                      /* 写失败：回退编号，下次复用 */
         }
       }
     }
   }
+  return seq;
 }
 /* 加载后：把相对路径解析成 blob URL 以便显示 */
 async function readRelPathAsBlobUrl(rel){
@@ -609,6 +685,88 @@ async function ghPushAll(onProgress){
   return { ok: okCount === files.length, n: files.length, okCount: okCount };
 }
 
+/* ---------- 数据目录 README ----------
+   原来页面顶部那条「已连接 GitHub 仓库…」长说明，改为写进数据目录的 README.md：
+   既能在 GitHub 上直接看到说明，也列出当前有哪些数据文件、封面编号用到几号，
+   方便判断往仓库里还要补传哪些文件。 */
+async function fsWriteText(name, text){
+  if (!_fsaHandle) return false;
+  try {
+    var fh = await _fsaHandle.getFileHandle(name, { create: true });
+    var w = await fh.createWritable();
+    await w.write(text);
+    await w.close();
+    return true;
+  } catch(e){ return false; }
+}
+async function writeReadme(){
+  if (!_fsaHandle) return false;
+  var idx = await fsReadIndex();
+  var L = [];
+  L.push('# 日常集 · 数据目录');
+  L.push('');
+  L.push('> 这个 README 所在的位置，就是你在应用里选择的数据目录。所有数据文件都在这个文件夹里。');
+  L.push('');
+  L.push('## 文件结构');
+  L.push('');
+  L.push('```');
+  L.push('（数据目录）/');
+  L.push('├── README.md              ← 本文件');
+  L.push('├── lifedesk.json          ← 主索引（类目清单 + 下一个封面编号）');
+  L.push('├── 唱片-data.json          ← 每个类目一个数据文件');
+  L.push('├── 去过的地方-data.json');
+  L.push('├── lifedesk.backup.json   ← 拆分前的原始备份（确认无误后可删）');
+  L.push('└── images/');
+  L.push('    └── 唱片-封面/          ← 每个类目一个封面文件夹');
+  L.push('        ├── 唱片-0001.jpg   ← 命名：类目-编号');
+  L.push('        └── 唱片-0002.jpg');
+  L.push('```');
+  L.push('');
+  L.push('## 当前类目文件');
+  L.push('');
+  var cats = Object.keys(idx.shards || {});
+  if (cats.length){
+    L.push('| 类目 | 数据文件 | 封面目录 | 条目数 |');
+    L.push('| --- | --- | --- | --- |');
+    for (var i = 0; i < cats.length; i++){
+      var sh = idx.shards[cats[i]] || {};
+      var obj = await fsReadJSON(sh.file || shardFileName(cats[i]));
+      var n = (obj && obj.rows) ? obj.rows.length : 0;
+      L.push('| ' + cats[i] + ' | `' + (sh.file || '') + '` | `images/' + (sh.coverDir || coverDirName(cats[i])) + '/` | ' + n + ' |');
+    }
+  } else {
+    L.push('（还没有拆分类目文件，全部数据都在 `lifedesk.json` 里）');
+  }
+  L.push('');
+  L.push('## 封面图片编号');
+  L.push('');
+  L.push('当前已用到 **' + pad4(idx.imgSeq || 0) + '**。');
+  L.push('');
+  L.push('命名规则：`类目-编号.jpg`，编号是**全局递增**的（不会重复）。');
+  L.push('');
+  L.push('所以往 GitHub 补传时，只要看仓库里已经存在到几号，从下一个号开始传就行，');
+  L.push('已经传过的不用重复传。');
+  L.push('');
+  L.push('## 手动上传到 GitHub（不用 Token）');
+  L.push('');
+  L.push('1. 打开你的仓库，进入要存放数据的目录（例如 `data/`）');
+  L.push('2. 点右上角的 **Add file → Upload files**');
+  L.push('3. 从**本文件夹**里把文件拖进去：');
+  L.push('   - `lifedesk.json`（主索引，有变动就要传）');
+  L.push('   - 各个 `{类目}-data.json`');
+  L.push('   - `images/` 下的封面文件夹（只传新增编号的那些）');
+  L.push('4. 点 **Commit changes**');
+  L.push('');
+  L.push('> 也可以在本地把这个数据目录当成 git 仓库，用 `git add . && git commit && git push` 一次推完。');
+  L.push('');
+  L.push('## 手机端查看');
+  L.push('');
+  L.push('手机端打开站点后，会直接读取仓库里的静态文件（不需要 Token）。');
+  L.push('如果看不到最新内容，确认一下 `lifedesk.json` 和对应类目文件都已经传上去了，然后刷新页面。');
+  L.push('');
+  return await fsWriteText('README.md', L.join('\n'));
+}
+
 /* ---------- 通用确认弹窗（居中卡片，两个按钮）---------- */
 function confirmDialog(title, msgHTML, okLabel, onOk, cancelLabel){
   var ov = document.createElement('div');
@@ -650,16 +808,19 @@ async function migrateToShards(){
     });
   });
   var n = 0;
+  var seq = await nextImageSeq();
   for (var cat in buckets){
     if (!Object.prototype.hasOwnProperty.call(buckets, cat)) continue;
     var file = shardFileName(cat);
-    idx.shards[cat] = { file: file, module: buckets[cat].module };
-    await externalizeImages(cat, buckets[cat].rows);
+    idx.shards[cat] = { file: file, module: buckets[cat].module, coverDir: coverDirName(cat) };
+    try { await _fsaGetDir([IMG_DIR, coverDirName(cat)], true); } catch(e){}
+    seq = await externalizeImages(cat, buckets[cat].rows, seq);
     await fsWriteJSON(file, {
       schema: SCHEMA_V2, cat: cat, module: buckets[cat].module, rows: buckets[cat].rows
     });
     n++;
   }
+  idx.imgSeq = seq;
   /* 主文件保留没有类目的记录 */
   Object.keys(old).forEach(function(mk){
     idx.__main[mk] = (old[mk] || []).filter(function(r){ return !shardCatOf(mk, r); });
@@ -673,11 +834,13 @@ async function migrateToShards(){
 /* ---------- 为某个类目新建专属数据文件 ---------- */
 async function createShard(cat, mk){
   var idx = await fsReadIndex();
-  idx.shards[cat] = { file: shardFileName(cat), module: mk };
+  idx.shards[cat] = { file: shardFileName(cat), module: mk, coverDir: coverDirName(cat) };
   await fsWriteIndex(idx);
+  /* 同时把该类的封面文件夹建出来，后面新加的封面就落在里面 */
+  try { await _fsaGetDir([IMG_DIR, coverDirName(cat)], true); } catch(e){}
   _shardMode = true;
   var ok = await saveLocalAll(snapshotAll());
-  return { ok: ok, file: idx.shards[cat].file };
+  return { ok: ok, file: idx.shards[cat].file, coverDir: coverDirName(cat) };
 }
 
 /* 保存后检查：出现了还没有专属文件的新类目 → 询问是否新建 */
@@ -701,12 +864,12 @@ async function maybeOfferNewShard(){
     '为「' + cat + '」新建数据文件',
     '这个类目还没有独立数据文件，条目目前存在主文件里。<br>'+
     '建一个专属文件（<b>' + esc(shardFileName(cat)) + '</b>）后，'+
-    '它的封面图片会单独存在 <b>images/' + esc(safeFileName(cat)) + '/</b>，可以存更多张，也不再挤占主文件。',
+    '它的封面图片会单独存在 <b>images/' + esc(coverDirName(cat)) + '/</b>（按 0001、0002 编号），可以存更多张，也不再挤占主文件。',
     '新建数据文件',
     async function(){
       var r = await createShard(cat, mk);
       _shardAskBusy = false;
-      if (r.ok){ toast('已创建 ' + r.file); loadAll(); }
+      if (r.ok){ toast('已创建 ' + r.file + '（在目录 ' + (_fsaHandle ? _fsaHandle.name : '数据目录') + ' 里）'); loadAll(); }
       else toast('创建失败，请检查数据目录权限');
     },
     '先不用'
@@ -732,7 +895,7 @@ async function maybeOfferMigration(){
     '立即拆分',
     async function(){
       var r = await migrateToShards();
-      if (r && r.ok){ toast('已拆分出 ' + r.shards + ' 个类目文件，原文件备份为 ' + r.backup); loadAll(); }
+      if (r && r.ok){ toast('已拆分出 ' + r.shards + ' 个类目文件，都在目录 ' + (_fsaHandle ? _fsaHandle.name : '数据目录') + ' 里'); loadAll(); }
       else toast('拆分失败：' + ((r && r.reason) || '未知原因'));
     },
     '以后再说'
@@ -773,10 +936,16 @@ function queueLocalSave(){
   _fsaTimer = setTimeout(async function(){
     _fsaTimer = null;
     var snap = snapshotAll();
+    _imgFetchFailed = 0;
     var ok = await saveLocalAll(snap);
     _ghCache = snapshotAll();           /* 写完后内存视图与文件一致 */
     if (ok){ setGhStatus('localfile'); }
     else { setGhStatus('failed'); toast('写入本地数据目录失败'); }
+    /* 外链图片没存成本地文件的，明确提示：这类链接手机端多半加载不出来 */
+    if (_imgFetchFailed > 0){
+      toast('有 ' + _imgFetchFailed + ' 张外链图片没能存到本地（多为国内访问不到），建议改用「上传」选本地图片');
+      _imgFetchFailed = 0;
+    }
   }, 400);
 }
 
@@ -868,19 +1037,41 @@ function addDataTools(){
   var box = document.createElement('div');
   box.id = 'dataTools';
   /* 手机端屏幕窄，把按钮文字缩短（桌面 / 平板保持原文案不变） */
-  var T = IS_MOBILE
-    ? { sync:'同步', exp:'导出', imp:'导入' }
-    : { sync:'⚙ 同步设置', exp:'导出数据', imp:'导入数据' };
-  box.innerHTML = '<button type="button" data-act="fsa" id="fsaPick">📂 选择数据目录</button>' +
-                  '<button type="button" data-act="sync">'+T.sync+'</button>' +
-                  '<button type="button" data-act="export">'+T.exp+'</button>' +
-                  '<button type="button" data-act="import">'+T.imp+'</button>';
+  if (IS_MOBILE){
+    /* 手机端：把「导出 / 导入」收成一个「数据」按钮，点击向上展开，点任意处收起，节省横向空间 */
+    box.innerHTML = '<button type="button" data-act="fsa" id="fsaPick">📂 选择数据目录</button>' +
+                    '<button type="button" data-act="sync">同步</button>' +
+                    '<span class="dt-group" id="dtGroup">' +
+                      '<span class="dt-sub" id="dtSub">' +
+                        '<button type="button" data-act="import">导入</button>' +
+                        '<button type="button" data-act="export">导出</button>' +
+                      '</span>' +
+                      '<button type="button" data-act="dtoggle" id="dtToggle">数据</button>' +
+                    '</span>';
+  } else {
+    box.innerHTML = '<button type="button" data-act="fsa" id="fsaPick">📂 选择数据目录</button>' +
+                    '<button type="button" data-act="sync">⚙ 同步设置</button>' +
+                    '<button type="button" data-act="export">导出数据</button>' +
+                    '<button type="button" data-act="import">导入数据</button>';
+  }
   box.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:9999;display:flex;gap:8px';
   document.body.appendChild(box);
   box.querySelector('[data-act="fsa"]').onclick = pickFsaDirAndConnect;
   box.querySelector('[data-act="export"]').onclick = exportData;
   box.querySelector('[data-act="import"]').onclick = importData;
   box.querySelector('[data-act="sync"]').onclick = toggleGhPanel;
+  /* 手机端「数据」折叠：点按钮展开/收起，点页面任意其它位置一律收起 */
+  var dtToggle = $('dtToggle');
+  if (dtToggle && !dtToggle._bound){
+    dtToggle._bound = true;
+    dtToggle.onclick = function(e){
+      if (e && e.stopPropagation) e.stopPropagation();
+      var g = $('dtGroup'); if (g) g.classList.toggle('open');
+    };
+    document.addEventListener('click', function(){
+      var g = $('dtGroup'); if (g) g.classList.remove('open');
+    });
+  }
   refreshFsaButtons();
   /* GitHub 同步配置面板 */
   var p = document.createElement('div');
@@ -899,6 +1090,7 @@ function addDataTools(){
       '<button type="button" id="ghSave" style="padding:7px 12px;border:1px solid #4d3045;border-radius:7px;background:#4d3045;color:#fff;cursor:pointer;font-size:12px">保存并连接</button>' +
       '<button type="button" id="ghUpload" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">上传本地数据</button>' +
       '<button type="button" id="ghPull" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px;display:none">下载云端到本地</button>' +
+      '<button type="button" id="ghSplit" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">拆分数据文件</button>' +
       '<button type="button" id="ghClose" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">关闭</button>' +
     '</div>' +
     '<div id="ghHint" style="margin-top:8px;color:#666;font-size:11px;line-height:1.5"></div>';
@@ -936,6 +1128,25 @@ function addDataTools(){
         bootBanner(); loadAll();
       }
     });
+  };
+  $('ghSplit').onclick = async function(){
+    if (MODE !== 'localfile'){ $('ghHint').textContent = '请先在右下角点「📂 选择数据目录」连接本地文件夹'; return; }
+    if (_shardMode){
+      /* 已经是分类目存储：检查有没有还没建专属文件的新类目，有就提示 */
+      maybeOfferNewShard();
+      $('ghHint').textContent = '已经是「每个类目一个文件」的存储方式了。';
+      return;
+    }
+    if (!confirm('会把当前 lifedesk.json 按类目拆成多个文件，原文件备份为 lifedesk.backup.json。继续？')) return;
+    $('ghHint').textContent = '拆分中…';
+    var r = await migrateToShards();
+    if (r && r.ok){
+      $('ghHint').textContent = '已拆出 ' + r.shards + ' 个类目文件，原文件备份为 ' + r.backup;
+      toast('已拆出 ' + r.shards + ' 个类目文件');
+      loadAll();
+    } else {
+      $('ghHint').textContent = '拆分失败：' + ((r && r.reason) || '未知原因');
+    }
   };
   $('ghUpload').onclick = async function(){
     if (!GH || !GH.token){ $('ghHint').textContent = '请先在同步设置里保存并连接（粘贴有 repo 权限的 Token）'; return; }
@@ -1008,29 +1219,29 @@ function mdText(v){ return dstr(v).slice(5).replace('-','.'); }
 
 /* ============ 模块定义 ============ */
 /* v16.0 藏品分类体系：6 大类在博物馆透视展厅里展示，电影/留声机已转到新模块「影音厅」；书籍/杂志在书房里 */
-var CATS = ['手办','周边','杯子','毛绒','卡牌','服装'];  /* 博物馆展厅只用这 6 类：前 3 在展厅左侧，后 3 在右侧 */
+var CATS = ['手办','周边','杯盏','毛绒','卡牌','着物'];  /* 博物馆展厅只用这 6 类：前 3 在展厅左侧，后 3 在右侧 */
 var AV_CATS = ['电影','留声机'];                          /* 影音厅（新模块，歌剧院背景） */
 var BOOK_CATS = ['书籍','杂志'];                          /* 书房里的书与杂志 */
 /* v13 重命名：观影→电影，音乐→留声机（与新封面图 + 用户 8 张图对齐） */
-var LEGACY_CATS = {'观影':'电影','音乐':'留声机'};
+var LEGACY_CATS = {'观影':'电影','音乐':'留声机','杯子':'杯盏','服装':'着物'};
 /* 表单「类别」下拉的完整可选项（博物馆 6 类 + 影音厅 2 类 + 书房 2 类） */
 var CATS_FORM = CATS.concat(AV_CATS).concat(BOOK_CATS);
 /* 旧"书籍/杂志"分类——已挪到书房，仅识别数据库里的旧数据用 */
 var LEGACY_BOOK_CATS = BOOK_CATS;
 var SUBS = {
   '留声机':   ['黑胶','CD','磁带','复古机'],
-  '服装':     ['衣服','帽子','背包','鞋子'],
+  '着物':     ['衣服','帽子','背包','鞋子'],
   '电影':     ['电影','剧集','纪录片','动画'],  /* v16：与 CATS 对齐（原"观影"已改名） */
   '手办':     ['比例','景品','可动','雕像'],
   '毛绒':     ['大号','中号','小号','挂件'],
   '卡牌':     ['单卡','卡盒','卡组'],
-  '杯子':     ['玻璃杯','马克杯','茶杯','酒器'],
+  '杯盏':     ['玻璃杯','马克杯','茶杯','酒器'],
   '周边':     ['徽章','立牌','挂件','海报','文具','生活用品','其他']
 };
 var STATES_OWN  = ['想收','已预订','在库','已出'];
 var STATES_VIEW = ['想看','在看','看完'];
 var STATES_ALL  = STATES_OWN.concat(STATES_VIEW);
-var CAT_ICON = {'手办':'办','毛绒':'绒','卡牌':'牌','周边':'周','电影':'影','留声机':'声','杯子':'杯','服装':'衣'};
+var CAT_ICON = {'手办':'办','毛绒':'绒','卡牌':'牌','周边':'周','电影':'影','留声机':'声','杯盏':'杯','着物':'衣'};
 
 /* v17.0：影音厅两个子项目改回「老版本」的胶片 / 留声机封面（本地 PNG），歌剧院留给展厅背景与角落装饰 */
 var CAT_BG = {
@@ -1040,8 +1251,8 @@ var CAT_BG = {
   '周边':   'images/cat_peripheral.png',  /* 博物馆左侧 */
   '电影':   'images/film-cover.png',                                                               /* 影音厅左侧：老版胶片图 */
   '留声机': 'images/gramophone-cover.png',                                                          /* 影音厅右侧：老版留声机图 */
-  '杯子':   'images/cat_cup.png',  /* 博物馆左侧 */
-  '服装':   'images/cat_clothing.png'   /* 博物馆右侧（衣服/帽子/背包/鞋子） */
+  '杯盏':   'images/cat_cup.png',  /* 博物馆左侧 */
+  '着物':   'images/cat_clothing.png'   /* 博物馆右侧（衣服/帽子/背包/鞋子） */
 };
 /* CAT_DECOR 保留为透明 PNG 装饰图备用（备用背景，与 CAT_BG 等值） */
 var CAT_DECOR = {
@@ -1051,8 +1262,8 @@ var CAT_DECOR = {
   '周边':   'images/cat_peripheral.png',
   '电影':   'images/film-cover.png',                                                               /* v17.0：换回老版胶片图 */
   '留声机': 'images/gramophone-cover.png',                                                          /* v17.0：换回老版留声机图 */
-  '杯子':   'images/cat_cup.png',
-  '服装':   'images/cat_clothing.png'
+  '杯盏':   'images/cat_cup.png',
+  '着物':   'images/cat_clothing.png'
 };
 
 var MODS = {
@@ -3330,47 +3541,15 @@ try{
 }catch(e){}
 
 /* ============ 启动：先渲染界面，再拉数据 ============ */
-/* 顶部状态条：默认只显示标题（如「已连接 GitHub 仓库」）+ 向右箭头；
-   点箭头展开完整说明，箭头变向左；再点收起。避免一坨长文字常驻占屏。 */
+/* 顶部状态条：说明文字已改为写进数据目录的 README.md，页面上不再占用空间 */
 function bootBanner(){
-  var box=$('offlineBox');
-  if (MODE === 'db'){ box.className='offline'; return; }
-  var title, detail, cls;
-  if (MODE === 'localfile'){
-    cls = 'offline show gh';
-    title = '本地文件模式';
-    detail = '数据保存在本机 <b>data/lifedesk.json</b>（由本地服务器读写）。'+
-      '点右下角「⚙ 同步设置」连上 GitHub 后，可用「上传本地数据」把这份文件<b>覆盖推到云端</b>。';
-  } else if (MODE === 'gh'){
-    cls = 'offline show gh';
-    title = '已连接 GitHub 仓库';
-    detail = esc(GH.owner)+'/'+esc(GH.repo)+'（'+esc(GH.branch)+'）。'+
-      '录入的书籍 / 手办 / 电影等数据会<b>实时同步到仓库云端</b>，任何设备打开都能看到同一份。'+
-      '右下角「⚙ 同步设置」可查看或修改连接。';
-  } else {
-    cls = 'offline show';
-    title = '离线模式';
-    detail = '数据保存在<b>当前浏览器</b>的本地存储（localStorage），不会上传任何服务器。'+
-      '换设备 / 清缓存前，请用右下角「导出数据」备份；想换电脑使用，导出后在另一台导入即可。'+
-      '要让数据云端同步，点右下角「⚙ 同步设置」连一个 GitHub 仓库。';
+  var box = $('offlineBox');
+  if (box){
+    box.className = 'offline';
+    box.innerHTML = '';
+    box.style.display = 'none';
   }
-  box.className = cls;
-  box.innerHTML =
-    '<button type="button" class="offline-toggle" id="offlineToggle" aria-expanded="false">'+
-      '<span class="offline-title">'+title+'</span>'+
-      '<span class="offline-arrow" aria-hidden="true">›</span>'+
-    '</button>'+
-    '<div class="offline-detail" id="offlineDetail" hidden>'+detail+'</div>';
-  var tgl = $('offlineToggle');
-  if (tgl && !tgl._bound){
-    tgl._bound = true;
-    tgl.onclick = function(){
-      var d = $('offlineDetail'), a = tgl.querySelector('.offline-arrow');
-      var opening = d.hasAttribute('hidden');
-      if (opening){ d.removeAttribute('hidden'); if (a) a.textContent = '‹'; tgl.classList.add('open'); tgl.setAttribute('aria-expanded','true'); }
-      else { d.setAttribute('hidden',''); if (a) a.textContent = '›'; tgl.classList.remove('open'); tgl.setAttribute('aria-expanded','false'); }
-    };
-  }
+  if (MODE === 'localfile') writeReadme();
 }
 document.addEventListener('keydown', function(e){ if(e.key==='Escape' && !$('sheetHost').hidden) closeSheet(); });
 
@@ -4523,7 +4702,7 @@ function rDetailHead(coverUrl, fallbackText, title, sub){
 /* ============================================================
    藏品 · 大英博物馆阳光长廊（v16：背景透视走向 + 6 个玻璃展柜）
    ============================================================ */
-/* 6 大类在展厅里按透视走向摆放：左侧手办/周边/杯子、右侧毛绒/卡牌/服装
+/* 6 大类在展厅里按透视走向摆放：左侧手办/周边/杯盏、右侧毛绒/卡牌/着物
    每个展柜 = 玻璃罩（贴类目封面）+ 黑色类目标签；两者都跟随背景透视倾斜 */
 function _museumCase(cat, side, depth, cnt){
   var cover = CAT_BG[cat] || '';
@@ -4557,8 +4736,14 @@ function _renderPerspectiveCases(items, cats, sidePrefix, fn){
    - 优先 localStorage 持久化，失败则退化为内存变量（同一次会话内仍有效）
    ============================================================ */
 var MUSEUM_LAYOUT = (function(){
-  try { return JSON.parse(localStorage.getItem('life_desk_museum_layout_v1')) || {}; }
-  catch(e){ return {}; }
+  try {
+    var o = JSON.parse(localStorage.getItem('life_desk_museum_layout_v1')) || {};
+    /* 分类改名后，把旧类目名的布局搬到新名字上，避免之前调好的摆位失效 */
+    var renamed = {'观影':'电影','音乐':'留声机','杯子':'杯盏','服装':'着物'};
+    var out = {};
+    Object.keys(o).forEach(function(k){ out[renamed[k] || k] = o[k]; });
+    return out;
+  } catch(e){ return {}; }
 })();
 function saveMuseumLayout(){
   try { localStorage.setItem('life_desk_museum_layout_v1', JSON.stringify(MUSEUM_LAYOUT)); } catch(e){}
@@ -4673,8 +4858,8 @@ function renderCollectionMuseum(){
 
   /* 第 1 层：6 大类透视展厅（左侧 3 / 右侧 3，跟随背景透视走向） */
   if (!f.cat){
-    var leftCats  = CATS.slice(0,3);   /* 手办 / 周边 / 杯子 */
-    var rightCats = CATS.slice(3,6);   /* 毛绒 / 卡牌 / 服装 */
+    var leftCats  = CATS.slice(0,3);   /* 手办 / 周边 / 杯盏 */
+    var rightCats = CATS.slice(3,6);   /* 毛绒 / 卡牌 / 着物 */
     var h='<div class="museum">'+
       '<div class="wm-mask"></div>'+
       '<div class="mh">'+

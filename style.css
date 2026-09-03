@@ -1422,9 +1422,14 @@ body {
    小屏（手机）适配
    ============================================================ */
 @media (max-width: 600px) {
-  /* --- 美食记录：地图 + 菜谱册 --- */
+  /* --- 美食记录：地图 + 菜谱册 ---
+     .foodtwo 原本是 min-height:100%，父容器没有确定高度时这条不生效，
+     容器会塌成内容高度、背景铺不开（表现就是「背景一直加载不出来」）。
+     小屏下直接给视口高度，并把背景改为居中裁切。 */
+  .foodtwo { min-height: 100vh; min-height: 100dvh; }
+  .foodtwo::before { background-position: center center; }
   .foodtwo .ft-grid { gap: 14px; padding: 14px 12px 56px; }
-  .foodtwo .left, .foodtwo .right { padding: 16px 14px; min-height: 0; }
+  .foodtwo .left, .foodtwo .right { padding: 16px 14px; min-height: 200px; }
   .foodtwo .left h2, .foodtwo .right h2 { font-size: 18px; letter-spacing: 1px; }
   .foodtwo .left h2::before, .foodtwo .right h2::before { height: 16px; margin-right: 6px; }
   .foodtwo .ft-pin-list { max-height: 96px !important; }
@@ -1438,4 +1443,18 @@ body {
 
   /* --- 影音厅：小屏下展柜整体再收一点，配合已有的 -120px 上移 --- */
   .avhall .museum-side { transform: translateY(-120px) scale(.86); }
+
+  /* --- 右下角「数据」折叠按钮：点「数据」向上展开 导入/导出 --- */
+  .dt-group { position: relative; display: inline-flex; }
+  .dt-sub {
+    position: absolute; right: 0; bottom: calc(100% + 8px);
+    display: none; flex-direction: column; gap: 8px;
+    align-items: flex-end;
+  }
+  .dt-group.open .dt-sub { display: flex; }
+  /* 展开的子按钮沿用与主按钮相同的视觉（继承 dataTools 的按钮样式） */
+  .dt-sub button {
+    white-space: nowrap;
+    box-shadow: 0 6px 18px rgba(60, 40, 20, .22);
+  }
 }
