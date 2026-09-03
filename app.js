@@ -171,7 +171,7 @@ function localCacheSetFrom(obj){ try { localStorage.setItem(_LOCAL_CACHE_KEY, JS
 function localCacheSet(){ localCacheSetFrom(snapshotAll()); }
 function localCacheGet(){ try { return JSON.parse(localStorage.getItem(_LOCAL_CACHE_KEY) || 'null'); } catch(e){ return null; } }
 function persistAll(cb){
-  if (MODE === 'localfile'){ localfsWrite(snapshotAll(), function(ok){ if (cb) cb(ok); }); return; }
+  if (MODE === 'localfile'){ saveLocalAll(snapshotAll(), function(ok){ if (cb) cb(ok); }); return; }
   if (MODE === 'gh'){ ghSaveAll(snapshotAll(), function(ok){ if (cb) cb(ok); }); return; }
   if (MODE === 'local'){ var o = snapshotAll(); Object.keys(o).forEach(function(k){ lsSet(k, o[k]); }); if (cb) cb(true); return; }
   if (cb) cb(false);
@@ -251,17 +251,532 @@ async function localfsWrite(obj, cb){
   } catch(e){ if (cb) cb(false); }
 }
 
+/* ============================================================
+   分片存储 v2（schema 2）—— 每个小类一个独立数据文件
+   ------------------------------------------------------------
+   主索引  lifedesk.json
+     { schema:2, shards:{ "唱片":{file:"唱片-data.json", module:"collection"}, ... },
+       __main:{ travel:[...], collection:[...] } }   // __main 存尚未分片的记录
+   分片    {类目}-data.json
+     { schema:2, cat:"唱片", module:"collection", rows:[...] }
+   封面    images/{类目}/{记录id}_{序号}.jpg  —— JSON 里只记相对路径
+   ------------------------------------------------------------
+   兼容：schema 缺失或为 1 时，完全走旧的「单文件扁平」逻辑，不做任何迁移。
+   ============================================================ */
+var SCHEMA_V2 = 2;
+var IMG_DIR = 'images';
+
+/* 每个模块用哪个字段当分片键 */
+var SHARD_FIELD = { travel:'状态', collection:'小类', study:'领域', food:'类型', idea:'分类' };
+/* 旅行：状态值 → 类目名（用户口径是「去过的地方」「想去的地方」） */
+var TRAVEL_CAT = { '去过':'去过的地方', '想去':'想去的地方' };
+
+function shardCatOf(mk, row){
+  var f = SHARD_FIELD[mk]; if (!f || !row) return '';
+  var v = String(row[f] || '').trim(); if (!v) return '';
+  if (mk === 'travel') return TRAVEL_CAT[v] || v;
+  return v;
+}
+/* 文件名安全化：去掉 Windows/URL 非法字符，限长 */
+function safeFileName(s){
+  return String(s || '').replace(/[\\/:*?"<>|\r\n\t]/g, '_').trim().slice(0, 60) || '未命名';
+}
+function shardFileName(cat){ return safeFileName(cat) + '-data.json'; }
+
+/* ---------- 底层文件读写（FSA）---------- */
+async function fsReadJSON(name){
+  if (!_fsaHandle) return null;
+  try {
+    var fh = await _fsaHandle.getFileHandle(name);
+    var f = await fh.getFile();
+    var txt = await f.text();
+    if (!txt || !txt.trim()) return null;
+    return JSON.parse(txt);
+  } catch(e){ return null; }
+}
+async function fsWriteJSON(name, obj){
+  if (!_fsaHandle) return false;
+  try {
+    var fh = await _fsaHandle.getFileHandle(name, { create:true });
+    var w = await fh.createWritable();
+    await w.write(JSON.stringify(obj, null, 2));
+    await w.close();
+    return true;
+  } catch(e){ console.warn('写文件失败', name, e); return false; }
+}
+async function fsFileExists(name){
+  if (!_fsaHandle) return false;
+  try { await _fsaHandle.getFileHandle(name); return true; } catch(e){ return false; }
+}
+/* 主索引：保证结构完整 */
+function normalizeIndex(idx){
+  if (!idx || typeof idx !== 'object') idx = {};
+  if (idx.schema !== SCHEMA_V2) idx.schema = SCHEMA_V2;
+  if (!idx.shards || typeof idx.shards !== 'object') idx.shards = {};
+  if (!idx.__main || typeof idx.__main !== 'object') idx.__main = {};
+  return idx;
+}
+async function fsReadIndex(){ return normalizeIndex(await fsReadJSON(_LOCALFS_FILE)); }
+async function fsWriteIndex(idx){ return await fsWriteJSON(_LOCALFS_FILE, normalizeIndex(idx)); }
+
+/* ---------- 组装 / 拆分 ---------- */
+/* 把「扁平快照」{模块:[记录]} 拆成 主索引 + 各分片，并写盘。
+   只写有变动的分片（对比旧内容），避免每次全量重写几十个文件。 */
+async function storageSaveV2(snapshot){
+  var idx = await fsReadIndex();
+  var buckets = {};        /* cat -> {module, rows} */
+  var main = {};           /* 未分片记录 */
+  Object.keys(snapshot || {}).forEach(function(mk){
+    var rows = snapshot[mk] || [];
+    main[mk] = [];
+    rows.forEach(function(r){
+      if (!r) return;
+      var cat = shardCatOf(mk, r);
+      if (cat && idx.shards[cat]){
+        if (!buckets[cat]) buckets[cat] = { module: mk, rows: [] };
+        buckets[cat].rows.push(r);
+      } else {
+        main[mk].push(r);     /* 尚未建专属文件的类目，先留在主文件 */
+      }
+    });
+  });
+  idx.__main = main;
+
+  /* 写分片：内容无变化则跳过 */
+  var okAll = true;
+  for (var cat in buckets){
+    if (!Object.prototype.hasOwnProperty.call(buckets, cat)) continue;
+    var sh = idx.shards[cat] || {};
+    var file = sh.file || shardFileName(cat);
+    sh.file = file; sh.module = buckets[cat].module;
+    idx.shards[cat] = sh;
+    /* 先把 base64 封面落盘成独立文件，row 内换成相对路径，再比较/写入 */
+    await externalizeImages(cat, buckets[cat].rows);
+    var oldObj = await fsReadJSON(file);
+    var oldStr = oldObj ? JSON.stringify(oldObj.rows || []) : '';
+    var newStr = JSON.stringify(buckets[cat].rows);
+    if (oldStr !== newStr){
+      var okw = await fsWriteJSON(file, {
+        schema: SCHEMA_V2, cat: cat, module: buckets[cat].module, rows: buckets[cat].rows
+      });
+      if (!okw) okAll = false;
+    }
+  }
+  var oki = await fsWriteIndex(idx);
+  return okAll && oki;
+}
+/* 读主索引 + 全部分片，合并成扁平快照 {模块:[记录]} */
+async function storageLoadV2(){
+  var idx = await fsReadIndex();
+  var out = {};
+  /* 先放主文件里的未分片记录 */
+  Object.keys(idx.__main || {}).forEach(function(mk){ out[mk] = (idx.__main[mk] || []).slice(); });
+  /* 再叠加各分片 */
+  for (var cat in idx.shards){
+    if (!Object.prototype.hasOwnProperty.call(idx.shards, cat)) continue;
+    var sh = idx.shards[cat] || {};
+    var obj = await fsReadJSON(sh.file || shardFileName(cat));
+    if (!obj) continue;
+    var mk = sh.module || obj.module;
+    if (!mk) continue;
+    if (!out[mk]) out[mk] = [];
+    out[mk] = out[mk].concat(obj.rows || []);
+  }
+  /* 相对路径的图片 → blob URL，供封面显示 */
+  for (var m in out){ if (Object.prototype.hasOwnProperty.call(out, m)) await resolveImagesFor(out[m]); }
+  return out;
+}
+
+/* ---------- 封面图片外置 ----------
+   JSON 里只存相对路径（images/{类目}/{id}_{f}_{i}.jpg），真正图片落盘为独立文件。
+   显示时通过 _imgUrlCache 把相对路径换成 blob: URL（FSA）或直接用静态 URL（GitHub Pages）。
+   这样 JSON 体积不再随图片数量线性膨胀。 */
+var IMG_FIELDS = ['封面', '照片', 'IP图像', '系列封面', '图片'];
+var _imgUrlCache = {};                 /* 相对路径 -> 可直接用于 <img>/CSS 的 URL */
+
+function resolveImgUrl(u){
+  u = String(u || '');
+  if (!u) return '';
+  if (/^(data|blob):/.test(u) || /^https?:/i.test(u) || u.indexOf('//') === 0) return u;
+  return _imgUrlCache[u] || u;         /* 未解析完时先返回原值，不至于整块空白 */
+}
+async function _fsaGetDir(parts, create){
+  if (!_fsaHandle) return null;
+  var d = _fsaHandle;
+  for (var i = 0; i < parts.length; i++){
+    try { d = await d.getDirectoryHandle(parts[i], { create: !!create }); }
+    catch(e){ return null; }
+  }
+  return d;
+}
+async function _fsaWriteBinary(dirParts, name, uint8){
+  var d = await _fsaGetDir(dirParts, true); if (!d) return false;
+  try {
+    var fh = await d.getFileHandle(name, { create: true });
+    var w = await fh.createWritable();
+    await w.write(uint8); await w.close(); return true;
+  } catch(e){ return false; }
+}
+function dataUrlToBytes(dataUrl){
+  try {
+    var b64 = String(dataUrl).split(',')[1] || '';
+    var bin = atob(b64);
+    var arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr;
+  } catch(e){ return null; }
+}
+/* 保存前：把 rows 里的 base64 图片写成独立文件，row 内改为相对路径 */
+async function externalizeImages(cat, rows){
+  if (!_fsaHandle || !rows || !rows.length) return;
+  var catDir = safeFileName(cat);
+  for (var i = 0; i < rows.length; i++){
+    var r = rows[i]; if (!r) continue;
+    for (var j = 0; j < IMG_FIELDS.length; j++){
+      var arr = r[IMG_FIELDS[j]];
+      if (!arr || !arr.length) continue;
+      for (var k = 0; k < arr.length; k++){
+        var it = arr[k]; if (!it || !it.imageUrl) continue;
+        var u = String(it.imageUrl);
+        if (u.indexOf('data:image/') !== 0) continue;   /* 已经是路径则跳过 */
+        var ext = u.indexOf('image/png') >= 0 ? 'png' : 'jpg';
+        var name = String(r._id || ('r' + i)) + '_' + j + '_' + k + '.' + ext;
+        var bytes = dataUrlToBytes(u); if (!bytes) continue;
+        var ok = await _fsaWriteBinary([IMG_DIR, catDir], name, bytes);
+        if (ok){
+          var rel = IMG_DIR + '/' + catDir + '/' + name;
+          _imgUrlCache[rel] = u;      /* 立刻可用：先用原 dataURL 顶上，避免闪空白 */
+          it.imageUrl = rel;          /* JSON 里只留相对路径 */
+        }
+      }
+    }
+  }
+}
+/* 加载后：把相对路径解析成 blob URL 以便显示 */
+async function readRelPathAsBlobUrl(rel){
+  if (!_fsaHandle) return null;
+  var parts = String(rel).split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  var name = parts.pop();
+  var dir = await _fsaGetDir(parts, false); if (!dir) return null;
+  try {
+    var fh = await dir.getFileHandle(name);
+    var f = await fh.getFile();
+    return URL.createObjectURL(f);
+  } catch(e){ return null; }
+}
+async function resolveImagesFor(rows){
+  if (!_fsaHandle || !rows || !rows.length) return;
+  for (var i = 0; i < rows.length; i++){
+    var r = rows[i]; if (!r) continue;
+    for (var j = 0; j < IMG_FIELDS.length; j++){
+      var arr = r[IMG_FIELDS[j]];
+      if (!arr || !arr.length) continue;
+      for (var k = 0; k < arr.length; k++){
+        var it = arr[k]; if (!it || !it.imageUrl) continue;
+        var u = String(it.imageUrl);
+        if (/^(data|blob):/.test(u) || /^https?:/i.test(u)) continue;
+        if (_imgUrlCache[u]) continue;
+        var bu = await readRelPathAsBlobUrl(u);
+        if (bu) _imgUrlCache[u] = bu;
+      }
+    }
+  }
+}
+
+/* ---------- GitHub Pages 静态直读（手机端）----------
+   站点本身就是静态托管，data/ 下的 json 可以直接 fetch，不需要 Token、
+   也不经过 api.github.com（国内常超时）。分片模式下会按主索引逐个拉类目文件。 */
+async function fetchJSONRel(url){
+  try {
+    var r = await fetch(url, { cache: 'no-store' });
+    if (!r || !r.ok) return null;
+    var t = await r.text();
+    if (!t || !t.trim()) return null;
+    return JSON.parse(t);
+  } catch(e){ return null; }
+}
+async function ghStaticLoadV2(){
+  try {
+    var dir = String(GH.path || '').replace(/[\\/][^\\/]*$/, '');   /* data/lifedesk.json -> data */
+    if (!dir) dir = 'data';
+    if (dir.charAt(0) !== '/' && dir.indexOf('://') < 0) dir = './' + dir;
+    if (dir.charAt(dir.length - 1) !== '/') dir += '/';
+    var idx = await fetchJSONRel(dir + 'lifedesk.json');
+    if (!idx || idx.schema !== SCHEMA_V2) return null;             /* 不是分片格式 → 走原 API 逻辑 */
+    var out = {};
+    Object.keys(idx.__main || {}).forEach(function(mk){ out[mk] = (idx.__main[mk] || []).slice(); });
+    var cats = Object.keys(idx.shards || {});
+    for (var i = 0; i < cats.length; i++){
+      var sh = idx.shards[cats[i]] || {};
+      var obj = await fetchJSONRel(dir + (sh.file || shardFileName(cats[i])));
+      if (!obj) continue;
+      var mk = sh.module || obj.module; if (!mk) continue;
+      if (!out[mk]) out[mk] = [];
+      out[mk] = out[mk].concat(obj.rows || []);
+    }
+    /* 图片相对路径在静态站点上可直接用，记录一下来源目录便于解析 */
+    _staticImgBase = dir;
+    return out;
+  } catch(e){ return null; }
+}
+var _staticImgBase = '';
+
+/* ---------- GitHub 批量上传（分片 + 图片）----------
+   分片模式下要推的文件变多：主索引 + 每个类目 json + images/ 下的图片。
+   逐个走 Contents API（PUT），带进度回调。文件特别多时建议直接用 git push 更快。 */
+function ghContentsUrl(path){
+  return 'https://api.github.com/repos/' + GH.owner + '/' + GH.repo + '/contents/' + path + '?ref=' + (GH.branch || 'main');
+}
+function utf8ToBase64(str){
+  return btoa(unescape(encodeURIComponent(String(str))));
+}
+async function blobToBase64(blob){
+  var buf = await blob.arrayBuffer();
+  var bytes = new Uint8Array(buf), bin = '';
+  var CH = 0x8000;
+  for (var i = 0; i < bytes.length; i += CH){
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return btoa(bin);
+}
+/* 上传单个文件（自动带 sha 覆盖） */
+async function ghPutFile(path, textOrBlob){
+  var url = ghContentsUrl(path);
+  var sha = null;
+  try {
+    var rg = await fetch(url, { headers: ghHeaders() });
+    if (rg && rg.ok){ var jg = await rg.json(); sha = (jg && jg.sha) || null; }
+  } catch(e){}
+  var b64 = (typeof textOrBlob === 'string') ? utf8ToBase64(textOrBlob) : await blobToBase64(textOrBlob);
+  var body = { message: 'update ' + path, content: b64, branch: (GH.branch || 'main') };
+  if (sha) body.sha = sha;
+  var r = await fetch(url, { method: 'PUT', headers: ghHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
+  return !!(r && r.ok);
+}
+/* 遍历 images/ 目录，收集图片文件 */
+async function walkDirFiles(dirHandle, prefix, out){
+  var entries = [];
+  try {
+    var it = dirHandle.entries();
+    var e = await it.next();
+    while (!e.done){ entries.push(e.value); e = await it.next(); }
+  } catch(err){ return out; }
+  for (var i = 0; i < entries.length; i++){
+    var name = entries[i][0], h = entries[i][1];
+    if (h.kind === 'directory'){ await walkDirFiles(h, prefix + name + '/', out); }
+    else out.push({ rel: prefix + name, handle: h });
+  }
+  return out;
+}
+/* 收集本次需要上传的全部文件 */
+async function collectPushFiles(){
+  var idx = await fsReadIndex();
+  var dir = String(GH.path || '').replace(/[\\/][^\\/]*$/, '') || 'data';
+  var files = [];
+  files.push({ path: GH.path, text: JSON.stringify(idx, null, 2) });
+  var cats = Object.keys(idx.shards || {});
+  for (var i = 0; i < cats.length; i++){
+    var sh = idx.shards[cats[i]] || {};
+    var obj = await fsReadJSON(sh.file || shardFileName(cats[i]));
+    if (!obj) continue;
+    files.push({ path: dir + '/' + (sh.file || shardFileName(cats[i])), text: JSON.stringify(obj, null, 2) });
+  }
+  /* 图片 */
+  try {
+    var imgDir = await _fsaGetDir([IMG_DIR], false);
+    if (imgDir){
+      var list = await walkDirFiles(imgDir, '', []);
+      for (var j = 0; j < list.length; j++){
+        var f = await list[j].handle.getFile();
+        files.push({ path: dir + '/' + IMG_DIR + '/' + list[j].rel, blob: f });
+      }
+    }
+  } catch(e){}
+  return files;
+}
+/* 批量上传，带进度回调 onProgress(done, total) */
+async function ghPushAll(onProgress){
+  var files = await collectPushFiles();
+  if (!files.length) return { ok:true, n:0 };
+  var okCount = 0;
+  for (var i = 0; i < files.length; i++){
+    var f = files[i];
+    var ok = await ghPutFile(f.path, (f.blob != null) ? f.blob : f.text);
+    if (ok) okCount++;
+    if (onProgress) onProgress(i + 1, files.length, ok, f.path);
+  }
+  return { ok: okCount === files.length, n: files.length, okCount: okCount };
+}
+
+/* ---------- 通用确认弹窗（居中卡片，两个按钮）---------- */
+function confirmDialog(title, msgHTML, okLabel, onOk, cancelLabel){
+  var ov = document.createElement('div');
+  ov.className = 'backdrop'; ov.style.zIndex = 200;
+  ov.innerHTML =
+    '<div class="sheet" style="max-width:360px">'+
+      '<div class="sheet-head"><div><p>数据文件</p><h2>'+esc(title)+'</h2></div></div>'+
+      '<div style="padding:0 18px 16px;font-size:13px;line-height:1.75;color:var(--ink-soft)">'+msgHTML+'</div>'+
+      '<div style="display:flex;gap:8px;padding:0 18px 18px">'+
+        '<button type="button" class="btn primary" id="cfOk" style="flex:1">'+esc(okLabel)+'</button>'+
+        '<button type="button" class="btn ghost" id="cfNo" style="flex:1">'+esc(cancelLabel||'暂不')+'</button>'+
+      '</div>'+
+    '</div>';
+  document.body.appendChild(ov);
+  function close(){ try { ov.remove(); } catch(e){} }
+  ov.onclick = function(e){ if (e.target === ov) close(); };
+  var ok = $('cfOk'), no = $('cfNo');
+  if (ok) ok.onclick = function(){ close(); if (onOk) onOk(); };
+  if (no) no.onclick = close;
+}
+
+/* ---------- v1 单文件 → v2 分片 迁移 ---------- */
+async function migrateToShards(){
+  var old = await new Promise(function(res){ localfsRead(function(o){ res(o || {}); }); });
+  if (!old || !Object.keys(old).length) return { ok:false, reason:'empty' };
+  /* 先备份原文件 */
+  var backupName = 'lifedesk.backup.json';
+  var okBak = await fsWriteJSON(backupName, old);
+  if (!okBak) return { ok:false, reason:'backup-failed' };
+
+  var idx = normalizeIndex(null);
+  var buckets = {};
+  Object.keys(old).forEach(function(mk){
+    (old[mk] || []).forEach(function(r){
+      var cat = shardCatOf(mk, r);
+      if (!cat) return;                       /* 无类目的留在主文件 */
+      if (!buckets[cat]) buckets[cat] = { module: mk, rows: [] };
+      buckets[cat].rows.push(r);
+    });
+  });
+  var n = 0;
+  for (var cat in buckets){
+    if (!Object.prototype.hasOwnProperty.call(buckets, cat)) continue;
+    var file = shardFileName(cat);
+    idx.shards[cat] = { file: file, module: buckets[cat].module };
+    await externalizeImages(cat, buckets[cat].rows);
+    await fsWriteJSON(file, {
+      schema: SCHEMA_V2, cat: cat, module: buckets[cat].module, rows: buckets[cat].rows
+    });
+    n++;
+  }
+  /* 主文件保留没有类目的记录 */
+  Object.keys(old).forEach(function(mk){
+    idx.__main[mk] = (old[mk] || []).filter(function(r){ return !shardCatOf(mk, r); });
+  });
+  var okIdx = await fsWriteIndex(idx);
+  if (!okIdx) return { ok:false, reason:'index-failed' };
+  _shardMode = true;
+  return { ok:true, shards:n, backup:backupName };
+}
+
+/* ---------- 为某个类目新建专属数据文件 ---------- */
+async function createShard(cat, mk){
+  var idx = await fsReadIndex();
+  idx.shards[cat] = { file: shardFileName(cat), module: mk };
+  await fsWriteIndex(idx);
+  _shardMode = true;
+  var ok = await saveLocalAll(snapshotAll());
+  return { ok: ok, file: idx.shards[cat].file };
+}
+
+/* 保存后检查：出现了还没有专属文件的新类目 → 询问是否新建 */
+var _shardAskBusy = false;
+async function maybeOfferNewShard(){
+  if (_shardAskBusy || !_shardMode || MODE !== 'localfile') return;
+  var idx = await fsReadIndex();
+  var snap = snapshotAll();
+  var missing = {};
+  Object.keys(snap).forEach(function(mk){
+    (snap[mk] || []).forEach(function(r){
+      var cat = shardCatOf(mk, r);
+      if (cat && !idx.shards[cat]) missing[cat] = mk;
+    });
+  });
+  var cats = Object.keys(missing);
+  if (!cats.length) return;
+  _shardAskBusy = true;
+  var cat = cats[0], mk = missing[cat];
+  confirmDialog(
+    '为「' + cat + '」新建数据文件',
+    '这个类目还没有独立数据文件，条目目前存在主文件里。<br>'+
+    '建一个专属文件（<b>' + esc(shardFileName(cat)) + '</b>）后，'+
+    '它的封面图片会单独存在 <b>images/' + esc(safeFileName(cat)) + '/</b>，可以存更多张，也不再挤占主文件。',
+    '新建数据文件',
+    async function(){
+      var r = await createShard(cat, mk);
+      _shardAskBusy = false;
+      if (r.ok){ toast('已创建 ' + r.file); loadAll(); }
+      else toast('创建失败，请检查数据目录权限');
+    },
+    '先不用'
+  );
+  /* 用户直接关闭弹窗（点遮罩）时也要解锁 */
+  setTimeout(function(){ _shardAskBusy = false; }, 30000);
+}
+
+/* 首次连上目录、且是旧的单文件格式时，询问是否拆分（只问一次） */
+async function maybeOfferMigration(){
+  if (_shardMode || MODE !== 'localfile') return;
+  try { if (localStorage.getItem('lifedesk_shard_mig_dismissed')) return; } catch(e){}
+  var old = await new Promise(function(res){ localfsRead(function(o){ res(o || {}); }); });
+  if (!old || !Object.keys(old).length) return;
+  var total = 0;
+  Object.keys(old).forEach(function(k){ total += (old[k] || []).length; });
+  if (total < 1) return;
+  confirmDialog(
+    '拆分数据文件',
+    '当前所有数据都在一个 <b>lifedesk.json</b> 里（共 ' + total + ' 条）。<br>'+
+    '拆成「每个类目一个文件」后，各类目可以单独存更多封面图片，手机端加载也更快。<br>'+
+    '原文件会自动备份为 <b>lifedesk.backup.json</b>。',
+    '立即拆分',
+    async function(){
+      var r = await migrateToShards();
+      if (r && r.ok){ toast('已拆分出 ' + r.shards + ' 个类目文件，原文件备份为 ' + r.backup); loadAll(); }
+      else toast('拆分失败：' + ((r && r.reason) || '未知原因'));
+    },
+    '以后再说'
+  );
+  try { localStorage.setItem('lifedesk_shard_mig_dismissed', '1'); } catch(e){}
+}
+
+/* ---------- 分片模式开关与统一读写入口 ---------- */
+var _shardMode = false;   /* 主索引确认为 schema 2 时为 true */
+
+/* 统一读取：自动识别单文件（v1）还是分片（v2），返回扁平快照 */
+async function loadLocalAll(cb){
+  var idx = await fsReadJSON(_LOCALFS_FILE);
+  _shardMode = !!(idx && idx.schema === SCHEMA_V2);
+  if (_shardMode){
+    var merged = await storageLoadV2();
+    cb(merged || {});
+    maybeOfferNewShard();     /* 分片模式下：出现了新类目就问一句要不要建专属文件 */
+    return;
+  }
+  localfsRead(function(obj){
+    cb(obj || {});
+    maybeOfferMigration();    /* 旧的单文件格式：询问是否拆分（只问一次） */
+  });
+}
+/* 统一写入：按当前模式分派 */
+async function saveLocalAll(snap, cb){
+  var ok = _shardMode ? await storageSaveV2(snap)
+                      : await new Promise(function(res){ localfsWrite(snap, res); });
+  if (cb) cb(ok);
+  return ok;
+}
+
 /* 本地保存（防抖），与 gh 的 queueGhSave 同语义 */
 function queueLocalSave(){
   setGhStatus('saving');
   if (_fsaTimer) clearTimeout(_fsaTimer);
-  _fsaTimer = setTimeout(function(){
+  _fsaTimer = setTimeout(async function(){
     _fsaTimer = null;
-    localfsWrite(snapshotAll(), function(ok){
-      _ghCache = snapshotAll();           /* 写完后内存视图与文件一致 */
-      if (ok){ setGhStatus('localfile'); }
-      else { setGhStatus('failed'); toast('写入本地数据目录失败'); }
-    });
+    var snap = snapshotAll();
+    var ok = await saveLocalAll(snap);
+    _ghCache = snapshotAll();           /* 写完后内存视图与文件一致 */
+    if (ok){ setGhStatus('localfile'); }
+    else { setGhStatus('failed'); toast('写入本地数据目录失败'); }
   }, 400);
 }
 
@@ -422,8 +937,18 @@ function addDataTools(){
       }
     });
   };
-  $('ghUpload').onclick = function(){
+  $('ghUpload').onclick = async function(){
     if (!GH || !GH.token){ $('ghHint').textContent = '请先在同步设置里保存并连接（粘贴有 repo 权限的 Token）'; return; }
+    if (_shardMode && MODE === 'localfile'){
+      /* 分片模式：主索引 + 各类目 json + 图片，逐个推送 */
+      $('ghHint').textContent = '正在统计要上传的文件…';
+      var r = await ghPushAll(function(done, total, ok, path){
+        $('ghHint').textContent = '上传中 ' + done + '/' + total + '（' + path.split('/').pop() + '）' + (ok ? '' : ' ✗');
+      });
+      if (r.ok){ setGhStatus('synced'); $('ghHint').textContent = '已上传 ' + r.n + ' 个文件到 GitHub ✓'; toast('已上传 ' + r.n + ' 个文件到云端'); }
+      else { setGhStatus('failed'); $('ghHint').textContent = '上传完成 ' + r.okCount + '/' + r.n + '，部分失败（检查 Token / 网络）'; }
+      return;
+    }
     $('ghHint').textContent = '上传中…';
     ghSaveAll(snapshotAll(), function(ok){
       if (ok){ setGhStatus('synced'); $('ghHint').textContent = '已把本地数据覆盖上传到 GitHub 仓库 ✓'; toast('已上传到云端（覆盖）'); }
@@ -468,7 +993,7 @@ function hue(s){ var h=0; s=String(s||''); for(var i=0;i<s.length;i++){ h=(h*31+
 function stars(n){ n=Math.round(num(n)); var o=''; for(var i=1;i<=5;i++) o += (i<=n?'★':'☆'); return o; }
 function coverImg(row){
   var imgs = row['封面'] || row['照片'] || row['IP图像'] || row['系列封面'] || row['图片'];
-  if (imgs && imgs[0] && imgs[0].imageUrl) return String(imgs[0].imageUrl);
+  if (imgs && imgs[0] && imgs[0].imageUrl) return resolveImgUrl(imgs[0].imageUrl);
   return '';
 }
 function hasCover(row){ return !!coverImg(row); }
@@ -763,7 +1288,7 @@ function fetchAll(key, cb){
     if (_ghCache){ cb(_ghCache[key] || []); return; }
     if (_ghLoading){ _ghLoading.push(function(all){ cb((all||{})[key] || []); }); return; }
     _ghLoading = [];
-    localfsRead(function(obj){
+    loadLocalAll(function(obj){
       _ghCache = obj;
       var q = _ghLoading; _ghLoading = null;
       q.forEach(function(fn){ fn(_ghCache); });
@@ -775,7 +1300,18 @@ function fetchAll(key, cb){
     if (_ghCache){ cb(_ghCache[key] || []); return; }
     if (_ghLoading){ _ghLoading.push(function(all){ cb((all||{})[key] || []); }); return; }
     _ghLoading = [];
-    ghGetAll(function(all, sha, err){
+    /* 先试静态直读（同域 fetch，无需 Token、不怕 api.github.com 超时）；
+       拿不到分片数据再回退到原来的 API 逻辑。 */
+    (async function(){
+      var st = await ghStaticLoadV2();
+      if (st && Object.keys(st).length){
+        _ghCache = st;
+        localCacheSetFrom(st);
+        cb(st[key] || []);
+        if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
+        return;
+      }
+      ghGetAll(function(all, sha, err){
       var cache = localCacheGet();
       if (all === null && err){
         /* GitHub 读取失败（网络/401）：用本地缓存兜底全量，避免强刷后数据全失 */
@@ -804,6 +1340,7 @@ function fetchAll(key, cb){
       cb(_ghCache[key] || []);
       if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
     });
+    })();
     return;
   }
   if (MODE === 'local'){ cb(lsGet(key)); return; }
