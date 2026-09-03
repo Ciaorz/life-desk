@@ -828,6 +828,7 @@ async function migrateToShards(){
   var okIdx = await fsWriteIndex(idx);
   if (!okIdx) return { ok:false, reason:'index-failed' };
   _shardMode = true;
+  await writeReadme();   /* 拆分完立刻写一份说明文件，方便知道文件都在哪、封面用到几号 */
   return { ok:true, shards:n, backup:backupName };
 }
 
@@ -958,6 +959,7 @@ async function pickFsaDirAndConnect(){
   var existing = await new Promise(function(res){ localfsRead(function(o){ res(o); }); });
   var isEmpty = !existing || Object.keys(existing).length === 0;
   if (isEmpty){ await new Promise(function(res){ localfsWrite(snapshotAll(), function(){ res(); }); }); }
+  await writeReadme();   /* 连上目录就写一份说明文件，方便知道数据都放在哪 */
   setGhStatus('localfile');
   refreshFsaButtons();
   loadAll();
@@ -1091,6 +1093,7 @@ function addDataTools(){
       '<button type="button" id="ghUpload" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">上传本地数据</button>' +
       '<button type="button" id="ghPull" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px;display:none">下载云端到本地</button>' +
       '<button type="button" id="ghSplit" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">拆分数据文件</button>' +
+      '<button type="button" id="ghReadme" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">生成说明文件</button>' +
       '<button type="button" id="ghClose" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">关闭</button>' +
     '</div>' +
     '<div id="ghHint" style="margin-top:8px;color:#666;font-size:11px;line-height:1.5"></div>';
@@ -1146,6 +1149,20 @@ function addDataTools(){
       loadAll();
     } else {
       $('ghHint').textContent = '拆分失败：' + ((r && r.reason) || '未知原因');
+    }
+  };
+  $('ghReadme').onclick = async function(){
+    if (MODE !== 'localfile' || !_fsaHandle){
+      $('ghHint').textContent = '请先在右下角点「📂 选择数据目录」连接本地文件夹';
+      return;
+    }
+    var ok = await writeReadme();
+    var dirName = (_fsaHandle && _fsaHandle.name) ? _fsaHandle.name : '数据目录';
+    if (ok){
+      $('ghHint').textContent = '已生成 README.md，就在你选的目录「' + dirName + '」里';
+      toast('已生成 README.md（在目录 ' + dirName + ' 里）');
+    } else {
+      $('ghHint').textContent = '生成失败，请检查数据目录的写入权限';
     }
   };
   $('ghUpload').onclick = async function(){
