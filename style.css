@@ -213,7 +213,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .pill.s4{background:#eae3df;color:#7d7264}
 
 /* ---------- travel ---------- */
-.trips{display:grid;grid-template-columns:repeat(auto-fill,minmax(275px,1fr));gap:16px}
+.trips{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
 .trip{position:relative;padding:18px 18px 16px 22px;border-radius:18px;background:#fbf7f1;
   border:1px solid rgba(111,89,67,.08);cursor:pointer;transition:.2s;overflow:hidden}
 .trip:hover{transform:translateY(-2px);box-shadow:0 12px 26px rgba(63,48,36,.08)}
@@ -226,7 +226,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .trip .meta b{color:var(--ink);font-weight:650}
 .trip .note{margin-top:10px;padding-top:10px;border-top:1px dashed rgba(111,89,67,.16);
   color:#8d8275;font-size:12px;line-height:1.65}
-.trip .coverimg{height:104px;margin:-18px -18px 14px -22px;background-size:cover;background-position:center}
+.trip .coverimg{aspect-ratio:1/1;height:auto;margin:-18px -18px 14px -22px;background-size:cover;background-position:center}
 
 /* ---------- study ---------- */
 .studies{display:flex;flex-direction:column;gap:12px}
@@ -804,9 +804,17 @@ input.search:focus{border-color:var(--accent);background:#fff}
 }
 .glass-card.solid { background: rgba(255, 250, 240, 0.92); }
 
-/* 藏品馆 / 影音厅 二级小类封面卡片：去掉外沿白框 */
+/* 藏品馆 / 影音厅 二级小类封面卡片：去掉外沿白框与奶白底 */
 .museum-grid .mcase.glass-card,
-.avhall .museum-grid .mcase.glass-card { border: none; }
+.avhall .museum-grid .mcase.glass-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.museum-grid .mcase.glass-card::before,
+.avhall .museum-grid .mcase.glass-card::before { display: none; }
 
 /* --- 藏品：8 大类玻璃卡矩阵 ---------------------------------------------------- */
 .museum-grid {
@@ -903,6 +911,15 @@ input.search:focus{border-color:var(--accent);background:#fff}
   background: rgba(20,15,8,0.18);
   pointer-events: none;
 }
+
+/* 影音厅 / 藏品馆主厅透视展柜：去掉白色玻璃外框，只留投影 */
+.museum .mcase-glass,
+.avhall .mcase-glass {
+  border: none;
+  box-shadow: 0 8px 26px rgba(0,0,0,0.45);
+}
+.museum .mcase-glass::before,
+.avhall .mcase-glass::before { display: none; }
 
 /* 黑色类目标签（跟随同一透视倾斜） */
 .mcase-nameplate {
@@ -1461,7 +1478,7 @@ input.search{margin-bottom:12px}
 /* 统计网格：与下一块之间留一点呼吸 */
 .statgrid{margin-bottom:2px}
 /* 列表类容器统一用 gap，避免子元素互相贴住 */
-.trips{display:grid;grid-template-columns:repeat(auto-fill,minmax(275px,1fr));gap:16px}
+.trips{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
 .barlist{display:flex;flex-direction:column;gap:10px;margin-top:4px}
 /* 空状态不要顶到上一块 */
 .empty, .emptyHTML{margin-top:4px}
@@ -1512,6 +1529,9 @@ input.search{margin-bottom:12px}
   /* --- 打卡点：小屏地图高度收敛 --- */
   .checkin-map { height: 300px; }
   .checkin-row { flex-wrap: wrap; }
+
+  /* --- 遐方坞卡片：小屏更紧凑 --- */
+  .trips { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; }
 
   /* --- 影音厅：小屏下展柜配合 -180px 上移略缩 scale 防挤 --- */
   .avhall .museum-side { transform: translateY(-180px) scale(.82); }

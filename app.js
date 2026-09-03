@@ -5360,7 +5360,7 @@ function renderCollectionMuseum(){
       '<div class="wm-mask"></div>'+
       '<div class="mh">'+
         '<h1>藏 品 馆</h1>'+
-        '<p>B R I T I S H   M U S E U M · E N L I G H T E N M E N T   G A L L E R Y</p>'+
+        '<p>G A L L E R Y</p>'+
         '<div class="musedit-bar">'+
           (f.editing
             ? '<button class="r-btn" data-act="musedit">✓ 完成布局</button>'+
