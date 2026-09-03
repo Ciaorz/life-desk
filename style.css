@@ -329,17 +329,17 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .starsel{display:flex;gap:4px;align-items:center;min-height:42px}
 .starsel button{border:0;background:transparent;font-size:21px;line-height:1;cursor:pointer;color:#d8cec0;padding:0 1px}
 .starsel button.on{color:var(--sand)}
-.heartsel{display:flex;gap:3px;align-items:center;min-height:42px}
-.heart-btn{position:relative;display:inline-block;width:22px;height:22px}
-.heart-btn .half{position:absolute;top:0;bottom:0;border:0;background:transparent;font-size:20px;
-  line-height:1;cursor:pointer;color:#f3e2e6;padding:0;margin:0;overflow:hidden;width:50%}
-.heart-btn .half.left{left:0;text-align:left;z-index:2}
-.heart-btn .half.right{right:0;text-align:right;z-index:1}
-.heart-btn .half.on{color:#ffb7c5}
-.heart-btn .half.half.on{color:#ffb7c5;background:linear-gradient(90deg,#ffb7c5 50%,#f3e2e6 50%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.heartsel{display:flex;gap:4px;align-items:center;min-height:42px}
+.heart-btn{position:relative;display:inline-block;width:24px;height:24px;cursor:pointer}
+.heart-btn .hheart{position:absolute;inset:0;font-size:22px;line-height:24px;text-align:center;color:#f3e2e6;pointer-events:none}
+.heart-btn .hheart.on{color:#ff8fa3}
+.heart-btn .hheart.half{background:linear-gradient(90deg,#ff8fa3 50%,#f3e2e6 50%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.heart-btn .hit{position:absolute;top:0;bottom:0;width:50%;border:0;background:transparent;cursor:pointer;z-index:2;padding:0;margin:0}
+.heart-btn .hit.left{left:0}
+.heart-btn .hit.right{right:0}
 .hheart{font-size:12px;color:#f3e2e6;letter-spacing:1px}
-.hheart.on{color:#ffb7c5}
-.hheart.half{background:linear-gradient(90deg,#ffb7c5 50%,#f3e2e6 50%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hheart.on{color:#ff8fa3}
+.hheart.half{background:linear-gradient(90deg,#ff8fa3 50%,#f3e2e6 50%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .multisel{display:flex;gap:7px;flex-wrap:wrap}
 .multisel button{padding:6px 11px;border:1px solid var(--line);border-radius:999px;background:#fbf8f3;
   font-size:11.5px;font-weight:600;color:var(--muted);cursor:pointer}
@@ -416,14 +416,15 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .locrow span{color:var(--muted);font-size:11.5px}
 .locrow .ops{display:flex;gap:6px}
 .imgwrap .imgprev{height:130px;border-radius:12px;background:#efe9df;margin-bottom:9px;
-  border:1px solid rgba(111,89,67,.08);overflow:hidden;position:relative;cursor:grab;outline:0}
-.imgwrap .imgprev img{display:block;width:100%;height:100%;object-fit:cover;transform-origin:center center}
+  border:1px solid rgba(111,89,67,.08);overflow:hidden;position:relative;cursor:grab;outline:0;
+  background-position:50% 50%;background-size:100% auto;background-repeat:no-repeat}
 .imgwrap .imgprev:active{cursor:grabbing}
 .imgvp-hint{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);font-size:10px;
   color:#fff;background:rgba(0,0,0,.35);padding:2px 8px;border-radius:99px;pointer-events:none}
-.imgvp-bar{display:flex;align-items:center;gap:8px;margin:-4px 0 10px}
+.imgvp-bar{display:flex;align-items:center;gap:6px;margin:-4px 0 10px;flex-wrap:wrap}
 .imgvp-bar span{font-size:11px;color:var(--muted)}
 .imgvp-bar .btn.xs{padding:3px 9px;font-size:13px;min-height:0}
+.imgvp-sp{width:1px;height:16px;background:rgba(104,87,68,.15);margin:0 2px}
 .imgrow{display:flex;gap:8px;align-items:center}
 .imgrow input{flex:1}
 .upl{margin:0;cursor:pointer;white-space:nowrap}
@@ -802,6 +803,10 @@ input.search:focus{border-color:var(--accent);background:#fff}
   box-shadow: var(--shadow-1);
 }
 .glass-card.solid { background: rgba(255, 250, 240, 0.92); }
+
+/* 藏品馆 / 影音厅 二级小类封面卡片：去掉外沿白框 */
+.museum-grid .mcase.glass-card,
+.avhall .museum-grid .mcase.glass-card { border: none; }
 
 /* --- 藏品：8 大类玻璃卡矩阵 ---------------------------------------------------- */
 .museum-grid {
@@ -1519,12 +1524,17 @@ input.search{margin-bottom:12px}
     align-items: flex-end;
   }
   .dt-group.open .dt-sub { display: flex; }
-  /* 展开的子按钮沿用与主按钮相同的视觉（继承 dataTools 的按钮样式） */
-  .dt-sub button {
-    white-space: nowrap;
-    box-shadow: 0 6px 18px rgba(60, 40, 20, .22);
-  }
+  .dt-sub .btn { white-space: nowrap; box-shadow: 0 6px 18px rgba(60, 40, 20, .22); }
 }
+
+/* 右下角数据工具按钮：统一 .btn.ghost.sm 风格 */
+.dt-btn{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.dt-btn svg{display:block;flex:0 0 auto}
+.dt-btn .dt-txt{font-size:12px}
+.dt-dir .dt-txt{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dataTools{box-shadow:none !important}
+#dataTools .btn{box-shadow:0 4px 14px rgba(63,48,36,.08)}
+#dataTools .btn:active{transform:translateY(1px)}
 
 /* ============ 遐方坞：地球 / 地图 选项卡 ============ */
 .map-tabs{position:absolute;top:14px;right:14px;left:auto;z-index:6;display:flex;gap:6px;padding:5px;border-radius:14px;

@@ -354,8 +354,6 @@ async function storageSaveV2(snapshot){
 
   /* 写分片：内容无变化则跳过 */
   var okAll = true;
-  /* 图片编号在整个保存过程中连续递增，跨类目不重号；最后统一写回主索引 */
-  var seq = await nextImageSeq();
   for (var cat in buckets){
     if (!Object.prototype.hasOwnProperty.call(buckets, cat)) continue;
     var sh = idx.shards[cat] || {};
@@ -363,8 +361,9 @@ async function storageSaveV2(snapshot){
     sh.file = file; sh.module = buckets[cat].module;
     if (!sh.coverDir) sh.coverDir = coverDirName(cat);
     idx.shards[cat] = sh;
-    /* 先把 base64 / 外链封面落盘成独立文件，row 内换成相对路径，再比较/写入 */
-    seq = await externalizeImages(cat, buckets[cat].rows, seq);
+    /* 先把 base64 / 外链封面落盘成独立文件，row 内换成相对路径，再比较/写入。
+       图片编号在每个类目封面文件夹内独立递增。 */
+    await externalizeImages(cat, buckets[cat].rows);
     var oldObj = await fsReadJSON(file);
     var oldStr = oldObj ? JSON.stringify(oldObj.rows || []) : '';
     var newStr = JSON.stringify(buckets[cat].rows);
@@ -375,7 +374,6 @@ async function storageSaveV2(snapshot){
       if (!okw) okAll = false;
     }
   }
-  idx.imgSeq = seq;                 /* 记回主索引，下次从这里继续，保证编号全局唯一 */
   var oki = await fsWriteIndex(idx);
   await writeReadme();          /* 顺带刷新说明文件里的类目清单与封面编号 */
   return okAll && oki;
@@ -472,37 +470,36 @@ async function fetchImageBytes(url){
   } catch(e){ return null; }
 }
 function pad4(n){ n = String(n); while (n.length < 4) n = '0' + n; return n; }
-/* 扫描磁盘上已有的最大图片编号（主索引没有记录时的兜底） */
-async function scanMaxImageSeq(){
+/* 扫描某个类目封面文件夹内已有的最大编号（按项目独立编号） */
+async function scanMaxImageSeqFor(dirName){
   var max = 0;
   try {
-    var imgDir = await _fsaGetDir([IMG_DIR], false);
-    if (imgDir){
-      var list = await walkDirFiles(imgDir, '', []);
-      for (var i = 0; i < list.length; i++){
-        var fn = String(list[i].rel).split('/').pop() || '';
-        var mm = /^(\d{4,})\./.exec(fn);
-        if (mm){ var v = parseInt(mm[1], 10); if (isFinite(v) && v > max) max = v; }
+    var dir = await _fsaGetDir([IMG_DIR, dirName], false);
+    if (dir){
+      /* File System Access API 的迭代器 */
+      if (typeof dir.entries === 'function'){
+        for await (var [name] of dir.entries()){
+          var mm = /^(\d{4,})\./.exec(name);
+          if (mm){ var v = parseInt(mm[1], 10); if (isFinite(v) && v > max) max = v; }
+        }
+      } else if (typeof dir.values === 'function'){
+        for await (var fh of dir.values()){
+          var name = fh.name || '';
+          var mm = /^(\d{4,})\./.exec(name);
+          if (mm){ var v = parseInt(mm[1], 10); if (isFinite(v) && v > max) max = v; }
+        }
       }
     }
   } catch(e){}
   return max;
 }
-/* 下一个全局图片编号：主索引记录优先，缺失时扫描磁盘 */
-async function nextImageSeq(){
-  var idx = await fsReadIndex();
-  var n = parseInt(idx.imgSeq, 10);
-  if (!isFinite(n) || n <= 0) n = await scanMaxImageSeq();
-  return n;
-}
 /* 保存前：把 base64 或外链图片都落到本地磁盘，row 内改为相对路径。
-   文件名 0001.jpg / 0002.jpg … 全局递增，方便对照 git 已上传到几号。
-   传入起始编号、返回结束编号；索引的 imgSeq 由调用方统一写回
-   （避免多处各写各的、互相覆盖导致编号重复）。 */
+   文件名 {类目}-0001.jpg / {类目}-0002.jpg … 在每个类目文件夹内独立递增，
+   避免 ip-封面 第一张变成 ip-0005 这种跨目录跳号。 */
 async function externalizeImages(cat, rows, startSeq){
   if (!_fsaHandle || !rows || !rows.length) return startSeq;
   var dirName = coverDirName(cat);
-  var seq = (typeof startSeq === 'number' && isFinite(startSeq)) ? startSeq : await nextImageSeq();
+  var seq = (typeof startSeq === 'number' && isFinite(startSeq)) ? startSeq : await scanMaxImageSeqFor(dirName);
   for (var i = 0; i < rows.length; i++){
     var r = rows[i]; if (!r) continue;
     for (var j = 0; j < IMG_FIELDS.length; j++){
@@ -530,7 +527,7 @@ async function externalizeImages(cat, rows, startSeq){
         }
         if (!bytes || !bytes.length) continue;
         seq++;
-        var name = safeFileName(cat) + '-' + pad4(seq) + '.' + ext;   /* 例：唱片-0001.jpg */
+        var name = safeFileName(cat) + "-" + pad4(seq) + "." + ext;   /* 例：唱片-0001.jpg */
         var rel = coverDirPath(cat) + name;
         var ok = await _fsaWriteBinary([IMG_DIR, dirName], name, bytes);
         if (ok){
@@ -840,7 +837,7 @@ async function writeReadme(){
   L.push('');
   L.push('当前已用到 **' + pad4(idx.imgSeq || 0) + '**。');
   L.push('');
-  L.push('命名规则：`类目-编号.jpg`，编号是**全局递增**的（不会重复）。');
+  L.push('命名规则：`{类目}-0001.jpg`，编号在每个 `images/{类目}-封面/` 文件夹内独立递增。');
   L.push('');
   L.push('所以往 GitHub 补传时，只要看仓库里已经存在到几号，从下一个号开始传就行，');
   L.push('已经传过的不用重复传。');
@@ -906,19 +903,17 @@ async function migrateToShards(){
     });
   });
   var n = 0;
-  var seq = await nextImageSeq();
   for (var cat in buckets){
     if (!Object.prototype.hasOwnProperty.call(buckets, cat)) continue;
     var file = shardFileName(cat);
     idx.shards[cat] = { file: file, module: buckets[cat].module, coverDir: coverDirName(cat) };
     try { await _fsaGetDir([IMG_DIR, coverDirName(cat)], true); } catch(e){}
-    seq = await externalizeImages(cat, buckets[cat].rows, seq);
+    await externalizeImages(cat, buckets[cat].rows);
     await fsWriteJSON(file, {
       schema: SCHEMA_V2, cat: cat, module: buckets[cat].module, rows: buckets[cat].rows
     });
     n++;
   }
-  idx.imgSeq = seq;
   /* 主文件保留没有类目的记录 */
   Object.keys(old).forEach(function(mk){
     idx.__main[mk] = (old[mk] || []).filter(function(r){ return !shardCatOf(mk, r); });
@@ -1067,11 +1062,12 @@ async function pickFsaDirAndConnect(){
 /* 刷新「选择数据目录」按钮的文案/可见性，以及「下载云端到本地」按钮的显示 */
 function refreshFsaButtons(){
   var b = $('fsaPick'); if (!b) return;
+  var txt=b.querySelector('.dt-txt');
   if (!_FSA_SUPPORT){ b.style.display='none'; }
   else if (MODE === 'localfile' && _fsaHandle){
-    b.style.display='inline-block'; b.textContent = '📂 数据目录：' + _fsaHandle.name;
+    b.style.display='inline-flex'; if(txt) txt.textContent='数据目录：' + _fsaHandle.name;
   } else {
-    b.style.display='inline-block'; b.textContent = '📂 选择数据目录';
+    b.style.display='inline-flex'; if(txt) txt.textContent='选择数据目录';
   }
   var pull = $('ghPull');
   if (pull) pull.style.display = (MODE === 'localfile') ? 'inline-block' : 'none';
@@ -1131,28 +1127,35 @@ function importData(){
   };
   inp.click();
 }
-/* 右下角常驻 导出/导入 按钮 */
+/* 右下角常驻数据工具按钮：桌面图标+文字，移动端图标为主 */
+var DT_ICONS = {
+  folder:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+  sync:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>',
+  export:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+  import:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
+  data:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>'
+};
+function dtBtn(icon, txt, cls, act, id){ return '<button type="button"'+(act?' data-act="'+act+'"':'')+(id?' id="'+id+'"':'')+' class="btn ghost sm dt-btn'+(cls?' '+cls:'')+'">'+icon+(txt?'<span class="dt-txt">'+txt+'</span>':'')+'</button>'; }
 function addDataTools(){
   if ($('dataTools')) return;
   var box = document.createElement('div');
   box.id = 'dataTools';
-  /* 手机端屏幕窄，把按钮文字缩短（桌面 / 平板保持原文案不变） */
+  /* 手机端屏幕窄，用图标+短文案 / 图标为主，并把导出/导入收成「数据」折叠 */
   if (IS_MOBILE){
-    /* 手机端：把「导出 / 导入」收成一个「数据」按钮，点击向上展开，点任意处收起，节省横向空间 */
-    box.innerHTML = '<button type="button" data-act="fsa" id="fsaPick">📂 选择数据目录</button>' +
-                    '<button type="button" data-act="sync">同步</button>' +
+    box.innerHTML = dtBtn(DT_ICONS.folder, '目录', 'dt-dir', 'fsa', 'fsaPick') +
+                    dtBtn(DT_ICONS.sync, '', 'dt-sync', 'sync') +
                     '<span class="dt-group" id="dtGroup">' +
                       '<span class="dt-sub" id="dtSub">' +
-                        '<button type="button" data-act="import">导入</button>' +
-                        '<button type="button" data-act="export">导出</button>' +
+                        dtBtn(DT_ICONS.import, '导入', '', 'import') +
+                        dtBtn(DT_ICONS.export, '导出', '', 'export') +
                       '</span>' +
-                      '<button type="button" data-act="dtoggle" id="dtToggle">数据</button>' +
+                      dtBtn(DT_ICONS.data, '数据', 'dt-toggle', 'dtoggle', 'dtToggle') +
                     '</span>';
   } else {
-    box.innerHTML = '<button type="button" data-act="fsa" id="fsaPick">📂 选择数据目录</button>' +
-                    '<button type="button" data-act="sync">⚙ 同步设置</button>' +
-                    '<button type="button" data-act="export">导出数据</button>' +
-                    '<button type="button" data-act="import">导入数据</button>';
+    box.innerHTML = '<button type="button" data-act="fsa" id="fsaPick" class="btn ghost sm dt-btn dt-dir">'+DT_ICONS.folder+'<span class="dt-txt">数据目录</span></button>' +
+                    '<button type="button" data-act="sync" class="btn ghost sm dt-btn dt-sync">'+DT_ICONS.sync+'<span class="dt-txt">同步设置</span></button>' +
+                    '<button type="button" data-act="export" class="btn ghost sm dt-btn">'+DT_ICONS.export+'<span class="dt-txt">导出数据</span></button>' +
+                    '<button type="button" data-act="import" class="btn ghost sm dt-btn">'+DT_ICONS.import+'<span class="dt-txt">导入数据</span></button>';
   }
   box.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:9999;display:flex;gap:8px';
   document.body.appendChild(box);
@@ -1388,7 +1391,7 @@ function coverStyle(row,title){
   var u = coverImg(row);
   var vp = coverViewport(row);
   /* 用单引号包裹 URL：外部 HTML 的 style 属性使用双引号，内部若再用双引号会截断属性，导致封面整片空白 */
-  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+Math.max(100,Math.round(vp.s*100))+"% auto";
+  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-repeat:no-repeat;background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+Math.max(100,Math.round(vp.s*100))+"% auto";
   var h = hue(title), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -1400,7 +1403,7 @@ function ckCoverUrl(row){
 }
 function ckCoverBg(row){
   var u = ckCoverUrl(row);
-  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"')";
+  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-repeat:no-repeat;background-position:center;background-size:cover";
   var h = hue(row['地点名字']||''), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -1518,8 +1521,9 @@ var MODS = {
   travel: { key:'travel', db:DB.travel, name:'遐方坞', icon:'旅', eyebrow:'Where to',
     desc:'想去的地方先记下来，走着走着就到了。', addLabel:'目的地',
     fields:[
-      {k:'国家',t:'text',req:1,ph:'如 日本 / 冰岛'},
-      {k:'地区',t:'text',req:1,ph:'如 京都 / 雷克雅未克'},
+      {k:'地点',t:'text',ph:'如 清水寺 / 蓝湖温泉',full:1},
+      {k:'国家',t:'text',ph:'如 日本 / 冰岛'},
+      {k:'地区',t:'text',ph:'如 京都 / 雷克雅未克'},
       {k:'纬度',t:'number',ph:'如 35.68（点下方地球自动填）'},
       {k:'经度',t:'number',ph:'如 139.69'},
       {k:'_geo',t:'geopick',full:1},
@@ -1741,15 +1745,19 @@ function fetchAll(key, cb){
 }
 function migrateTravelRow(r){
   if (!r) return r;
-  /* 旧版：地点 + 国家地区 → 新版：国家 + 地区 */
+  /* 旧版：地点 + 国家地区 → 新版：地点 + 国家 + 地区 */
+  if (!r['地点']){
+    var oldLoc = String(r['地点']||'');   /* 旧版可能直接叫“地点” */
+    if (oldLoc) r['地点'] = oldLoc;
+  }
   if (!r['国家'] && !r['地区']){
-    var oldCountry = String(r['国家地区']||''), oldLoc = String(r['地点']||'');
-    if (oldCountry && oldLoc){
+    var oldCountry = String(r['国家地区']||''), oldLoc2 = String(r['地点']||'');
+    if (oldCountry && oldLoc2){
       var parts = oldCountry.split(/\s+/);
       if (parts.length >= 2){ r['国家']=parts[0]; r['地区']=parts.slice(1).join(' '); }
-      else { r['国家']=oldCountry; r['地区']=oldLoc; }
+      else { r['国家']=oldCountry; r['地区']=oldLoc2; }
     } else if (oldCountry){ r['国家']=oldCountry; r['地区']=oldCountry; }
-    else if (oldLoc){ r['地区']=oldLoc; }
+    else if (oldLoc2){ r['地区']=oldLoc2; }
   }
   /* 旧版心愿等级文字 → 新版 0-5 数字 */
   if (r['心愿等级'] && typeof r['心愿等级'] === 'string'){
@@ -1923,7 +1931,7 @@ function filtered(key){
   } else if (key==='travel'){
     if (f.status) rows=rows.filter(function(r){ return r['状态']===f.status; });
     if (q) rows=rows.filter(function(r){
-      return ((r['地区']||r['地点']||'')+' '+(r['国家']||r['国家地区']||'')+' '+(r['备注']||'')).toLowerCase().indexOf(q)>=0; });
+      return ((r['地点']||'')+' '+(r['地区']||'')+' '+(r['国家']||r['国家地区']||'')+' '+(r['备注']||'')).toLowerCase().indexOf(q)>=0; });
     rows.sort(function(a,b){
       var s={'想去':0,'去过':1};
       var d=(s[a['状态']]||0)-(s[b['状态']]||0);
@@ -2004,7 +2012,10 @@ function renderOverview(){
   var spend=0; bought.forEach(function(r){ spend += num(r['购入价格']); });
   var byCat={}; cs.rows.forEach(function(r){ var k=r['大类']||'其他'; byCat[k]=(byCat[k]||0)+1; });
   var maxC=1; Object.keys(byCat).forEach(function(k){ if(byCat[k]>maxC) maxC=byCat[k]; });
-  var ys={}; cs.rows.forEach(function(r){ var y=yr(r['购入日期']); if(y) ys[y]=1; }); ys[ui.year]=1;
+  var ys={}; cs.rows.forEach(function(r){ var y=yr(r['购入日期']); if(y) ys[y]=1; });
+  var curY = String(new Date().getFullYear());
+  for (var y=2000; y<=parseInt(curY,10); y++) ys[String(y)]=1;
+  ys[ui.year]=1;
   var ysel='<select id="yearSel" style="min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:#fbf8f3;font-size:12px">'+
     Object.keys(ys).sort().reverse().map(function(y){
       return '<option value="'+y+'"'+(y===ui.year?' selected':'')+'>'+y+'</option>'; }).join('')+'</select>';
@@ -2135,7 +2146,10 @@ function modeSeg(){
 function renderCollection(){
   var s=store.collection;
   var strip='<div class="strip">'+stripHTML('collection')+extraStrip()+'</div>';
-  var ys={}; s.rows.forEach(function(r){ var y=yr(r['购入日期']); if(y) ys[y]=1; }); ys[ui.year]=1;
+  var ys={}; s.rows.forEach(function(r){ var y=yr(r['购入日期']); if(y) ys[y]=1; });
+  var curY2 = String(new Date().getFullYear());
+  for (var y2=2000; y2<=parseInt(curY2,10); y2++) ys[String(y2)]=1;
+  ys[ui.year]=1;
   var ysel='<select id="yearSel" style="min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:#fbf8f3;font-size:12px">'+
     Object.keys(ys).sort().reverse().map(function(y){
       return '<option value="'+y+'"'+(y===ui.year?' selected':'')+'>'+y+'</option>'; }).join('')+'</select>';
@@ -2349,9 +2363,20 @@ function renderCheckinNew(){
   var er = editing ? findCheckin(ui.travel.ckEditId) : null;
   var t = (er && er['日期']) ? er['日期'] : new Date().toISOString().slice(0,10);
   var nameV = er ? (er['地点名字']||'') : '';
-  var cityV = er ? (er['城市景区']||'') : '';
+  var countryV = er ? (er['国家']||'') : '';
+  var regionV = er ? (er['地区']||er['城市景区']||'') : '';
   var coverV = er ? (er['封面图片']||'') : '';
   var contentV = er ? (er['内容']||'') : '';
+  var heartV = er ? (num(er['心级'])||0) : 0;
+  var heartBody='';
+  for(var hi=1;hi<=5;hi++){
+    var hcls = (heartV>=hi)?'on':((heartV>=hi-0.5)?'half':'');
+    heartBody += '<span class="heart-btn" data-i="'+hi+'">'+
+      '<span class="hheart '+hcls+'">❤</span>'+
+      '<button type="button" class="hit left" data-i="'+(hi-0.5)+'" aria-label="'+(hi-0.5)+' 颗心"></button>'+
+      '<button type="button" class="hit right" data-i="'+hi+'" aria-label="'+hi+' 颗心"></button>'+
+      '</span>';
+  }
   var h = '<div class="strip">'+stripHTML('travel')+'</div>';
   h += '<section class="panel"><div class="panel-head"><div><h2>'+(editing?'编辑打卡点':'新建打卡点')+'</h2>'+
        '<div class="hint">先搜城市 / 景区，在地图上点一下标位置，再填好信息</div></div>'+
@@ -2361,13 +2386,15 @@ function renderCheckinNew(){
   h += '<div id="ckMap" class="ck-map"></div><div id="ckTip" class="ck-tip"></div>';
   h += '<div class="ck-form">'+
        '<div class="fgrid">'+
-       '  <div class="f"><label>地点名字 *</label><input id="ckName" type="text" autocomplete="off" placeholder="如 西湖断桥" value="'+esc(nameV)+'"></div>'+
+       '  <div class="f"><label>地点名字</label><input id="ckName" type="text" autocomplete="off" placeholder="如 西湖断桥" value="'+esc(nameV)+'"></div>'+
        '  <div class="f"><label>日期</label><input id="ckDate" type="date" value="'+esc(t)+'"></div>'+
-       '  <div class="f"><label>城市 / 景区</label><input id="ckCity" type="text" autocomplete="off" placeholder="搜索后自动填，也可手填" value="'+esc(cityV)+'"></div>'+
-       '  <div class="f"><label>封面图片</label><div class="imgrow"><input id="ckCover" type="text" autocomplete="off" placeholder="图片链接，或点右侧上传（可选）" value="'+esc(coverV)+'">'+
+       '  <div class="f"><label>国家</label><input id="ckCountry" type="text" autocomplete="off" placeholder="如 中国" value="'+esc(countryV)+'"></div>'+
+       '  <div class="f"><label>地区</label><input id="ckRegion" type="text" autocomplete="off" placeholder="搜索后自动填，也可手填" value="'+esc(regionV)+'"></div>'+
+       '  <div class="f full"><label>封面图片</label><div class="imgrow"><input id="ckCover" type="text" autocomplete="off" placeholder="图片链接，或点右侧上传（可选）" value="'+esc(coverV)+'">'+
        '<label class="btn ghost sm upl" for="ckCoverFile">上传<input id="ckCoverFile" type="file" accept="image/*" hidden></label></div>'+
        '<div id="ckCovPrev" class="ckcovprev" tabindex="0" title="可在此粘贴图片">'+(coverV?'<img src="'+esc(resolveImgUrl(coverV))+'" alt="封面预览">':'')+'</div>'+
        '<span class="imgnote">上传的图会先在浏览器里压到长边 800px 再存；也可以直接粘贴图片</span></div>'+
+       '  <div class="f full"><label>心级</label><div class="heartsel" data-k="心级" data-v="'+heartV+'">'+heartBody+'</div></div>'+
        '</div>'+
        '<div class="f" style="margin-top:8px"><label>内容</label><textarea id="ckContent" placeholder="当时的心情、发生了什么…">'+esc(contentV)+'</textarea></div>'+
        '<div id="ckErr" class="ck-err"></div>'+
@@ -2384,6 +2411,22 @@ function attachCkMap(){
   stopCkMap();
   var cv=document.getElementById('ckMap'); if(!cv) return;
   var tip=document.getElementById('ckTip');
+  /* 心级：点击心形左半设 i-0.5，右半设 i */
+  var hbox=document.querySelector('.ck-form .heartsel');
+  if(hbox){
+    function setCkHearts(n){
+      n=Math.max(0,Math.min(5,num(n)));
+      hbox.setAttribute('data-v', n);
+      hbox.querySelectorAll('.heart-btn').forEach(function(btn, idx){
+        var i=idx+1, h=btn.querySelector('.hheart');
+        if(!h) return;
+        h.className='hheart '+(n>=i?'on':(n>=i-0.5?'half':''));
+      });
+    }
+    hbox.querySelectorAll('.hit').forEach(function(b){
+      b.onclick=function(){ setCkHearts(parseFloat(b.getAttribute('data-i'))); };
+    });
+  }
   /* 封面图片：支持本地文件上传、URL 输入、剪切板粘贴 */
   function setCkPreview(url){
     var pv=document.getElementById('ckCovPrev'); if(!pv) return;
@@ -2456,7 +2499,8 @@ function attachCkMap(){
               setMarker(p.location.lng, p.location.lat);
               if(box) box.value=p.name;
               var n=document.getElementById('ckName'); if(n && !n.value) n.value=p.name;
-              var c=document.getElementById('ckCity'); if(c && !c.value) c.value=(p.city||p.pname||'');
+              var re=document.getElementById('ckRegion'); if(re && !re.value) re.value=(p.adname||p.city||p.name||'');
+              var co=document.getElementById('ckCountry'); if(co && !co.value) co.value=(p.pname||p.cityname||'');
               ckDraft.name=p.name; ckDraft.city=p.city||p.pname||'';
               if(tip) tip.textContent='已定位到「'+p.name+'」，可拖动或再点地图调整位置。';
             } else if(tip){ tip.textContent='没搜到「'+q+'」，换个词或直接在地图上点一下。'; }
@@ -2472,12 +2516,18 @@ function saveCheckin(){
   var nameEl=document.getElementById('ckName');
   var name=nameEl?nameEl.value.trim():'';
   var err=document.getElementById('ckErr');
-  if(!name){ if(nameEl) nameEl.focus(); if(err) err.textContent='请先填「地点名字」。'; return; }
   if(ckDraft.lat==null || ckDraft.lon==null){ if(err) err.textContent='请先在地图上点一下标出位置（或搜索后点结果）。'; return; }
+  var countryEl=document.getElementById('ckCountry'), regionEl=document.getElementById('ckRegion');
+  var country=countryEl?countryEl.value.trim():'';
+  var region=regionEl?regionEl.value.trim():'';
+  var heartBox=document.querySelector('.ck-form .heartsel');
+  var heartVal=heartBox?num(heartBox.getAttribute('data-v')):0;
   var row={
     _id: 'ck_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7),
     地点名字: name,
-    城市景区: (document.getElementById('ckCity')?document.getElementById('ckCity').value.trim():'') || ckDraft.city || '',
+    国家: country,
+    地区: region,
+    心级: heartVal,
     日期: (document.getElementById('ckDate')?document.getElementById('ckDate').value:''),
     封面图片: (document.getElementById('ckCover')?document.getElementById('ckCover').value.trim():''),
     内容: (document.getElementById('ckContent')?document.getElementById('ckContent').value.trim():''),
@@ -2521,10 +2571,10 @@ function attachChinaMap(){
       /* 目的地：蓝=想去 / 绿=去过 */
       ((store.travel && store.travel.rows)||[]).forEach(function(r){
         var lat=Number(r['纬度']), lon=Number(r['经度']);
-        if(!(lat&&lon)){ var c=CITY_LOOKUP[String(r['地区']||r['地点']||'').trim()]; if(c){lat=c[0];lon=c[1];} else return; }
+        if(!(lat&&lon)){ var c=CITY_LOOKUP[String(r['地点']||r['地区']||'').trim()]; if(c){lat=c[0];lon=c[1];} else return; }
         var g=wgs84ToGcj02(lat,lon);
         var col = r['状态']==='去过' ? '#3bb273' : '#4a90d9';
-        var mk=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent(col, r['地区']||r['地点']||''), anchor:'bottom-center' });
+        var mk=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent(col, r['地点']||r['地区']||''), anchor:'bottom-center' });
         mk.on('click', function(){ showMapCard(r, 'travel'); });
         map.add(mk);
       });
@@ -2550,13 +2600,15 @@ function ckImgErr(img){ if(!img) return; img.style.display='none'; var s=documen
 function showMapCard(row, kind){
   var c=document.getElementById('mapCard'); if(!c) return;
   var cov = kind==='checkin' ? ckCoverUrl(row) : coverImg(row);
-  var name = kind==='checkin' ? (row['地点名字']||'未命名') : (row['地区']||row['地点']||'未命名');
+  var name = kind==='checkin' ? (row['地点名字']||'未命名') : (row['地点']||row['地区']||'未命名');
   var meta=[];
   if (kind==='checkin'){
-    if(row['城市景区']) meta.push(esc(row['城市景区']));
+    if(row['地区']) meta.push(esc(row['地区']));
+    if(row['国家']) meta.push(esc(row['国家']));
     if(row['日期']) meta.push(esc(dstr(row['日期'])));
   } else {
     if(row['国家']||row['国家地区']) meta.push(esc(row['国家']||row['国家地区']));
+    if(row['地区']) meta.push(esc(row['地区']));
     if(row['状态']) meta.push(esc(row['状态']));
     if(num(row['心愿等级'])) meta.push(heartPills(row['心愿等级']));
   }
@@ -2599,7 +2651,7 @@ function renderTravel(){
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div class="panel-head"><div><h2>目的地</h2>'+
     '<div class="hint">按状态和心愿等级排</div></div></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
-    '<input class="search" autocomplete="off" id="q_travel" placeholder="搜地点 / 国家 / 备注" value="'+esc(f.q)+'"></div>'+
+    '<input class="search" autocomplete="off" id="q_travel" placeholder="搜地点 / 国家 / 地区 / 备注" value="'+esc(f.q)+'"></div>'+
     '<div class="chips">'+
     '<button class="chip'+(f.status?'':' on')+'" type="button" data-act="f" data-k="status" data-v="">全部</button>'+
     ['想去','去过'].map(function(t){ return '<button class="chip'+(f.status===t?' on':'')+'" type="button" data-act="f" data-k="status" data-v="'+t+'">'+t+'</button>'; }).join('')+
@@ -2612,13 +2664,14 @@ function renderTravel(){
     var meta=[];
     if (r['最佳季节']) meta.push('<span>季节 <b>'+esc(r['最佳季节'])+'</b></span>');
     if (r['出行日期']) meta.push('<span>'+esc(dstr(r['出行日期']))+'</span>');
-    var locName = esc(r['地区'] || r['地点'] || '未命名');
+    var locName = esc(r['地点'] || r['地区'] || '未命名');
     var locSub = esc((r['国家'] || r['国家地区'] || ''));
+    var locRegion = esc(r['地区'] || '');
     var hearts = heartPills(num(r['心愿等级']));
     return '<div class="trip '+cls+'" data-act="edit" data-key="travel" data-id="'+esc(r._id)+'" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl">'+
       (hasCover(r)?'<div class="coverimg" style="'+coverStyle(r,locName)+'"></div>':'')+
       '<div class="top"><h4>'+locName+'</h4>'+statusPill(r['状态'])+'</div>'+
-      '<div class="where">'+(locSub?locSub:'')+(hearts?(locSub?' · ':'')+hearts:'')+'</div>'+
+      '<div class="where">'+(locSub?locSub:'')+(locRegion?(locSub?' · ':'')+locRegion:'')+(hearts?((locSub||locRegion)?' · ':'')+hearts:'')+'</div>'+
       (meta.length?'<div class="meta">'+meta.join('')+'</div>':'')+
       (r['备注']?'<div class="note">'+esc(r['备注'])+'</div>':'')+
       '</div>';
@@ -2634,12 +2687,14 @@ function renderTravel(){
     ckrows.forEach(function(r){
       var cov=ckCoverUrl(r);
       var meta=[];
-      if (r['城市景区']) meta.push('<span>'+esc(r['城市景区'])+'</span>');
+      if (r['国家']) meta.push('<span>'+esc(r['国家'])+'</span>');
+      if (r['地区']||r['城市景区']) meta.push('<span>'+esc(r['地区']||r['城市景区'])+'</span>');
       if (r['日期']) meta.push('<span>'+esc(dstr(r['日期']))+'</span>');
+      if (num(r['心级'])) meta.push(heartPills(r['心级']));
       h += '<div class="trip ck" data-act="ckedit" data-id="'+esc(r._id)+'">'+
         (cov?'<div class="coverimg" style="'+ckCoverBg(r)+'"></div>':'')+
         '<div class="top"><h4>'+esc(r['地点名字']||'未命名')+'</h4><span class="ck-pill">打卡点</span></div>'+
-        (r['城市景区']?'<div class="where">'+esc(r['城市景区'])+'</div>':'')+
+        ((r['国家']||r['地区']||r['城市景区'])?'<div class="where">'+(r['国家']?esc(r['国家']):'')+((r['国家']&&(r['地区']||r['城市景区']))?' · ':'')+esc(r['地区']||r['城市景区']||'')+'</div>':'')+
         (meta.length?'<div class="meta">'+meta.join('')+'</div>':'')+
         (r['内容']?'<div class="note">'+esc(r['内容'])+'</div>':'')+
       '</div>';
@@ -2871,8 +2926,8 @@ document.addEventListener('click', function(ev){
   if (act==='geopick'){ openGlobePicker(); return; }
   if (act==='georeloc'){
     if (!editing || editing.key!=='travel'){ toast('先打开一个目的地，再点这里定位'); return; }
-    var locv=String(editing.vals['地区']||editing.vals['地点']||'').trim();
-    if (!locv){ toast('先填「地区」再按名称定位'); return; }
+    var locv=String(editing.vals['地点']||editing.vals['地区']||'').trim();
+    if (!locv){ toast('先填「地点」再按名称定位'); return; }
     toast('正在按地点名重新定位…');
     geocodeTravel(editing.vals, function(coords){
       if (coords){
@@ -2891,8 +2946,8 @@ document.addEventListener('click', function(ev){
   if (act==='amapsearch'){
     if (!editing || editing.key!=='travel'){ toast('先打开一个目的地，再点这里定位'); return; }
     var box = document.querySelector('[data-amap-search]');
-    var q = (box && box.value.trim()) || String(editing.vals['地区']||editing.vals['地点']||'').trim();
-    if (!q){ toast('先填「地区」或输入搜索词'); return; }
+    var q = (box && box.value.trim()) || String(editing.vals['地点']||editing.vals['地区']||'').trim();
+    if (!q){ toast('先填「地点」或输入搜索词'); return; }
     var akey = amapKey();
     if (!akey){ toast('还没配置高德地图 Key：到右下角「⚙ 同步设置」填入 Key 和安全密钥'); return; }
     toast('正在用高德搜索「'+q+'」…');
@@ -2908,14 +2963,17 @@ document.addEventListener('click', function(ev){
               var w = gcj02ToWgs84(p.location.lat, p.location.lng);
               editing.vals['纬度'] = Math.round(w.lat*100)/100;
               editing.vals['经度'] = Math.round(w.lon*100)/100;
-              if (p.name && !editing.vals['地区']) editing.vals['地区'] = p.name;
+              if (p.name && !editing.vals['地点']) editing.vals['地点'] = p.name;
+              if (p.adname && !editing.vals['地区']) editing.vals['地区'] = p.adname;
+              else if (p.name && !editing.vals['地区']) editing.vals['地区'] = p.name;
               if (p.pname && !editing.vals['国家']) editing.vals['国家'] = p.pname;
               else if (p.cityname && !editing.vals['国家']) editing.vals['国家'] = p.cityname;
               var la = document.querySelector('[data-f="纬度"]'), lo = document.querySelector('[data-f="经度"]');
-              var na = document.querySelector('[data-f="地区"]'), co = document.querySelector('[data-f="国家"]');
+              var na = document.querySelector('[data-f="地点"]'), re = document.querySelector('[data-f="地区"]'), co = document.querySelector('[data-f="国家"]');
               if (la) la.value = editing.vals['纬度'];
               if (lo) lo.value = editing.vals['经度'];
-              if (na && !na.value) na.value = editing.vals['地区'];
+              if (na && !na.value) na.value = editing.vals['地点'];
+              if (re && !re.value) re.value = editing.vals['地区'];
               if (co && !co.value) co.value = editing.vals['国家'];
               toast('已定位到「'+p.name+'」：'+editing.vals['纬度']+'°N, '+editing.vals['经度']+'°E（点保存生效）');
             } else {
@@ -3122,35 +3180,29 @@ function fieldVal(row, f){
   if (f.t==='number' || f.t==='currency') return v==null?'':num(v);
   return v==null?'':v;
 }
-/* 设置图片预览：支持视口变换；清空时恢复默认 */
+/* 设置图片预览：用与展示卡一致的 background-image + background-position/size */
 function setImgPreview(prev, url, k){
-  var img = prev.querySelector('img');
   if (!url){
-    if (img) img.remove();
     prev.style.backgroundImage = '';
+    prev.style.backgroundRepeat = '';
+    prev.style.backgroundPosition = '';
+    prev.style.backgroundSize = '';
     var hint = prev.querySelector('.imgvp-hint'); if (hint) hint.hidden = true;
     var bar = prev.parentNode.querySelector('.imgvp-bar'); if (bar) bar.hidden = true;
     return;
   }
   var resolved = resolveImgUrl(url);
-  if (!img){
-    img = document.createElement('img');
-    img.setAttribute('data-img-inner', k || '');
-    img.alt = '';
-    img.style.width = '100%';
-    img.style.height = '100%';
-    img.style.objectFit = 'cover';
-    prev.appendChild(img);
-  }
-  img.src = resolved;
+  prev.style.backgroundImage = "url('"+resolved.replace(/[\"'()\\]/g,'')+"')";
+  prev.style.backgroundRepeat = 'no-repeat';
   applyImgViewport(prev, k);
   var hint = prev.querySelector('.imgvp-hint'); if (hint) hint.hidden = false;
   var bar = prev.parentNode.querySelector('.imgvp-bar'); if (bar) bar.hidden = false;
 }
 function applyImgViewport(prev, k){
-  var img = prev.querySelector('img'); if (!img || !k) return;
+  if (!prev || !k) return;
   var vp = (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0};
-  img.style.transform = 'scale('+vp.s+') translate('+vp.x+'%,'+vp.y+'%)';
+  prev.style.backgroundPosition = (50+vp.x)+'% '+(50+vp.y)+'%';
+  prev.style.backgroundSize = Math.max(100, Math.round(vp.s*100))+'% auto';
 }
 /* ---------- 表单控件绑定（单个表单 / 批量表单共用） ---------- */
 function wireFormControls(host, saveDraft){
@@ -3164,20 +3216,21 @@ function wireFormControls(host, saveDraft){
       };
     });
   });
-  /* 粉色马卡龙心级：支持半颗心 */
+  /* 粉色马卡龙心级：支持半颗心；点击心形左半设 i-0.5，右半设 i */
   host.querySelectorAll('.heartsel').forEach(function(box){
     var k=box.getAttribute('data-k');
     function setHearts(n){
       n = Math.max(0, Math.min(5, num(n)));
       editing.vals[k]=n;
       box.setAttribute('data-v', n);
-      box.querySelectorAll('.half').forEach(function(b){
-        var val = parseFloat(b.getAttribute('data-i'));
-        b.className = b.className.replace(/on/g,'').trim() + (val <= n ? ' on' : '');
+      box.querySelectorAll('.heart-btn').forEach(function(btn, idx){
+        var i=idx+1, h=btn.querySelector('.hheart');
+        if(!h) return;
+        h.className = 'hheart ' + (n>=i?'on':(n>=i-0.5?'half':''));
       });
       if (saveDraft) saveDraft();
     }
-    box.querySelectorAll('.half').forEach(function(b){
+    box.querySelectorAll('.hit').forEach(function(b){
       b.onclick=function(){ setHearts(parseFloat(b.getAttribute('data-i'))); };
     });
   });
@@ -3263,7 +3316,7 @@ function wireFormControls(host, saveDraft){
     });
   }
 
-  /* 图片视口：拖拽移动、滚轮缩放、按钮缩放、双击重置、Ctrl+V 粘贴 */
+  /* 图片视口：拖拽移动、滚轮缩放、按钮缩放/平移、方向键微调、双击重置、Ctrl+V 粘贴 */
   host.querySelectorAll('.imgprev').forEach(function(prev){
     var k=prev.getAttribute('data-img-prev'); if (!k) return;
     function vp(){ return (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0}; }
@@ -3272,12 +3325,21 @@ function wireFormControls(host, saveDraft){
       editing.vals[k+'_vp']=o; applyImgViewport(prev, k);
       if (saveDraft) saveDraft();
     }
-    prev.querySelectorAll('[data-img-zoom]').forEach(function(btn){ btn.onclick=null; });
     var zbar = prev.parentNode.querySelector('.imgvp-bar');
     if (zbar){
       zbar.querySelectorAll('[data-img-zoom]').forEach(function(btn){
         btn.onclick=function(){
           var o=vp(); o.s=Math.max(1, Math.min(4, o.s+parseFloat(btn.getAttribute('data-d')))); setVp(o);
+        };
+      });
+      zbar.querySelectorAll('[data-img-pan]').forEach(function(btn){
+        btn.onclick=function(){
+          var o=vp();
+          var dx=parseFloat(btn.getAttribute('data-dx')||0);
+          var dy=parseFloat(btn.getAttribute('data-dy')||0);
+          if (dx) o.x = Math.max(-80, Math.min(80, o.x+dx));
+          if (dy) o.y = Math.max(-80, Math.min(80, o.y+dy));
+          setVp(o);
         };
       });
       zbar.querySelectorAll('[data-img-reset]').forEach(function(btn){
@@ -3286,30 +3348,41 @@ function wireFormControls(host, saveDraft){
     }
     prev.ondblclick=function(){ setVp({s:1,x:0,y:0}); };
     prev.onwheel=function(e){
-      if (!prev.querySelector('img')) return;
+      if (!prev.style.backgroundImage) return;
       e.preventDefault();
       var o=vp(); o.s=Math.max(1, Math.min(4, o.s+(e.deltaY<0?0.1:-0.1))); setVp(o);
     };
+    /* 键盘方向键微调（焦点在预览框时） */
+    prev.addEventListener('keydown', function(e){
+      if (!prev.style.backgroundImage) return;
+      var step = 2;
+      var o=vp(), moved=false;
+      if (e.key==='ArrowLeft'){ o.x=Math.max(-80,Math.min(80,o.x-step)); moved=true; }
+      else if (e.key==='ArrowRight'){ o.x=Math.max(-80,Math.min(80,o.x+step)); moved=true; }
+      else if (e.key==='ArrowUp'){ o.y=Math.max(-80,Math.min(80,o.y-step)); moved=true; }
+      else if (e.key==='ArrowDown'){ o.y=Math.max(-80,Math.min(80,o.y+step)); moved=true; }
+      if (moved){ e.preventDefault(); setVp(o); }
+    });
     var dragging=false, sx=0, sy=0, ix=0, iy=0;
     prev.onmousedown=function(e){
-      if (!prev.querySelector('img')) return;
+      if (!prev.style.backgroundImage) return;
       dragging=true; sx=e.clientX; sy=e.clientY; var o=vp(); ix=o.x; iy=o.y; prev.style.cursor='grabbing';
     };
     window.addEventListener('mousemove', function(e){
       if (!dragging) return;
       var dx=(e.clientX-sx), dy=(e.clientY-sy);
-      var o=vp(); o.x=ix+dx/2; o.y=iy+dy/2; setVp(o);
+      var o=vp(); o.x=Math.max(-80,Math.min(80,ix+dx/3)); o.y=Math.max(-80,Math.min(80,iy+dy/3)); setVp(o);
     });
     window.addEventListener('mouseup', function(){ dragging=false; prev.style.cursor=''; });
     /* 触摸支持 */
     prev.ontouchstart=function(e){
-      if (!prev.querySelector('img')) return;
+      if (!prev.style.backgroundImage) return;
       dragging=true; sx=e.touches[0].clientX; sy=e.touches[0].clientY; var o=vp(); ix=o.x; iy=o.y;
     };
     window.addEventListener('touchmove', function(e){
       if (!dragging) return;
       var dx=(e.touches[0].clientX-sx), dy=(e.touches[0].clientY-sy);
-      var o=vp(); o.x=ix+dx/2; o.y=iy+dy/2; setVp(o);
+      var o=vp(); o.x=Math.max(-80,Math.min(80,ix+dx/3)); o.y=Math.max(-80,Math.min(80,iy+dy/3)); setVp(o);
     });
     window.addEventListener('touchend', function(){ dragging=false; });
     /* 剪切板粘贴 */
@@ -3642,10 +3715,10 @@ function openForm(key, id, opts){
   host.innerHTML=h; host.hidden=false;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
   host.onclick=function(e){ if(e.target===host) closeSheet(); };
-  /* 目的地表单的「高德搜索」框默认带当前地区名，减少重复输入 */
+  /* 目的地表单的「高德搜索」框默认带当前地点名，减少重复输入 */
   if (key==='travel'){
     var as = host.querySelector('[data-amap-search]');
-    if (as) as.value = String(editing.vals['地区']||editing.vals['地点']||'');
+    if (as) as.value = String(editing.vals['地点']||editing.vals['地区']||'');
   }
 
   wireFormControls(host, function(){
@@ -3705,17 +3778,22 @@ function fieldHTML(f, v){
       (f.min!=null?' min="'+f.min+'"':'')+(f.max!=null?' max="'+f.max+'"':'')+'>';
   } else if (f.t==='img'){
     var vp = (editing && editing.vals && editing.vals[f.k+'_vp']) || {s:1,x:0,y:0};
-    var imgStyle = v ? ('transform:scale('+vp.s+') translate('+vp.x+'%,'+vp.y+'%)') : 'display:none';
+    var prevStyle = v ? ("background-image:url('"+resolveImgUrl(v).replace(/[\"'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+Math.max(100,Math.round(vp.s*100))+"% auto") : '';
     var hasV = !!v;
     body='<div class="imgwrap" data-k="'+f.k+'" data-has-img="'+(hasV?1:0)+'">'+
-      '<div class="imgprev" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、Ctrl+V 粘贴图片">'+
-      (v?'<img src="'+esc(resolveImgUrl(v))+'" alt="" style="'+imgStyle+'" data-img-inner="'+f.k+'">':'')+
-      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动 · 滚轮缩放 · 双击重置</div>'+
+      '<div class="imgprev" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
+      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动 · 滚轮缩放 · 方向键微调 · 双击重置</div>'+
       '</div>'+
       '<div class="imgvp-bar" '+(v?'':'hidden')+'>'+
       '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="-0.15">−</button>'+
       '<span>缩放</span>'+
       '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="0.15">+</button>'+
+      '<span class="imgvp-sp"></span>'+
+      '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dx="-2" title="左移">←</button>'+
+      '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dx="2" title="右移">→</button>'+
+      '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dy="-2" title="上移">↑</button>'+
+      '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dy="2" title="下移">↓</button>'+
+      '<span class="imgvp-sp"></span>'+
       '<button type="button" class="btn ghost xs" data-img-reset="'+f.k+'">重置</button>'+
       '</div>'+
       '<div class="imgrow"><input data-f="'+f.k+'" type="text" value="'+esc(v)+'" placeholder="'+esc(f.ph||'图片链接')+'" autocomplete="off">'+
@@ -3741,10 +3819,11 @@ function fieldHTML(f, v){
     var hn=num(v)||0;
     body='<div class="heartsel" data-k="'+f.k+'" data-v="'+hn+'">';
     for(var i=1;i<=(f.max||5);i++){
-      var leftOn=(hn>=i-0.5)?'on':''; var rightOn=(hn>=i)?'on':'';
+      var cls = (hn>=i)?'on':((hn>=i-0.5)?'half':'');
       body+='<span class="heart-btn" data-i="'+i+'">'+
-        '<button type="button" class="half left '+leftOn+'" data-i="'+(i-0.5)+'" aria-label="'+(i-0.5)+' 颗心">❤</button>'+
-        '<button type="button" class="half right '+rightOn+'" data-i="'+i+'" aria-label="'+i+' 颗心">❤</button>'+
+        '<span class="hheart '+cls+'">❤</span>'+
+        '<button type="button" class="hit left" data-i="'+(i-0.5)+'" aria-label="'+(i-0.5)+' 颗心"></button>'+
+        '<button type="button" class="hit right" data-i="'+i+'" aria-label="'+i+' 颗心"></button>'+
         '</span>';
     }
     body+='</div>';
@@ -4823,10 +4902,10 @@ function loadTravelMarkers(){
   rows.forEach(function(r){
     var lat=Number(r['纬度']), lon=Number(r['经度']);
     if (!(lat && lon)){
-      var c=CITY_LOOKUP[String(r['地区']||r['地点']||'').trim()];
+      var c=CITY_LOOKUP[String(r['地点']||r['地区']||'').trim()];
       if(c){ lat=c[0]; lon=c[1]; } else return;
     }
-    out.push({lat:lat, lon:lon, name:r['地区']||r['地点']||'', status:r['状态']||'', id:r._id});
+    out.push({lat:lat, lon:lon, name:r['地点']||r['地区']||'', status:r['状态']||'', id:r._id});
   });
   return out;
 }
@@ -4860,9 +4939,10 @@ var GEOCODE_ALIAS = {
   '班夫':'Banff','班夫国家公园':'Banff National Park','雷克雅未克':'Reykjavik','极光':'Aurora',
   '撒哈拉':'Sahara','撒哈拉沙漠':'Sahara Desert','纳米布沙漠':'Namib Desert'
 };
-/* 地理编码数据源：Open-Meteo Geocoding（基于 GeoNames，免费、无需 Key、浏览器可跨域、中文地名覆盖好）
- * 替换旧版 Nominatim 自由文本搜索——后者中文地标（如「黄山」）常被匹配到错误省份/同名村镇。
- * 返回 results[]：{ name, latitude, longitude, country, country_code, admin1 }，按相关度排序，[0] 通常即规范地名。
+/* 地理编码数据源：国外用 Nominatim（OpenStreetMap），国内用高德；Nominatim 无结果时 fallback 到 Open-Meteo。
+ * Nominatim 对境外地点（外文 / 中文外文混合）更准，免费、无需 Key、浏览器可跨域。
+ * Open-Meteo Geocoding（基于 GeoNames）作为 fallback，中文地名覆盖好。
+ * 返回 results[]：{ name, latitude, longitude, country, country_code, admin1 }，按相关度排序。
  * 多结果时按「名称匹配 + 国家码匹配」精选，避免同名多地误钉。 */
 var GEOCODE_COUNTRY_ISO = {
   '中国':'CN','日本':'JP','韩国':'KR','朝鲜':'KP','蒙古':'MN','越南':'VN','老挝':'LA','柬埔寨':'KH',
@@ -4874,7 +4954,41 @@ var GEOCODE_COUNTRY_ISO = {
   '波兰':'PL','匈牙利':'HU','挪威':'NO','瑞典':'SE','丹麦':'DK','芬兰':'FI','冰岛':'IS',
   '澳大利亚':'AU','新西兰':'NZ','斐济':'FJ','埃及':'EG','南非':'ZA','摩洛哥':'MA','肯尼亚':'KE','坦桑尼亚':'TZ'
 };
-function _geocodeOne(q, preferName, preferCC, cb){
+/* 用 Nominatim 把 query 转成坐标；返回与 _geocodeOpenMeteo 兼容的 {lat,lon} */
+function _geocodeNominatim(q, preferName, preferCC, cb){
+  var url = 'https://nominatim.openstreetmap.org/search?format=json&q=' + encodeURIComponent(q)
+          + '&limit=10&accept-language=zh-CN,en';
+  try {
+    var ctrl = ('AbortController' in window) ? new AbortController() : null;
+    var timer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 7000);
+    fetch(url, { signal: ctrl ? ctrl.signal : undefined })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(arr){
+        clearTimeout(timer);
+        if (!Array.isArray(arr) || !arr.length){ cb(null); return; }
+        function nameOk(n){ return !preferName || n === preferName || (n||'').indexOf(preferName) >= 0 || preferName.indexOf(n||'') >= 0; }
+        function ccOk(it){
+          var cc = (it && it.address && it.address.country_code) || '';
+          return !preferCC || cc.toUpperCase() === preferCC.toUpperCase();
+        }
+        var pick = null;
+        /* 1) 名称 + 国家 */
+        for (var i=0;i<arr.length && !pick;i++){
+          if (nameOk(arr[i].display_name) && ccOk(arr[i])) pick = arr[i];
+        }
+        /* 2) 仅名称 */
+        if (!pick && preferName){
+          for (var j=0;j<arr.length && !pick;j++){ if (nameOk(arr[j].display_name)) pick = arr[j]; }
+        }
+        if (pick && pick.lat != null && pick.lon != null){
+          cb({ lat: parseFloat(pick.lat), lon: parseFloat(pick.lon) });
+        } else cb(null);
+      })
+      .catch(function(){ clearTimeout(timer); cb(null); });
+  } catch(e){ cb(null); }
+}
+/* Open-Meteo Geocoding 作为 fallback */
+function _geocodeOpenMeteo(q, preferName, preferCC, cb){
   var url = 'https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(q)
           + '&count=10&language=zh&format=json';
   try {
@@ -4886,20 +5000,15 @@ function _geocodeOne(q, preferName, preferCC, cb){
         clearTimeout(timer);
         var arr = (js && Array.isArray(js.results)) ? js.results : [];
         if (!arr.length){ cb(null); return; }
-        /* 名称匹配：双向包含（用户输入「黄山风景区」也能命中 API 返回的「黄山」） */
         function nameOk(n){ return !preferName || n === preferName || (n||'').indexOf(preferName) >= 0 || preferName.indexOf(n||'') >= 0; }
         var pick = null;
-        /* 1) 名称匹配 + 国家匹配（最精确） */
         for (var i=0;i<arr.length && !pick;i++){
           var it = arr[i];
           if (nameOk(it.name) && (!preferCC || it.country_code === preferCC)) pick = it;
         }
-        /* 2) 仅名称匹配（放宽国家） */
         if (!pick && preferName){
           for (var j=0;j<arr.length && !pick;j++){ if (nameOk(arr[j].name)) pick = arr[j]; }
         }
-        /* 3) 没有名称命中的结果 → 放弃本 query（cb(null)），交给上层尝试下一个 query；
-         *    绝不盲取第一个，避免同名错地（如 Dolomites 误钉到美国水坝）。 */
         if (pick && pick.latitude != null && pick.longitude != null){
           cb({ lat: parseFloat(pick.latitude), lon: parseFloat(pick.longitude) });
         } else cb(null);
@@ -4908,14 +5017,14 @@ function _geocodeOne(q, preferName, preferCC, cb){
   } catch(e){ cb(null); }
 }
 function geocodeTravel(vals, cb){
-  var loc = String(vals['地区']||vals['地点']||'').trim();
+  var loc = String(vals['地点']||vals['地区']||'').trim();
   var country = String(vals['国家']||vals['国家地区']||'').trim();
   if (!loc){ cb(null); return; }
-  var cc = GEOCODE_COUNTRY_ISO[country] || null;   /* 国家码，用于服务端/客户端过滤同名多地 */
+  var cc = GEOCODE_COUNTRY_ISO[country] || null;   /* 国家码，用于过滤同名多地 */
 
   var queries = [];
   function add(q){ if (q && queries.indexOf(q)<0) queries.push(q); }
-  /* 1) 中文原词（优先带国家） */
+  /* 1) 地点 + 国家 */
   add(country ? (loc + ', ' + country) : loc);
   /* 2) 仅地点 */
   add(loc);
@@ -4932,9 +5041,13 @@ function geocodeTravel(vals, cb){
   function next(){
     if (i >= queries.length){ cb(null); return; }
     var q = queries[i++];
-    _geocodeOne(q, loc, cc, function(coords){
+    /* 先用 Nominatim（国外更准），无结果再 fallback Open-Meteo */
+    _geocodeNominatim(q, loc, cc, function(coords){
       if (coords) cb(coords);
-      else next();
+      else _geocodeOpenMeteo(q, loc, cc, function(coords2){
+        if (coords2) cb(coords2);
+        else next();
+      });
     });
   }
   next();
