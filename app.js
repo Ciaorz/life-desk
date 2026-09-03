@@ -1096,6 +1096,14 @@ function addDataTools(){
       '<button type="button" id="ghReadme" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">生成说明文件</button>' +
       '<button type="button" id="ghClose" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">关闭</button>' +
     '</div>' +
+    '<label style="display:block;margin:10px 0 4px">高德地图 Key（打卡点地图用，仅存本机）'+
+      '<input id="amapKey" type="text" autocomplete="off" placeholder="粘贴高德 Web端 Key" '+
+      'style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    '<label style="display:block;margin:4px 0">高德安全密钥（securityJsCode）'+
+      '<input id="amapSecret" type="text" autocomplete="off" placeholder="粘贴安全密钥" '+
+      'style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc">'+
+      '<span style="font-size:10px;color:#888">到高德开放平台申请，服务平台选「Web端(JS API)」</span></label>' +
+    '</div>' +
     '<div id="ghHint" style="margin-top:8px;color:#666;font-size:11px;line-height:1.5"></div>';
   p.style.cssText = 'display:none;position:fixed;right:14px;bottom:60px;z-index:10000;width:300px;background:#ffffff;color:#111;padding:14px;border:1px solid #d8d2c7;border-radius:8px;font:12px/1.5 var(--sans);box-shadow:0 10px 30px rgba(0,0,0,.18)';
   document.body.appendChild(p);
@@ -1103,12 +1111,21 @@ function addDataTools(){
   $('ghOwner').value = cfg.owner || 'Ciaorz'; $('ghRepo').value = cfg.repo || 'life-desk';
   $('ghBranch').value = cfg.branch || 'main'; $('ghPath').value = cfg.path || 'data/lifedesk.json';
   $('ghToken').value = cfg.token || '';
+  try {
+    $('amapKey').value = localStorage.getItem('lifedesk_amap_key') || '';
+    $('amapSecret').value = localStorage.getItem('lifedesk_amap_secret') || '';
+  } catch(e){}
   $('ghClose').onclick = function(){ p.style.display = 'none'; };
   $('ghSave').onclick = function(){
     var c = { owner:$('ghOwner').value.trim(), repo:$('ghRepo').value.trim(), branch:$('ghBranch').value.trim()||'main', path:$('ghPath').value.trim()||'data/lifedesk.json', token:$('ghToken').value.trim() };
     if (!c.owner || !c.repo){ $('ghHint').textContent = '请填写 owner 和 repo'; return; }
     $('ghHint').textContent = '连接中…';
     try { localStorage.setItem('lifedesk_gh', JSON.stringify(c)); } catch(e){}
+    try {
+      var k1=$('amapKey'), k2=$('amapSecret');
+      if (k1) localStorage.setItem('lifedesk_amap_key', k1.value.trim());
+      if (k2) localStorage.setItem('lifedesk_amap_secret', k2.value.trim());
+    } catch(e){}
     GH = c; if (MODE !== 'localfile') MODE = 'gh'; _ghCache = null; _ghSha = null;
     ghGetAll(function(all, sha, err){
       if (all === null){
@@ -1354,7 +1371,7 @@ var MODS = {
       {k:'封面',t:'img',ph:'海报/封套图（可选）',full:1},
       {k:'短评',t:'textarea',ph:'一句话就够',full:1}
     ]},
-  travel: { key:'travel', db:DB.travel, name:'旅行目的地', icon:'旅', eyebrow:'Where to',
+  travel: { key:'travel', db:DB.travel, name:'遐方坞', icon:'旅', eyebrow:'Where to',
     desc:'想去的地方先记下来，走着走着就到了。', addLabel:'添加目的地',
     fields:[
       {k:'地点',t:'text',req:1,ph:'京都 / 冰岛 / 某个小镇'},
@@ -1372,7 +1389,7 @@ var MODS = {
       {k:'封面',t:'img',ph:'一张照片的链接（可选）',full:1},
       {k:'备注',t:'textarea',ph:'想做的事、要订的店、要带的装备…',full:1}
     ]},
-  study: { key:'study', db:DB.study, name:'书房', icon:'学', eyebrow:'Learning',
+  study: { key:'study', db:DB.study, name:'文渊斋', icon:'学', eyebrow:'Learning',
     desc:'每天一点点，比某天很多很多有用。', addLabel:'添加计划',
     fields:[
       {k:'计划',t:'text',req:1,ph:'想学的东西',full:1},
@@ -1385,7 +1402,7 @@ var MODS = {
       {k:'备注',t:'textarea',ph:'用什么教材、跟哪个课',full:1},
       {k:'封面',t:'img',ph:'一张照片的链接（可选）',full:1}
     ]},
-  food: { key:'food', db:DB.food, name:'美食记录', icon:'食', eyebrow:'Taste',
+  food: { key:'food', db:DB.food, name:'馐馔坊', icon:'食', eyebrow:'Taste',
     desc:'好吃的东西值得被记住第二次。', addLabel:'记一笔',
     fields:[
       {k:'名称',t:'text',req:1,ph:'店名 / 一道菜'},
@@ -1401,7 +1418,7 @@ var MODS = {
       {k:'短评',t:'textarea',ph:'好吃在哪',full:1},
       {k:'菜谱',t:'textarea',ph:'做法 / 配方 / 笔记',full:1}
     ]},
-  idea: { key:'idea', db:DB.idea, name:'灵感捕捉', icon:'感', eyebrow:'Sparks',
+  idea: { key:'idea', db:DB.idea, name:'灵思阁', icon:'感', eyebrow:'Sparks',
     desc:'想法来得快，走得也快，先接住。', addLabel:'记一条',
     fields:[
       {k:'内容',t:'textarea',req:1,ph:'想到什么就写下来',full:1},
@@ -2062,15 +2079,235 @@ function renderIpDetail(){
   return h+'</section>';
 }
 
+/* ---------- 打卡点 ----------
+   每个目的地（景区 / 城市）下可以有若干打卡点，存在该条记录的「打卡点」字段里：
+   [{名称, 纬度, 经度, 打卡时间, 备注}] */
+function checkinsOf(row){
+  var a = row && row['打卡点'];
+  return Array.isArray(a) ? a : [];
+}
+function checkinTotal(){
+  var n = 0;
+  ((store.travel && store.travel.rows) || []).forEach(function(r){ n += checkinsOf(r).length; });
+  return n;
+}
+/* 打卡点入口：先选景区 / 城市 */
+/* ============================================================
+   坐标系转换：WGS-84 ↔ GCJ-02（火星坐标）
+   ------------------------------------------------------------
+   项目里所有经纬度都是 WGS-84（Open-Meteo 地理编码、3D 地球点选都用它）。
+   高德 / 腾讯地图用的是 GCJ-02，两者在国内相差约 300~600 米。
+   不转换的话，打卡点会飘到几百米外。
+   显示：WGS-84 → GCJ-02；点地图存回：GCJ-02 → WGS-84。
+   ============================================================ */
+var _GEO_PI = 3.1415926535897932384626;
+var _GEO_A  = 6378245.0;                    /* 克拉索夫斯基椭球长半轴 */
+var _GEO_EE = 0.00669342162296594323;       /* 偏心率平方 */
+function outOfChina(lat, lon){
+  return (lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271);
+}
+function _tLat(x, y){
+  var ret = -100.0 + 2.0*x + 3.0*y + 0.2*y*y + 0.1*x*y + 0.2*Math.sqrt(Math.abs(x));
+  ret += (20.0*Math.sin(6.0*x*_GEO_PI) + 20.0*Math.sin(2.0*x*_GEO_PI)) * 2.0/3.0;
+  ret += (20.0*Math.sin(y*_GEO_PI) + 40.0*Math.sin(y/3.0*_GEO_PI)) * 2.0/3.0;
+  ret += (160.0*Math.sin(y/12.0*_GEO_PI) + 320*Math.sin(y*_GEO_PI/30.0)) * 2.0/3.0;
+  return ret;
+}
+function _tLon(x, y){
+  var ret = 300.0 + x + 2.0*y + 0.1*x*x + 0.1*x*y + 0.1*Math.sqrt(Math.abs(x));
+  ret += (20.0*Math.sin(6.0*x*_GEO_PI) + 20.0*Math.sin(2.0*x*_GEO_PI)) * 2.0/3.0;
+  ret += (20.0*Math.sin(x*_GEO_PI) + 40.0*Math.sin(x/3.0*_GEO_PI)) * 2.0/3.0;
+  ret += (150.0*Math.sin(x/12.0*_GEO_PI) + 300.0*Math.sin(x/30.0*_GEO_PI)) * 2.0/3.0;
+  return ret;
+}
+function wgs84ToGcj02(lat, lon){
+  lat = Number(lat); lon = Number(lon);
+  if (!isFinite(lat) || !isFinite(lon) || outOfChina(lat, lon)) return { lat: lat, lon: lon };
+  var dLat = _tLat(lon - 105.0, lat - 35.0);
+  var dLon = _tLon(lon - 105.0, lat - 35.0);
+  var radLat = lat / 180.0 * _GEO_PI;
+  var magic = Math.sin(radLat); magic = 1 - _GEO_EE * magic * magic;
+  var sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180.0) / ((_GEO_A * (1 - _GEO_EE)) / (magic * sqrtMagic) * _GEO_PI);
+  dLon = (dLon * 180.0) / (_GEO_A / sqrtMagic * Math.cos(radLat) * _GEO_PI);
+  return { lat: lat + dLat, lon: lon + dLon };
+}
+/* 反解：迭代逼近，3~5 次即可到亚米级 */
+function gcj02ToWgs84(lat, lon){
+  lat = Number(lat); lon = Number(lon);
+  if (!isFinite(lat) || !isFinite(lon) || outOfChina(lat, lon)) return { lat: lat, lon: lon };
+  var wLat = lat, wLon = lon;
+  for (var i = 0; i < 6; i++){
+    var g = wgs84ToGcj02(wLat, wLon);
+    var dLat = g.lat - lat, dLon = g.lon - lon;
+    if (Math.abs(dLat) < 1e-7 && Math.abs(dLon) < 1e-7) break;
+    wLat -= dLat; wLon -= dLon;
+  }
+  return { lat: wLat, lon: wLon };
+}
+
+/* ============================================================
+   打卡地图：高德地图 JS API 2.0（需要 Key + 安全密钥，存 localStorage）
+   ============================================================ */
+var CKMAP = null;
+function stopCheckinMap(){ CKMAP = null; }
+function amapKey(){    try { return localStorage.getItem('lifedesk_amap_key') || ''; } catch(e){ return ''; } }
+function amapSecret(){ try { return localStorage.getItem('lifedesk_amap_secret') || ''; } catch(e){ return ''; } }
+
+/* 动态加载高德 SDK（带队列，多次调用只加载一次） */
+var _amapQueue = null;
+function loadAMap(key, secret, cb){
+  if (window.AMap && window.AMap.Map){ cb(true); return; }
+  if (_amapQueue){ _amapQueue.push(cb); return; }
+  _amapQueue = [cb];
+  /* 2.0 起必须先注入安全密钥，否则地图不显示 */
+  window._AMapSecurityConfig = { securityJsCode: secret || '' };
+  var sc = document.createElement('script');
+  sc.src = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(key);
+  sc.onload = function(){
+    var q = _amapQueue; _amapQueue = null;
+    (q || []).forEach(function(f){ try { f(true); } catch(e){ f(false); } });
+  };
+  sc.onerror = function(){
+    var q = _amapQueue; _amapQueue = null;
+    (q || []).forEach(function(f){ try { f(false); } catch(e){} });
+  };
+  document.head.appendChild(sc);
+}
+/* 往某条目的地记录里加一个打卡点（存的仍是 WGS-84，与地球保持一致） */
+function addCheckin(row, lat, lon, name){
+  if (!row) return;
+  if (!Array.isArray(row['打卡点'])) row['打卡点'] = [];
+  row['打卡点'].push({
+    '名称': name || ('打卡点 ' + (row['打卡点'].length + 1)),
+    '纬度': Math.round(lat * 100000) / 100000,
+    '经度': Math.round(lon * 100000) / 100000,
+    '打卡时间': today()
+  });
+  if (MODE === 'localfile'){ queueLocalSave(); } else { persistAll(); }
+  toast('已打卡：' + (name || '新打卡点'));
+  render();
+}
+function initCheckinMap(){
+  stopCheckinMap();
+  var wrap = document.querySelector('.checkin-wrap'); if (!wrap) return;
+  var tip = wrap.querySelector('.checkin-tip');
+  var cv = document.getElementById('checkinMap'); if (!cv) return;
+  var rows = (store.travel && store.travel.rows) || [];
+  var row = rows.filter(function(r){ return String(r._id) === String(ui.travel.checkinRow); })[0];
+  if (!row){ return; }
+  var key = amapKey();
+  if (!key){
+    if (tip) tip.innerHTML = '还没配置高德地图 Key。<br>'+
+      '到右下角「⚙ 同步设置」里填入 Key 和安全密钥保存后，回来就能在地图上打卡了。';
+    return;
+  }
+  if (tip) tip.textContent = '地图加载中…';
+  loadAMap(key, amapSecret(), function(ok){
+    if (!ok){
+      if (tip) tip.innerHTML = '高德地图加载失败。<br>检查 Key / 安全密钥是否正确，以及当前域名是否在白名单里。';
+      return;
+    }
+    try {
+      var lat = Number(row['纬度']), lon = Number(row['经度']);
+      var has = isFinite(lat) && isFinite(lon) && (lat || lon);
+      var gc = has ? wgs84ToGcj02(lat, lon) : { lat: 39.915, lon: 116.404 };
+      var map = new AMap.Map('checkinMap', {
+        zoom: 15,
+        center: [gc.lon, gc.lat],
+        viewMode: '2D'
+      });
+      map.addControl(new AMap.Scale());
+      map.addControl(new AMap.ToolBar({ position: { right: '16px', bottom: '48px' } }));
+      if (tip) tip.textContent = '在地图上点一下，就在那里打卡';
+      CKMAP = map;
+      /* 已有打卡点：WGS-84 → GCJ-02 后显示 */
+      checkinsOf(row).forEach(function(c, i){
+        var g2 = wgs84ToGcj02(Number(c['纬度']), Number(c['经度']));
+        var name = String(c['名称'] || ('打卡点 ' + (i + 1)));
+        var mk = new AMap.Marker({ position: [g2.lon, g2.lat], title: name });
+        mk.setLabel({ content: name, direction: 'top' });
+        map.add(mk);
+      });
+      /* 点地图打卡：拿到的 GCJ-02 要还原成 WGS-84 再存 */
+      map.on('click', function(e){
+        if (!e || !e.lnglat) return;
+        var name = window.prompt('给这个打卡点起个名字（可留空）');
+        if (name === null) return;
+        var w = gcj02ToWgs84(e.lnglat.lat, e.lnglat.lng);
+        addCheckin(row, w.lat, w.lon, (name || '').trim());
+      });
+    } catch(e){
+      console.error('高德地图初始化失败', e);
+      if (tip) tip.innerHTML = '地图初始化失败：' + ((e && e.message) || e);
+    }
+  });
+}
+
+function renderCheckinList(){
+  var rows = (store.travel && store.travel.rows) || [];
+  var h = '<div class="strip">'+stripHTML('travel')+'</div>';
+  h += '<section class="panel"><div class="panel-head"><div><h2>打卡点</h2>'+
+       '<div class="hint">选一个景区或城市，进去打卡具体地点</div></div>'+
+       '<button class="btn ghost sm" data-act="checkinback">← 返回</button></div>';
+  if (!rows.length){
+    h += emptyHTML('还没有目的地','先添加一个想去 / 去过的地方，就能在里面打卡了。');
+    return h + '</section>';
+  }
+  h += '<div class="trips">';
+  rows.forEach(function(r){
+    var n = checkinsOf(r).length;
+    h += '<div class="trip" data-act="checkinopen" data-id="'+esc(r._id)+'">'+
+      '<div class="top"><h4>'+esc(r['地点']||'未命名')+'</h4>'+statusPill(r['状态'])+'</div>'+
+      '<div class="where">'+esc(r['国家地区']||'')+'</div>'+
+      '<div class="meta"><span>已打卡 <b>'+n+'</b> 处</span></div>'+
+      '</div>';
+  });
+  h += '</div></section>';
+  return h;
+}
+/* 某个目的地的打卡地图 + 打卡点清单 */
+function renderCheckinMap(id){
+  var rows = (store.travel && store.travel.rows) || [];
+  var row = rows.filter(function(r){ return String(r._id)===String(id); })[0];
+  if (!row) return renderCheckinList();
+  var list = checkinsOf(row);
+  var h = '<div class="strip">'+stripHTML('travel')+'</div>';
+  h += '<section class="panel"><div class="panel-head"><div><h2>'+esc(row['地点']||'目的地')+' · 打卡点</h2>'+
+       '<div class="hint">在地图上点一下，就在那里打个卡</div></div>'+
+       '<button class="btn ghost sm" data-act="checkinback">← 返回</button></div>';
+  h += '<div class="checkin-wrap">'+
+       '<canvas id="checkinMap" class="checkin-map"></canvas>'+
+       '<div class="checkin-tip">地图加载中…</div>'+
+       '</div>';
+  h += '<div class="checkin-list">';
+  if (!list.length){
+    h += '<div class="hint" style="padding:10px 0">还没有打卡点，在地图上点一下试试。</div>';
+  } else {
+    list.forEach(function(c, i){
+      h += '<div class="checkin-row">'+
+        '<b>'+esc(c['名称']||('打卡点 '+(i+1)))+'</b>'+
+        '<span>'+esc(c['打卡时间']||'')+'</span>'+
+        '<button class="btn ghost sm" data-act="checkindel" data-i="'+i+'">删除</button>'+
+        '</div>';
+    });
+  }
+  h += '</div></section>';
+  return h;
+}
+
 function renderTravel(){
   var f=ui.travel, rows=filtered('travel'), s=store.travel;
+  /* 打卡点子页面优先 */
+  if (f.checkinRow) return renderCheckinMap(f.checkinRow);
+  if (f.checkin) return renderCheckinList();
   var h='<div class="strip">'+stripHTML('travel')+'</div>';
   var cnt={ '想去':0,'去过':0 };
   s.rows.forEach(function(r){ if(cnt[r['状态']]!=null) cnt[r['状态']]++; });
   h += '<section class="panel"><div class="statgrid">'+
     '<div class="stat"><u>想去</u><b>'+cnt['想去']+'</b><i>处</i></div>'+
     '<div class="stat"><u>去过</u><b>'+cnt['去过']+'</b><i>处</i></div>'+
-    '<div class="stat"><u>心愿里的天数</u><b>'+(function(){var t=0;s.rows.forEach(function(r){t+=num(r['预计天数']);});return t;})()+'</b><i>天</i></div>'+
+    '<div class="stat clickable" data-act="checkin" title="进入打卡点"><u>打卡点</u><b>'+checkinTotal()+'</b><i>个</i></div>'+
     '</div></section>';
   h += '<section class="earth-hero" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div id="globeSlot"></div></section>';
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div class="panel-head"><div><h2>目的地</h2>'+
@@ -2267,6 +2504,7 @@ function render(){
   if (key==='study'){ /* 书房暂无常驻 3D 场景 */ }
   if (key==='idea'){ initFireworks(); } else { stopFireworks(); }
   if (key==='food'){ initFoodMap(); } else { stopFoodMap(); }
+  if (key==='travel' && ui.travel && ui.travel.checkinRow){ initCheckinMap(); } else { stopCheckinMap(); }
   if (key==='collection'){ applyMuseumLayout(); }
 
   bindStage();
@@ -2348,6 +2586,19 @@ document.addEventListener('click', function(ev){
   if (act==='reload'){ reloadOne(key); return; }
   if (act==='reloadall'){ loadAll(); toast('正在重新拉取线上数据'); return; }
   if (act==='brand'){ openBrand(); return; }
+  if (act==='checkin'){ ui.travel.checkin=true; ui.travel.checkinRow=null; window.scrollTo(0,0); render(); return; }
+  if (act==='checkinback'){ ui.travel.checkinRow=null; ui.travel.checkin=false; render(); return; }
+  if (act==='checkinopen'){ ui.travel.checkinRow=node.getAttribute('data-id'); window.scrollTo(0,0); render(); return; }
+  if (act==='checkindel'){
+    var cid=ui.travel.checkinRow, cidx=parseInt(node.getAttribute('data-i'),10);
+    var crow=((store.travel&&store.travel.rows)||[]).filter(function(r){return String(r._id)===String(cid);})[0];
+    if (crow && Array.isArray(crow['打卡点']) && cidx>=0 && cidx<crow['打卡点'].length){
+      crow['打卡点'].splice(cidx,1);
+      if (MODE==='localfile'){ queueLocalSave(); } else { persistAll(); }
+      toast('已删除该打卡点'); render();
+    }
+    return;
+  }
   if (act==='view'){ ui[ui.view].view=node.getAttribute('data-v'); render(); return; }
   if (act==='cmode'){ ui.collection.mode=node.getAttribute('data-v'); ui.collection.ipId=null; ui.collection.seriesId=null; render(); return; }
   if (act==='ipopen'){ ui.collection.ipId=node.getAttribute('data-id'); render(); return; }
