@@ -1528,6 +1528,17 @@ input.search{margin-bottom:12px}
 .ck-map .amap-container{height:100%!important}
 .ck-tip{font-size:12.5px;line-height:1.5;color:#5b6b86;min-height:18px;margin:-6px 0 10px}
 .ck-err{color:#e5484d;font-size:13px;min-height:18px;margin:2px 0 6px}
+/* 打卡点列表（带封面） */
+.cklist{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+.ckitem{display:flex;gap:14px;align-items:flex-start;padding:12px;border:1px solid var(--line,#e7e2d6);border-radius:14px;background:#fff}
+.ckcov{width:96px;height:96px;flex:0 0 96px;border-radius:10px;overflow:hidden;background:#f0ece2;
+  display:flex;align-items:center;justify-content:center;color:#a99f8c;font-size:12px;text-align:center}
+.ckcov img{width:100%;height:100%;object-fit:cover;display:block}
+.ckbody{flex:1;min-width:0}
+.ckbody>b{font-size:15px;color:#2a2419;display:block;margin-bottom:4px}
+.ckmeta{display:flex;flex-wrap:wrap;gap:10px;font-size:12.5px;color:#7a8aa0;margin-bottom:6px}
+.cknote{font-size:13px;line-height:1.6;color:#4a463a;white-space:pre-wrap}
+.ckitem .btn{flex:0 0 auto;align-self:center}
 /* 高德自定义 HTML 标记点（地点名字 / 城市标签） */
 .mk-dot{position:relative;display:inline-flex;align-items:center;justify-content:center;background:var(--mc,#4a90d9);
   color:#fff;font-size:11px;line-height:1;padding:4px 9px;border-radius:11px;white-space:nowrap;

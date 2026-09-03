@@ -1118,6 +1118,10 @@ function addDataTools(){
       '<input id="amapSecret" type="text" autocomplete="off" placeholder="粘贴安全密钥" '+
       'style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc">'+
       '<span style="font-size:10px;color:#888">到高德开放平台申请，服务平台选「Web端(JS API)」</span></label>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">'+
+      '<button type="button" id="amapConnect" style="padding:7px 14px;border:0;border-radius:7px;background:#3b6fd4;color:#fff;cursor:pointer;font-size:12px">接入地图</button>'+
+      '<span id="amapStatus" style="font-size:11px;color:#888">填好 Key 和密钥后点这里确认</span>'+
+    '</div>' +
     '</div>' +
     '<div id="ghHint" style="margin-top:8px;color:#666;font-size:11px;line-height:1.5"></div>';
   p.style.cssText = 'display:none;position:fixed;right:14px;bottom:60px;z-index:10000;width:300px;background:#ffffff;color:#111;padding:14px;border:1px solid #d8d2c7;border-radius:8px;font:12px/1.5 var(--sans);box-shadow:0 10px 30px rgba(0,0,0,.18)';
@@ -1131,6 +1135,32 @@ function addDataTools(){
     $('amapSecret').value = localStorage.getItem('lifedesk_amap_secret') || '';
   } catch(e){}
   $('ghClose').onclick = function(){ p.style.display = 'none'; };
+  /* 高德地图：保存 Key / 安全密钥，并真正测试能否接入（不再只是把两行字写进输入框） */
+  $('amapConnect').onclick = function(){
+    var k1=$('amapKey'), k2=$('amapSecret'), st=$('amapStatus');
+    var key=(k1?k1.value.trim():''), sec=(k2?k2.value.trim():'');
+    if (!key || !sec){ st.textContent='请先把 Key 和安全密钥都填上'; st.style.color='#e5484d'; return; }
+    try { localStorage.setItem('lifedesk_amap_key', key); localStorage.setItem('lifedesk_amap_secret', sec); } catch(e){}
+    st.textContent='正在接入高德地图…'; st.style.color='#666';
+    /* 若之前已经加载过旧 AMap 实例，先清掉让它用新 Key 重新加载 */
+    if (window.AMap && window.AMap.Map) window.AMap = undefined;
+    loadAMap(key, sec, function(ok){
+      if (!ok){
+        st.textContent='✗ 接入失败：Key 或安全密钥有误，或当前域名没加进高德白名单';
+        st.style.color='#e5484d';
+        return;
+      }
+      /* 再确认地图组件（Scale/ToolBar/PlaceSearch 插件）确实可用 */
+      if (typeof AMap.Scale !== 'function' || typeof AMap.PlaceSearch !== 'function'){
+        AMap.plugin(['AMap.Scale','AMap.ToolBar','AMap.PlaceSearch'], function(){
+          if (typeof AMap.Scale === 'function'){ st.textContent='✓ 已接入，地图组件就绪'; st.style.color='#3bb273'; }
+          else { st.textContent='✗ 地图组件加载失败，检查网络后重试'; st.style.color='#e5484d'; }
+        });
+        return;
+      }
+      st.textContent='✓ 已成功接入高德地图'; st.style.color='#3bb273';
+    });
+  };
   $('ghSave').onclick = function(){
     var c = { owner:$('ghOwner').value.trim(), repo:$('ghRepo').value.trim(), branch:$('ghBranch').value.trim()||'main', path:$('ghPath').value.trim()||'data/lifedesk.json', token:$('ghToken').value.trim() };
     if (!c.owner || !c.repo){ $('ghHint').textContent = '请填写 owner 和 repo'; return; }
@@ -2161,7 +2191,10 @@ function loadAMap(key, secret, cb){
   /* 2.0 起必须先注入安全密钥，否则地图不显示 */
   window._AMapSecurityConfig = { securityJsCode: secret || '' };
   var sc = document.createElement('script');
-  sc.src = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(key);
+  /* 2.0 起 Scale / ToolBar / PlaceSearch 都是「插件」，必须在 URL 里用 plugin= 显式加载，
+     否则 new AMap.Scale() 会报「AMap.Scale is not a constructor」 */
+  sc.src = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(key) +
+           '&plugin=AMap.Scale,AMap.ToolBar,AMap.PlaceSearch';
   sc.onload = function(){
     var q = _amapQueue; _amapQueue = null;
     (q || []).forEach(function(f){ try { f(true); } catch(e){ f(false); } });
@@ -2194,7 +2227,9 @@ function renderCheckinNew(){
        '  <div class="f"><label>地点名字 *</label><input id="ckName" type="text" autocomplete="off" placeholder="如 西湖断桥"></div>'+
        '  <div class="f"><label>日期</label><input id="ckDate" type="date" value="'+t+'"></div>'+
        '  <div class="f"><label>城市 / 景区</label><input id="ckCity" type="text" autocomplete="off" placeholder="搜索后自动填，也可手填"></div>'+
-       '  <div class="f"><label>封面图片</label><input id="ckCover" type="text" autocomplete="off" placeholder="图片链接（可选）"></div>'+
+       '  <div class="f"><label>封面图片</label><div class="imgrow"><input id="ckCover" type="text" autocomplete="off" placeholder="图片链接，或点右侧上传（可选）">'+
+       '<label class="btn ghost sm upl" for="ckCoverFile">上传<input id="ckCoverFile" type="file" accept="image/*" hidden></label></div>'+
+       '<span class="imgnote">上传的图会先在浏览器里压到长边 800px 再存</span></div>'+
        '</div>'+
        '<div class="f" style="margin-top:8px"><label>内容</label><textarea id="ckContent" placeholder="当时的心情、发生了什么…"></textarea></div>'+
        '<div id="ckErr" class="ck-err"></div>'+
@@ -2210,6 +2245,16 @@ function attachCkMap(){
   stopCkMap();
   var cv=document.getElementById('ckMap'); if(!cv) return;
   var tip=document.getElementById('ckTip');
+  /* 封面图片：支持本地文件上传（压到 800px 后存为 data URL） */
+  var cfile=document.getElementById('ckCoverFile');
+  if (cfile){ cfile.onchange=function(){
+    var file=cfile.files && cfile.files[0]; if(!file) return;
+    compressImage(file, 800, function(dataUrl){
+      if(!dataUrl){ if(tip) tip.textContent='这张图读不出来，换个文件试试'; return; }
+      var ci=document.getElementById('ckCover'); if(ci) ci.value=dataUrl;
+      if(tip) tip.textContent='封面已选好：'+file.name;
+    });
+  }; }
   var key=amapKey();
   if(!key){ if(tip) tip.textContent='还没配置高德地图 Key：到右下角「⚙ 同步设置」填入 Key 和安全密钥后才能用地图。'; return; }
   loadAMap(key, amapSecret(), function(ok){
@@ -2363,6 +2408,28 @@ function renderTravel(){
       (r['备注']?'<div class="note">'+esc(r['备注'])+'</div>':'')+
       '</div>';
   }).join('')+'</div>';
+  /* 打卡点列表：封面 / 名字 / 日期 / 城市 / 内容，可在地图上看、也能删 */
+  var ckrows=(store.checkin && store.checkin.rows)||[];
+  if (ckrows.length){
+    h += '<section class="panel"><div class="panel-head"><div><h2>打卡点</h2>'+
+         '<div class="hint">封面跟着显示在地图「地图」模式里</div></div></div>'+
+         '<div class="cklist">';
+    ckrows.forEach(function(r){
+      var cov=resolveImgUrl(r['封面图片']||'');
+      h += '<div class="ckitem">'+
+        '<div class="ckcov">'+(cov?'<img src="'+esc(cov)+'" alt="封面" onerror="this.style.display=\'none\'">':'无封面')+'</div>'+
+        '<div class="ckbody"><b>'+esc(r['地点名字']||'未命名')+'</b>'+
+          '<div class="ckmeta">'+
+            (r['城市景区']?'<span>'+esc(r['城市景区'])+'</span>':'')+
+            (r['日期']?'<span>'+esc(dstr(r['日期']))+'</span>':'')+
+          '</div>'+
+          (r['内容']?'<div class="cknote">'+esc(r['内容'])+'</div>':'')+
+        '</div>'+
+        '<button class="btn ghost sm" type="button" data-act="ckdel" data-id="'+esc(r._id)+'">删除</button>'+
+      '</div>';
+    });
+    h += '</div></section>';
+  }
   return h+'</section>';
 }
 
@@ -2616,6 +2683,15 @@ document.addEventListener('click', function(ev){
   if (act==='maptab'){ ui.travel.mapTab = node.getAttribute('data-v') || 'earth'; render(); return; }
   if (act==='ckcancel'){ ui.travel.ckNew=false; render(); return; }
   if (act==='cksave'){ saveCheckin(); return; }
+  if (act==='ckdel'){
+    var cid=node.getAttribute('data-id');
+    if (cid && store.checkin && store.checkin.rows){
+      store.checkin.rows = store.checkin.rows.filter(function(r){ return String(r._id)!==String(cid); });
+      if (MODE==='localfile'){ queueLocalSave(); } else { persistAll(); }
+      toast('已删除该打卡点'); render();
+    }
+    return;
+  }
   if (act==='view'){ ui[ui.view].view=node.getAttribute('data-v'); render(); return; }
   if (act==='cmode'){ ui.collection.mode=node.getAttribute('data-v'); ui.collection.ipId=null; ui.collection.seriesId=null; render(); return; }
   if (act==='ipopen'){ ui.collection.ipId=node.getAttribute('data-id'); render(); return; }
