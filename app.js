@@ -274,6 +274,8 @@ var SHARD_FIELD = { travel:'状态', collection:'小类', study:'领域', food:'
 var TRAVEL_CAT = { '去过':'去过的地方', '想去':'想去的地方' };
 
 function shardCatOf(mk, row){
+  if (mk === 'ip') return 'ip';
+  if (mk === 'series') return 'series';
   var f = SHARD_FIELD[mk]; if (!f || !row) return '';
   var v = String(row[f] || '').trim(); if (!v) return '';
   if (mk === 'travel') return TRAVEL_CAT[v] || v;
@@ -319,6 +321,9 @@ function normalizeIndex(idx){
   if (idx.schema !== SCHEMA_V2) idx.schema = SCHEMA_V2;
   if (!idx.shards || typeof idx.shards !== 'object') idx.shards = {};
   if (!idx.__main || typeof idx.__main !== 'object') idx.__main = {};
+  /* IP / 系列单独存为 ip-data.json / series-data.json，便于管理它们与物品的关联 */
+  if (!idx.shards.ip) idx.shards.ip = { file:'ip-data.json', module:'ip', coverDir:'ip-封面' };
+  if (!idx.shards.series) idx.shards.series = { file:'series-data.json', module:'series', coverDir:'系列-封面' };
   return idx;
 }
 async function fsReadIndex(){ return normalizeIndex(await fsReadJSON(_LOCALFS_FILE)); }
@@ -1359,16 +1364,31 @@ function yr(v){ return dstr(v).slice(0,4); }
 function num(v){ var n=Number(v); return isFinite(n)?n:0; }
 function hue(s){ var h=0; s=String(s||''); for(var i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))>>>0; } return h%360; }
 function stars(n){ n=Math.round(num(n)); var o=''; for(var i=1;i<=5;i++) o += (i<=n?'★':'☆'); return o; }
+function heartPills(n){
+  n = num(n); if (!n) return '';
+  var o=''; for(var i=1;i<=5;i++){
+    if (n>=i) o+='<span class="hheart on">❤</span>';
+    else if (n>=i-0.5) o+='<span class="hheart half">❤</span>';
+    else o+='<span class="hheart">❤</span>';
+  }
+  return o;
+}
 function coverImg(row){
   var imgs = row['封面'] || row['照片'] || row['IP图像'] || row['系列封面'] || row['图片'];
   if (imgs && imgs[0] && imgs[0].imageUrl) return resolveImgUrl(imgs[0].imageUrl);
   return '';
 }
+function coverViewport(row){
+  var imgs = row['封面'] || row['照片'] || row['IP图像'] || row['系列封面'] || row['图片'];
+  if (imgs && imgs[0] && imgs[0].viewport) return imgs[0].viewport;
+  return {s:1,x:0,y:0};
+}
 function hasCover(row){ return !!coverImg(row); }
 function coverStyle(row,title){
   var u = coverImg(row);
+  var vp = coverViewport(row);
   /* 用单引号包裹 URL：外部 HTML 的 style 属性使用双引号，内部若再用双引号会截断属性，导致封面整片空白 */
-  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"')";
+  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+Math.max(100,Math.round(vp.s*100))+"% auto";
   var h = hue(title), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -1498,18 +1518,15 @@ var MODS = {
   travel: { key:'travel', db:DB.travel, name:'遐方坞', icon:'旅', eyebrow:'Where to',
     desc:'想去的地方先记下来，走着走着就到了。', addLabel:'目的地',
     fields:[
-      {k:'地点',t:'text',req:1,ph:'京都 / 冰岛 / 某个小镇'},
-      {k:'国家地区',t:'text',ph:'日本 关西'},
+      {k:'国家',t:'text',req:1,ph:'如 日本 / 冰岛'},
+      {k:'地区',t:'text',req:1,ph:'如 京都 / 雷克雅未克'},
       {k:'纬度',t:'number',ph:'如 35.68（点下方地球自动填）'},
       {k:'经度',t:'number',ph:'如 139.69'},
       {k:'_geo',t:'geopick',full:1},
       {k:'状态',t:'select',o:['想去','去过'],def:'想去'},
-      {k:'心愿等级',t:'select',o:['此生必去','很想去','顺路看看'],def:'很想去'},
+      {k:'心愿等级',t:'hearts',max:5,def:3},
       {k:'最佳季节',t:'text',ph:'三月底到四月初'},
-      {k:'预计天数',t:'number',ph:'5'},
-      {k:'预算',t:'currency',ph:'8000'},
       {k:'出行日期',t:'date'},
-      {k:'同伴',t:'text',ph:'和谁一起去'},
       {k:'封面',t:'img',ph:'一张照片的链接（可选）',full:1},
       {k:'备注',t:'textarea',ph:'想做的事、要订的店、要带的装备…',full:1}
     ]},
@@ -1722,6 +1739,25 @@ function fetchAll(key, cb){
   }
   page();
 }
+function migrateTravelRow(r){
+  if (!r) return r;
+  /* 旧版：地点 + 国家地区 → 新版：国家 + 地区 */
+  if (!r['国家'] && !r['地区']){
+    var oldCountry = String(r['国家地区']||''), oldLoc = String(r['地点']||'');
+    if (oldCountry && oldLoc){
+      var parts = oldCountry.split(/\s+/);
+      if (parts.length >= 2){ r['国家']=parts[0]; r['地区']=parts.slice(1).join(' '); }
+      else { r['国家']=oldCountry; r['地区']=oldLoc; }
+    } else if (oldCountry){ r['国家']=oldCountry; r['地区']=oldCountry; }
+    else if (oldLoc){ r['地区']=oldLoc; }
+  }
+  /* 旧版心愿等级文字 → 新版 0-5 数字 */
+  if (r['心愿等级'] && typeof r['心愿等级'] === 'string'){
+    var map={'此生必去':5,'很想去':4,'顺路看看':2};
+    r['心愿等级'] = map[r['心愿等级']] || 3;
+  }
+  return r;
+}
 function loadAll(){
   var keys = ORDER.filter(function(k){ return k!=='overview'; }).concat(EXTRA);
   keys.forEach(function(k){
@@ -1729,6 +1765,7 @@ function loadAll(){
     fetchAll(k, function(rows){
       if (rows===null){ store[k].status='error'; render(); return; }
       store[k].rows=normalizeRows(rows);
+      if (k==='travel') store[k].rows.forEach(migrateTravelRow);
       store[k].status= rows.length? 'ok' : 'empty';
       /* 关键：所有模式（含 local / gh）都要把相对路径封面解析成可显示 URL，否则封面整块空白 */
       resolveImagesFor(store[k].rows).then(function(){ render(); });
@@ -1746,14 +1783,14 @@ function propsFrom(fields, vals){
     if (f.t==='text' || f.t==='textarea' || f.t==='dyn'){
       if (v!=='' && v!=null) p[f.k]={text:String(v)};
     } else if (f.t==='img'){
-      if (v) p[f.k]={image:{images:[{title:f.k,imageUrl:String(v)}]}};
+      if (v){ var imgItem={title:f.k,imageUrl:String(v)}; if (vals[f.k+'_vp']) imgItem.viewport=vals[f.k+'_vp']; p[f.k]={image:{images:[imgItem]}}; }
     } else if (f.t==='select'){
       if (v) p[f.k]={select:String(v)};
     } else if (f.t==='multi'){
       if (v && v.length) p[f.k]={multi_select:v};
     } else if (f.t==='date'){
       if (v) p[f.k]={date:String(v)};
-    } else if (f.t==='number' || f.t==='stars'){
+    } else if (f.t==='number' || f.t==='stars' || f.t==='hearts'){
       p[f.k]={number:num(v)};
     } else if (f.t==='currency'){
       p[f.k]={currency:num(v)};
@@ -1770,7 +1807,10 @@ function localUpsert(key, id, vals){
   MODS[key].fields.forEach(function(f){
     if (f.t==='geopick') return;
     var v=vals[f.k];
-    if (f.t==='img') row[f.k] = v ? [{imageUrl:String(v)}] : null;
+    if (f.t==='img'){
+      var vp = vals[f.k+'_vp'];
+      row[f.k] = v ? [{imageUrl:String(v), viewport:(vp && vp.s ? vp : {s:1,x:0,y:0})}] : null;
+    }
     else if (f.t==='multi') row[f.k] = (v && v.length) ? v : null;
     else if (f.t==='check') row[f.k] = !!v;
     else if (f.t==='stars' || f.t==='number' || f.t==='currency') row[f.k] = num(v);
@@ -1883,12 +1923,11 @@ function filtered(key){
   } else if (key==='travel'){
     if (f.status) rows=rows.filter(function(r){ return r['状态']===f.status; });
     if (q) rows=rows.filter(function(r){
-      return ((r['地点']||'')+' '+(r['国家地区']||'')+' '+(r['备注']||'')).toLowerCase().indexOf(q)>=0; });
-    var rank={'此生必去':0,'很想去':1,'顺路看看':2};
+      return ((r['地区']||r['地点']||'')+' '+(r['国家']||r['国家地区']||'')+' '+(r['备注']||'')).toLowerCase().indexOf(q)>=0; });
     rows.sort(function(a,b){
       var s={'想去':0,'去过':1};
       var d=(s[a['状态']]||0)-(s[b['状态']]||0);
-      return d?d:((rank[a['心愿等级']]||1)-(rank[b['心愿等级']]||1));
+      return d?d:(num(b['心愿等级'])-num(a['心愿等级']));
     });
   } else if (key==='study'){
     if (f.field) rows=rows.filter(function(r){ return r['领域']===f.field; });
@@ -2001,7 +2040,7 @@ function renderOverview(){
   push('collection', store.collection.rows, function(r){return r['购入日期'];},
     function(r){return r['名称'];}, function(r){return '入手 · '+esc(r['大类']||'');});
   push('travel', store.travel.rows.filter(function(r){return r['状态']==='去过';}),
-    function(r){return r['出行日期'];}, function(r){return r['地点'];}, function(r){return '去过 · '+(r['国家地区']||'');});
+    function(r){return r['出行日期'];}, function(r){return r['地区']||r['地点']||'';}, function(r){return '去过 · '+(r['国家']||r['国家地区']||'');});
   push('food', store.food.rows, function(r){return r['打卡日期'];},
     function(r){return r['名称'];}, function(r){return (r['类型']||'')+' · '+stars(r['星级']);});
   push('idea', store.idea.rows, function(r){return r['记录日期'];},
@@ -2327,8 +2366,8 @@ function renderCheckinNew(){
        '  <div class="f"><label>城市 / 景区</label><input id="ckCity" type="text" autocomplete="off" placeholder="搜索后自动填，也可手填" value="'+esc(cityV)+'"></div>'+
        '  <div class="f"><label>封面图片</label><div class="imgrow"><input id="ckCover" type="text" autocomplete="off" placeholder="图片链接，或点右侧上传（可选）" value="'+esc(coverV)+'">'+
        '<label class="btn ghost sm upl" for="ckCoverFile">上传<input id="ckCoverFile" type="file" accept="image/*" hidden></label></div>'+
-       '<div id="ckCovPrev" class="ckcovprev">'+(coverV?'<img src="'+esc(resolveImgUrl(coverV))+'" alt="封面预览">':'')+'</div>'+
-       '<span class="imgnote">上传的图会先在浏览器里压到长边 800px 再存</span></div>'+
+       '<div id="ckCovPrev" class="ckcovprev" tabindex="0" title="可在此粘贴图片">'+(coverV?'<img src="'+esc(resolveImgUrl(coverV))+'" alt="封面预览">':'')+'</div>'+
+       '<span class="imgnote">上传的图会先在浏览器里压到长边 800px 再存；也可以直接粘贴图片</span></div>'+
        '</div>'+
        '<div class="f" style="margin-top:8px"><label>内容</label><textarea id="ckContent" placeholder="当时的心情、发生了什么…">'+esc(contentV)+'</textarea></div>'+
        '<div id="ckErr" class="ck-err"></div>'+
@@ -2345,17 +2384,41 @@ function attachCkMap(){
   stopCkMap();
   var cv=document.getElementById('ckMap'); if(!cv) return;
   var tip=document.getElementById('ckTip');
-  /* 封面图片：支持本地文件上传（压到 800px 后存为 data URL） */
-  var cfile=document.getElementById('ckCoverFile');
-  if (cfile){ cfile.onchange=function(){
-    var file=cfile.files && cfile.files[0]; if(!file) return;
+  /* 封面图片：支持本地文件上传、URL 输入、剪切板粘贴 */
+  function setCkPreview(url){
+    var pv=document.getElementById('ckCovPrev'); if(!pv) return;
+    if (!url){ pv.innerHTML=''; return; }
+    pv.innerHTML='<img src="'+esc(resolveImgUrl(url))+'" alt="封面预览" onerror="ckImgErr(this)">';
+  }
+  function handleCkPaste(file){
+    if(!file) return;
     compressImage(file, 800, function(dataUrl){
       if(!dataUrl){ if(tip) tip.textContent='这张图读不出来，换个文件试试'; return; }
       var ci=document.getElementById('ckCover'); if(ci) ci.value=dataUrl;
-      var pv=document.getElementById('ckCovPrev'); if(pv){ pv.innerHTML='<img src="'+dataUrl+'" alt="封面预览">'; }
-      if(tip) tip.textContent='封面已选好：'+file.name;
+      setCkPreview(dataUrl);
+      if(tip) tip.textContent='封面已选好：'+(file.name||'粘贴图片');
     });
+  }
+  var cfile=document.getElementById('ckCoverFile');
+  if (cfile){ cfile.onchange=function(){
+    var file=cfile.files && cfile.files[0]; if(!file) return;
+    handleCkPaste(file);
   }; }
+  var cinput=document.getElementById('ckCover');
+  if (cinput){
+    cinput.addEventListener('input', function(){ setCkPreview(cinput.value); });
+    cinput.addEventListener('paste', function(e){
+      var items=e.clipboardData && e.clipboardData.items; if(!items) return;
+      for(var i=0;i<items.length;i++){ if(items[i].kind==='file' && items[i].type.indexOf('image/')===0){ e.preventDefault(); handleCkPaste(items[i].getAsFile()); break; } }
+    });
+  }
+  var cpv=document.getElementById('ckCovPrev');
+  if (cpv){
+    cpv.addEventListener('paste', function(e){
+      var items=e.clipboardData && e.clipboardData.items; if(!items) return;
+      for(var i=0;i<items.length;i++){ if(items[i].kind==='file' && items[i].type.indexOf('image/')===0){ e.preventDefault(); handleCkPaste(items[i].getAsFile()); break; } }
+    });
+  }
   var key=amapKey();
   if(!key){ if(tip) tip.textContent='还没配置高德地图 Key：到右下角「⚙ 同步设置」填入 Key 和安全密钥后才能用地图。'; return; }
   loadAMap(key, amapSecret(), function(ok){
@@ -2458,10 +2521,10 @@ function attachChinaMap(){
       /* 目的地：蓝=想去 / 绿=去过 */
       ((store.travel && store.travel.rows)||[]).forEach(function(r){
         var lat=Number(r['纬度']), lon=Number(r['经度']);
-        if(!(lat&&lon)){ var c=CITY_LOOKUP[String(r['地点']||'').trim()]; if(c){lat=c[0];lon=c[1];} else return; }
+        if(!(lat&&lon)){ var c=CITY_LOOKUP[String(r['地区']||r['地点']||'').trim()]; if(c){lat=c[0];lon=c[1];} else return; }
         var g=wgs84ToGcj02(lat,lon);
         var col = r['状态']==='去过' ? '#3bb273' : '#4a90d9';
-        var mk=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent(col, r['地点']||''), anchor:'bottom-center' });
+        var mk=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent(col, r['地区']||r['地点']||''), anchor:'bottom-center' });
         mk.on('click', function(){ showMapCard(r, 'travel'); });
         map.add(mk);
       });
@@ -2487,14 +2550,15 @@ function ckImgErr(img){ if(!img) return; img.style.display='none'; var s=documen
 function showMapCard(row, kind){
   var c=document.getElementById('mapCard'); if(!c) return;
   var cov = kind==='checkin' ? ckCoverUrl(row) : coverImg(row);
-  var name = kind==='checkin' ? (row['地点名字']||'未命名') : (row['地点']||'未命名');
+  var name = kind==='checkin' ? (row['地点名字']||'未命名') : (row['地区']||row['地点']||'未命名');
   var meta=[];
   if (kind==='checkin'){
     if(row['城市景区']) meta.push(esc(row['城市景区']));
     if(row['日期']) meta.push(esc(dstr(row['日期'])));
   } else {
-    if(row['国家地区']) meta.push(esc(row['国家地区']));
+    if(row['国家']||row['国家地区']) meta.push(esc(row['国家']||row['国家地区']));
     if(row['状态']) meta.push(esc(row['状态']));
+    if(num(row['心愿等级'])) meta.push(heartPills(row['心愿等级']));
   }
   var editAct = kind==='checkin'
     ? '<button class="btn ghost sm" type="button" data-act="ckedit" data-id="'+esc(row._id)+'">编辑</button>'
@@ -2547,14 +2611,14 @@ function renderTravel(){
     var cls = r['状态']==='去过'?'gone':'';
     var meta=[];
     if (r['最佳季节']) meta.push('<span>季节 <b>'+esc(r['最佳季节'])+'</b></span>');
-    if (num(r['预计天数'])) meta.push('<span><b>'+num(r['预计天数'])+'</b> 天</span>');
-    if (num(r['预算'])) meta.push('<span>预算 <b>¥'+num(r['预算'])+'</b></span>');
     if (r['出行日期']) meta.push('<span>'+esc(dstr(r['出行日期']))+'</span>');
-    if (r['同伴']) meta.push('<span>同行 <b>'+esc(r['同伴'])+'</b></span>');
+    var locName = esc(r['地区'] || r['地点'] || '未命名');
+    var locSub = esc((r['国家'] || r['国家地区'] || ''));
+    var hearts = heartPills(num(r['心愿等级']));
     return '<div class="trip '+cls+'" data-act="edit" data-key="travel" data-id="'+esc(r._id)+'" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl">'+
-      (hasCover(r)?'<div class="coverimg" style="'+coverStyle(r,r['地点'])+'"></div>':'')+
-      '<div class="top"><h4>'+esc(r['地点']||'未命名')+'</h4>'+statusPill(r['状态'])+'</div>'+
-      '<div class="where">'+esc(r['国家地区']||'')+(r['心愿等级']?' · '+esc(r['心愿等级']):'')+'</div>'+
+      (hasCover(r)?'<div class="coverimg" style="'+coverStyle(r,locName)+'"></div>':'')+
+      '<div class="top"><h4>'+locName+'</h4>'+statusPill(r['状态'])+'</div>'+
+      '<div class="where">'+(locSub?locSub:'')+(hearts?(locSub?' · ':'')+hearts:'')+'</div>'+
       (meta.length?'<div class="meta">'+meta.join('')+'</div>':'')+
       (r['备注']?'<div class="note">'+esc(r['备注'])+'</div>':'')+
       '</div>';
@@ -2574,7 +2638,6 @@ function renderTravel(){
       if (r['日期']) meta.push('<span>'+esc(dstr(r['日期']))+'</span>');
       h += '<div class="trip ck" data-act="ckedit" data-id="'+esc(r._id)+'">'+
         (cov?'<div class="coverimg" style="'+ckCoverBg(r)+'"></div>':'')+
-        '<button class="ck-del" type="button" data-act="ckdel" data-id="'+esc(r._id)+'" title="删除" aria-label="删除">×</button>'+
         '<div class="top"><h4>'+esc(r['地点名字']||'未命名')+'</h4><span class="ck-pill">打卡点</span></div>'+
         (r['城市景区']?'<div class="where">'+esc(r['城市景区'])+'</div>':'')+
         (meta.length?'<div class="meta">'+meta.join('')+'</div>':'')+
@@ -2808,8 +2871,8 @@ document.addEventListener('click', function(ev){
   if (act==='geopick'){ openGlobePicker(); return; }
   if (act==='georeloc'){
     if (!editing || editing.key!=='travel'){ toast('先打开一个目的地，再点这里定位'); return; }
-    var locv=String(editing.vals['地点']||'').trim();
-    if (!locv){ toast('先填「地点」再按名称定位'); return; }
+    var locv=String(editing.vals['地区']||editing.vals['地点']||'').trim();
+    if (!locv){ toast('先填「地区」再按名称定位'); return; }
     toast('正在按地点名重新定位…');
     geocodeTravel(editing.vals, function(coords){
       if (coords){
@@ -2828,8 +2891,8 @@ document.addEventListener('click', function(ev){
   if (act==='amapsearch'){
     if (!editing || editing.key!=='travel'){ toast('先打开一个目的地，再点这里定位'); return; }
     var box = document.querySelector('[data-amap-search]');
-    var q = (box && box.value.trim()) || String(editing.vals['地点']||'').trim();
-    if (!q){ toast('先填「地点」或输入搜索词'); return; }
+    var q = (box && box.value.trim()) || String(editing.vals['地区']||editing.vals['地点']||'').trim();
+    if (!q){ toast('先填「地区」或输入搜索词'); return; }
     var akey = amapKey();
     if (!akey){ toast('还没配置高德地图 Key：到右下角「⚙ 同步设置」填入 Key 和安全密钥'); return; }
     toast('正在用高德搜索「'+q+'」…');
@@ -2845,15 +2908,15 @@ document.addEventListener('click', function(ev){
               var w = gcj02ToWgs84(p.location.lat, p.location.lng);
               editing.vals['纬度'] = Math.round(w.lat*100)/100;
               editing.vals['经度'] = Math.round(w.lon*100)/100;
-              if (p.name && !editing.vals['地点']) editing.vals['地点'] = p.name;
-              var region = p.pname || p.cityname || p.adname || p.city || '';
-              if (region && !editing.vals['国家地区']){ editing.vals['国家地区'] = region; }
+              if (p.name && !editing.vals['地区']) editing.vals['地区'] = p.name;
+              if (p.pname && !editing.vals['国家']) editing.vals['国家'] = p.pname;
+              else if (p.cityname && !editing.vals['国家']) editing.vals['国家'] = p.cityname;
               var la = document.querySelector('[data-f="纬度"]'), lo = document.querySelector('[data-f="经度"]');
-              var na = document.querySelector('[data-f="地点"]'), co = document.querySelector('[data-f="国家地区"]');
+              var na = document.querySelector('[data-f="地区"]'), co = document.querySelector('[data-f="国家"]');
               if (la) la.value = editing.vals['纬度'];
               if (lo) lo.value = editing.vals['经度'];
-              if (na && !na.value) na.value = editing.vals['地点'];
-              if (co && !co.value) co.value = editing.vals['国家地区'];
+              if (na && !na.value) na.value = editing.vals['地区'];
+              if (co && !co.value) co.value = editing.vals['国家'];
               toast('已定位到「'+p.name+'」：'+editing.vals['纬度']+'°N, '+editing.vals['经度']+'°E（点保存生效）');
             } else {
               toast('高德没搜到「'+q+'」，换词试试或手动选位置');
@@ -3047,14 +3110,47 @@ function fieldVal(row, f){
   if (!row) return f.t==('check')?false:(f.def!=null?f.def:'');
   var v=row[f.k];
   if (f.t==='img'){
-    if (v && v[0] && v[0].imageUrl) return v[0].imageUrl;
+    if (v && v[0] && v[0].imageUrl){
+      if (editing && v[0].viewport) editing.vals[f.k+'_vp'] = v[0].viewport;
+      return v[0].imageUrl;
+    }
     return '';
   }
   if (f.t==='multi') return v || [];
   if (f.t==='check') return !!v;
-  if (f.t==='stars') return num(v) || (f.def||0);
+  if (f.t==='stars' || f.t==='hearts') return num(v) || (f.def||0);
   if (f.t==='number' || f.t==='currency') return v==null?'':num(v);
   return v==null?'':v;
+}
+/* 设置图片预览：支持视口变换；清空时恢复默认 */
+function setImgPreview(prev, url, k){
+  var img = prev.querySelector('img');
+  if (!url){
+    if (img) img.remove();
+    prev.style.backgroundImage = '';
+    var hint = prev.querySelector('.imgvp-hint'); if (hint) hint.hidden = true;
+    var bar = prev.parentNode.querySelector('.imgvp-bar'); if (bar) bar.hidden = true;
+    return;
+  }
+  var resolved = resolveImgUrl(url);
+  if (!img){
+    img = document.createElement('img');
+    img.setAttribute('data-img-inner', k || '');
+    img.alt = '';
+    img.style.width = '100%';
+    img.style.height = '100%';
+    img.style.objectFit = 'cover';
+    prev.appendChild(img);
+  }
+  img.src = resolved;
+  applyImgViewport(prev, k);
+  var hint = prev.querySelector('.imgvp-hint'); if (hint) hint.hidden = false;
+  var bar = prev.parentNode.querySelector('.imgvp-bar'); if (bar) bar.hidden = false;
+}
+function applyImgViewport(prev, k){
+  var img = prev.querySelector('img'); if (!img || !k) return;
+  var vp = (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0};
+  img.style.transform = 'scale('+vp.s+') translate('+vp.x+'%,'+vp.y+'%)';
 }
 /* ---------- 表单控件绑定（单个表单 / 批量表单共用） ---------- */
 function wireFormControls(host, saveDraft){
@@ -3068,6 +3164,24 @@ function wireFormControls(host, saveDraft){
       };
     });
   });
+  /* 粉色马卡龙心级：支持半颗心 */
+  host.querySelectorAll('.heartsel').forEach(function(box){
+    var k=box.getAttribute('data-k');
+    function setHearts(n){
+      n = Math.max(0, Math.min(5, num(n)));
+      editing.vals[k]=n;
+      box.setAttribute('data-v', n);
+      box.querySelectorAll('.half').forEach(function(b){
+        var val = parseFloat(b.getAttribute('data-i'));
+        b.className = b.className.replace(/on/g,'').trim() + (val <= n ? ' on' : '');
+      });
+      if (saveDraft) saveDraft();
+    }
+    box.querySelectorAll('.half').forEach(function(b){
+      b.onclick=function(){ setHearts(parseFloat(b.getAttribute('data-i'))); };
+    });
+  });
+
   host.querySelectorAll('.multisel').forEach(function(box){
     var k=box.getAttribute('data-k');
     box.querySelectorAll('button').forEach(function(b){
@@ -3117,7 +3231,7 @@ function wireFormControls(host, saveDraft){
     inp.addEventListener('input', function(){
       var k=inp.getAttribute('data-f');
       var prev=host.querySelector('[data-img-prev="'+k+'"]');
-      if (prev) prev.style.backgroundImage = inp.value ? 'url("'+inp.value+')"' : '';
+      if (prev) setImgPreview(prev, inp.value, k);
     });
   });
   host.querySelectorAll('[data-img-file]').forEach(function(inp){
@@ -3129,9 +3243,10 @@ function wireFormControls(host, saveDraft){
       compressImage(file, 800, function(dataUrl){
         if (!dataUrl){ if (note) note.textContent='这张图读不出来，换个文件试试'; return; }
         editing.vals[k]=dataUrl;
+        editing.vals[k+'_vp']={s:1,x:0,y:0};
         var urlInput=host.querySelector('[data-f="'+k+'"]'); if (urlInput) urlInput.value=dataUrl;
         var prev=host.querySelector('[data-img-prev="'+k+'"]');
-        if (prev) prev.style.backgroundImage='url("'+dataUrl+')"';
+        if (prev) setImgPreview(prev, dataUrl, k);
         if (note) note.textContent='已压到约 '+Math.round(dataUrl.length/1024)+' KB';
         if (saveDraft) saveDraft();
       });
@@ -3147,6 +3262,93 @@ function wireFormControls(host, saveDraft){
       if (saveDraft) saveDraft();
     });
   }
+
+  /* 图片视口：拖拽移动、滚轮缩放、按钮缩放、双击重置、Ctrl+V 粘贴 */
+  host.querySelectorAll('.imgprev').forEach(function(prev){
+    var k=prev.getAttribute('data-img-prev'); if (!k) return;
+    function vp(){ return (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0}; }
+    function setVp(o){
+      if (!editing) return;
+      editing.vals[k+'_vp']=o; applyImgViewport(prev, k);
+      if (saveDraft) saveDraft();
+    }
+    prev.querySelectorAll('[data-img-zoom]').forEach(function(btn){ btn.onclick=null; });
+    var zbar = prev.parentNode.querySelector('.imgvp-bar');
+    if (zbar){
+      zbar.querySelectorAll('[data-img-zoom]').forEach(function(btn){
+        btn.onclick=function(){
+          var o=vp(); o.s=Math.max(1, Math.min(4, o.s+parseFloat(btn.getAttribute('data-d')))); setVp(o);
+        };
+      });
+      zbar.querySelectorAll('[data-img-reset]').forEach(function(btn){
+        btn.onclick=function(){ setVp({s:1,x:0,y:0}); };
+      });
+    }
+    prev.ondblclick=function(){ setVp({s:1,x:0,y:0}); };
+    prev.onwheel=function(e){
+      if (!prev.querySelector('img')) return;
+      e.preventDefault();
+      var o=vp(); o.s=Math.max(1, Math.min(4, o.s+(e.deltaY<0?0.1:-0.1))); setVp(o);
+    };
+    var dragging=false, sx=0, sy=0, ix=0, iy=0;
+    prev.onmousedown=function(e){
+      if (!prev.querySelector('img')) return;
+      dragging=true; sx=e.clientX; sy=e.clientY; var o=vp(); ix=o.x; iy=o.y; prev.style.cursor='grabbing';
+    };
+    window.addEventListener('mousemove', function(e){
+      if (!dragging) return;
+      var dx=(e.clientX-sx), dy=(e.clientY-sy);
+      var o=vp(); o.x=ix+dx/2; o.y=iy+dy/2; setVp(o);
+    });
+    window.addEventListener('mouseup', function(){ dragging=false; prev.style.cursor=''; });
+    /* 触摸支持 */
+    prev.ontouchstart=function(e){
+      if (!prev.querySelector('img')) return;
+      dragging=true; sx=e.touches[0].clientX; sy=e.touches[0].clientY; var o=vp(); ix=o.x; iy=o.y;
+    };
+    window.addEventListener('touchmove', function(e){
+      if (!dragging) return;
+      var dx=(e.touches[0].clientX-sx), dy=(e.touches[0].clientY-sy);
+      var o=vp(); o.x=ix+dx/2; o.y=iy+dy/2; setVp(o);
+    });
+    window.addEventListener('touchend', function(){ dragging=false; });
+    /* 剪切板粘贴 */
+    prev.addEventListener('paste', function(e){
+      var items=e.clipboardData && e.clipboardData.items; if (!items) return;
+      var file=null;
+      for (var i=0;i<items.length;i++){ if (items[i].kind==='file' && items[i].type.indexOf('image/')===0){ file=items[i].getAsFile(); break; } }
+      if (!file) return;
+      e.preventDefault();
+      var note=host.querySelector('[data-img-note="'+k+'"]'); if (note) note.textContent='正在压缩…';
+      compressImage(file, 800, function(dataUrl){
+        if (!dataUrl){ if (note) note.textContent='这张图读不出来，换个文件试试'; return; }
+        editing.vals[k]=dataUrl; editing.vals[k+'_vp']={s:1,x:0,y:0};
+        var urlInput=host.querySelector('[data-f="'+k+'"]'); if (urlInput) urlInput.value=dataUrl;
+        setImgPreview(prev, dataUrl, k);
+        if (note) note.textContent='已压到约 '+Math.round(dataUrl.length/1024)+' KB';
+        if (saveDraft) saveDraft();
+      });
+    });
+    /* URL 输入框也支持粘贴图片文件（焦点在输入框时 Ctrl+V） */
+    var urlInp=host.querySelector('[data-f="'+k+'"]');
+    if (urlInp){
+      urlInp.addEventListener('paste', function(e){
+        var items=e.clipboardData && e.clipboardData.items; if (!items) return;
+        var file=null;
+        for (var i=0;i<items.length;i++){ if (items[i].kind==='file' && items[i].type.indexOf('image/')===0){ file=items[i].getAsFile(); break; } }
+        if (!file) return;
+        e.preventDefault();
+        var note=host.querySelector('[data-img-note="'+k+'"]'); if (note) note.textContent='正在压缩…';
+        compressImage(file, 800, function(dataUrl){
+          if (!dataUrl){ if (note) note.textContent='这张图读不出来，换个文件试试'; return; }
+          editing.vals[k]=dataUrl; editing.vals[k+'_vp']={s:1,x:0,y:0};
+          urlInp.value=dataUrl; setImgPreview(prev, dataUrl, k);
+          if (note) note.textContent='已压到约 '+Math.round(dataUrl.length/1024)+' KB';
+          if (saveDraft) saveDraft();
+        });
+      });
+    }
+  });
 }
 
 /* ---------- 系列 ---------- */
@@ -3440,10 +3642,10 @@ function openForm(key, id, opts){
   host.innerHTML=h; host.hidden=false;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
   host.onclick=function(e){ if(e.target===host) closeSheet(); };
-  /* 目的地表单的「高德搜索」框默认带当前地点名，减少重复输入 */
+  /* 目的地表单的「高德搜索」框默认带当前地区名，减少重复输入 */
   if (key==='travel'){
     var as = host.querySelector('[data-amap-search]');
-    if (as && editing.vals['地点']) as.value = String(editing.vals['地点']);
+    if (as) as.value = String(editing.vals['地区']||editing.vals['地点']||'');
   }
 
   wireFormControls(host, function(){
@@ -3502,11 +3704,23 @@ function fieldHTML(f, v){
     body='<input data-f="'+f.k+'" type="'+type+'" value="'+esc(v)+'" placeholder="'+esc(f.ph||'')+'" autocomplete="off"'+
       (f.min!=null?' min="'+f.min+'"':'')+(f.max!=null?' max="'+f.max+'"':'')+'>';
   } else if (f.t==='img'){
-    body='<div class="imgwrap" data-k="'+f.k+'">'+
-      '<div class="imgprev" data-img-prev="'+f.k+'"'+(v?' style="background-image:url(&quot;'+esc(v)+'&quot;)"':'')+'></div>'+
+    var vp = (editing && editing.vals && editing.vals[f.k+'_vp']) || {s:1,x:0,y:0};
+    var imgStyle = v ? ('transform:scale('+vp.s+') translate('+vp.x+'%,'+vp.y+'%)') : 'display:none';
+    var hasV = !!v;
+    body='<div class="imgwrap" data-k="'+f.k+'" data-has-img="'+(hasV?1:0)+'">'+
+      '<div class="imgprev" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、Ctrl+V 粘贴图片">'+
+      (v?'<img src="'+esc(resolveImgUrl(v))+'" alt="" style="'+imgStyle+'" data-img-inner="'+f.k+'">':'')+
+      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动 · 滚轮缩放 · 双击重置</div>'+
+      '</div>'+
+      '<div class="imgvp-bar" '+(v?'':'hidden')+'>'+
+      '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="-0.15">−</button>'+
+      '<span>缩放</span>'+
+      '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="0.15">+</button>'+
+      '<button type="button" class="btn ghost xs" data-img-reset="'+f.k+'">重置</button>'+
+      '</div>'+
       '<div class="imgrow"><input data-f="'+f.k+'" type="text" value="'+esc(v)+'" placeholder="'+esc(f.ph||'图片链接')+'" autocomplete="off">'+
       '<label class="btn ghost sm upl" for="up_'+f.k+'">上传<input id="up_'+f.k+'" type="file" accept="image/*" data-img-file="'+f.k+'" hidden></label></div>'+
-      '<span class="imgnote" data-img-note="'+f.k+'">上传的图会先在浏览器里压到长边 800px 再存</span>'+
+      '<span class="imgnote" data-img-note="'+f.k+'">上传的图会先在浏览器里压到长边 800px 再存；也可以直接粘贴图片</span>'+
       '</div>';
   } else if (f.t==='textarea'){
     body='<textarea data-f="'+f.k+'" placeholder="'+esc(f.ph||'')+'" autocomplete="off">'+esc(v)+'</textarea>';
@@ -3522,6 +3736,17 @@ function fieldHTML(f, v){
     var n=Math.round(num(v));
     body='<div class="starsel" data-k="'+f.k+'">';
     for(var i=1;i<=(f.max||5);i++) body+='<button type="button" class="'+(i<=n?'on':'')+'" data-i="'+i+'">★</button>';
+    body+='</div>';
+  } else if (f.t==='hearts'){
+    var hn=num(v)||0;
+    body='<div class="heartsel" data-k="'+f.k+'" data-v="'+hn+'">';
+    for(var i=1;i<=(f.max||5);i++){
+      var leftOn=(hn>=i-0.5)?'on':''; var rightOn=(hn>=i)?'on':'';
+      body+='<span class="heart-btn" data-i="'+i+'">'+
+        '<button type="button" class="half left '+leftOn+'" data-i="'+(i-0.5)+'" aria-label="'+(i-0.5)+' 颗心">❤</button>'+
+        '<button type="button" class="half right '+rightOn+'" data-i="'+i+'" aria-label="'+i+' 颗心">❤</button>'+
+        '</span>';
+    }
     body+='</div>';
   } else if (f.t==='dyn'){
     body='<div class="dynwrap" data-k="'+f.k+'" data-src="'+f.src+'">'+
@@ -4598,10 +4823,10 @@ function loadTravelMarkers(){
   rows.forEach(function(r){
     var lat=Number(r['纬度']), lon=Number(r['经度']);
     if (!(lat && lon)){
-      var c=CITY_LOOKUP[String(r['地点']||'').trim()];
-      if (c){ lat=c[0]; lon=c[1]; } else return;
+      var c=CITY_LOOKUP[String(r['地区']||r['地点']||'').trim()];
+      if(c){ lat=c[0]; lon=c[1]; } else return;
     }
-    out.push({lat:lat, lon:lon, name:r['地点']||'', status:r['状态']||'', id:r._id});
+    out.push({lat:lat, lon:lon, name:r['地区']||r['地点']||'', status:r['状态']||'', id:r._id});
   });
   return out;
 }
@@ -4683,8 +4908,8 @@ function _geocodeOne(q, preferName, preferCC, cb){
   } catch(e){ cb(null); }
 }
 function geocodeTravel(vals, cb){
-  var loc = String(vals['地点']||'').trim();
-  var country = String(vals['国家地区']||'').trim();
+  var loc = String(vals['地区']||vals['地点']||'').trim();
+  var country = String(vals['国家']||vals['国家地区']||'').trim();
   if (!loc){ cb(null); return; }
   var cc = GEOCODE_COUNTRY_ISO[country] || null;   /* 国家码，用于服务端/客户端过滤同名多地 */
 

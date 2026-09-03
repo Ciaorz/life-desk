@@ -19,27 +19,16 @@
     "study": [],
     "food": [],
     "idea": [],
-    "ip": [
-      {
-        "_id": "l_mtldc9je5j6la",
-        "IP名称": "宝可梦",
-        "IP图像": [
-          {
-            "imageUrl": "https://i2.kknews.cc/nBruJ2BTApPZEHPcRxpNwnSF2QOysL6YMw/0.jpg"
-          }
-        ],
-        "简介": null
-      }
-    ],
+    "ip": [],
     "series": [],
     "loc": [],
     "checkin": [
       {
         "_id": "ck_mtl7jsyhtmmts",
         "地点名字": "三峡龙脊",
-        "城市景区": "巫峡",
+        "城市景区": "",
         "日期": "2026-09-03",
-        "封面图片": "https://drmetastar.com/wp-content/uploads/2025/11/rilcher_20251129_0008.jpg",
+        "封面图片": "",
         "内容": "",
         "纬度": 31.07722,
         "经度": 109.87425
