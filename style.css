@@ -881,6 +881,8 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .mcase-persp.right.d2:hover { transform: perspective(1200px) rotateY(-18deg) rotateX(2deg) translateY(-4px); }
 .mcase-persp.left.d1:hover  { transform: perspective(1200px) rotateY(15deg) rotateX(2deg) translateY(-3px); }
 .mcase-persp.right.d1:hover { transform: perspective(1200px) rotateY(-15deg) rotateX(2deg) translateY(-3px); }
+.mcase-persp.left.d0:hover  { transform: perspective(1200px) rotateY(12deg) rotateX(2deg) translateY(-2px); }
+.mcase-persp.right.d0:hover { transform: perspective(1200px) rotateY(-12deg) rotateX(2deg) translateY(-2px); }
 
 /* 玻璃罩：贴类目封面 + 真实玻璃反光（参考图：外沿白框） */
 .mcase-glass {
