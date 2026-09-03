@@ -13,6 +13,7 @@ var DB = {
   travel:     'eXqg6O484hQTwO9afBcwZl',
   study:      '4rq1NhoGtp9NOnIWB2asLJ',
   food:       'QPkWBzUEGNei4JbU3tS4GV',
+  recipe:     'QPkWBzUEGNei4JbU3tS4GV',   /* v48：暂时与 food 共用线上表，本地文件/FS 模式下已独立；后续可替换为独立 databaseId */
   idea:       'enWbyi2bgio8062H0YdwbX'
 };
 
@@ -43,6 +44,10 @@ var T = {
             upd:  function(id, p){ return db.updateRecord({databaseId:'4rq1NhoGtp9NOnIWB2asLJ', recordId: id, properties: p}); },
             del:  function(id){ return db.deleteRecord({databaseId:'4rq1NhoGtp9NOnIWB2asLJ', recordId: id}); } },
   food:   { page: function(cursor){ return db.query({databaseId:'QPkWBzUEGNei4JbU3tS4GV', pageSize:100, startCursor: cursor || null}); },
+            add:  function(p){ return db.addRecord({databaseId:'QPkWBzUEGNei4JbU3tS4GV', properties: p}); },
+            upd:  function(id, p){ return db.updateRecord({databaseId:'QPkWBzUEGNei4JbU3tS4GV', recordId: id, properties: p}); },
+            del:  function(id){ return db.deleteRecord({databaseId:'QPkWBzUEGNei4JbU3tS4GV', recordId: id}); } },
+  recipe: { page: function(cursor){ return db.query({databaseId:'QPkWBzUEGNei4JbU3tS4GV', pageSize:100, startCursor: cursor || null}); },
             add:  function(p){ return db.addRecord({databaseId:'QPkWBzUEGNei4JbU3tS4GV', properties: p}); },
             upd:  function(id, p){ return db.updateRecord({databaseId:'QPkWBzUEGNei4JbU3tS4GV', recordId: id, properties: p}); },
             del:  function(id){ return db.deleteRecord({databaseId:'QPkWBzUEGNei4JbU3tS4GV', recordId: id}); } },
@@ -269,7 +274,7 @@ var IMG_DIR = 'images';
 var DATA_PREFIX = 'data';
 
 /* 每个模块用哪个字段当分片键 */
-var SHARD_FIELD = { travel:'状态', collection:'小类', study:'领域', food:'类型', idea:'分类' };
+var SHARD_FIELD = { travel:'状态', collection:'小类', study:'领域', food:'类型', recipe:'', idea:'分类' };
 /* 旅行：状态值 → 类目名（用户口径是「去过的地方」「想去的地方」） */
 var TRAVEL_CAT = { '去过':'去过的地方', '想去':'想去的地方' };
 
@@ -1550,19 +1555,27 @@ var MODS = {
       {k:'封面',t:'img',ph:'一张照片的链接（可选）',full:1}
     ]},
   food: { key:'food', db:DB.food, name:'馐馔坊', icon:'食', eyebrow:'Taste',
-    desc:'好吃的东西值得被记住第二次。', addLabel:'记一笔',
+    desc:'好吃的东西值得被记住第二次。', addLabel:'记美食',
     fields:[
       {k:'名称',t:'text',req:1,ph:'店名 / 一道菜'},
       {k:'类型',t:'select',o:['餐厅','外卖','自炊','咖啡甜品','街边小吃'],def:'餐厅'},
       {k:'城市',t:'text',ph:'杭州'},
-      {k:'纬度',t:'number',ph:'地图标注用，点左图自动填（0-1）'},
-      {k:'经度',t:'number',ph:'地图标注用，点左图自动填（0-1）'},
+      {k:'_geo',t:'geopick',mode:'amap',full:1},
       {k:'星级',t:'stars',max:5},
       {k:'人均',t:'currency',ph:'120'},
       {k:'打卡日期',t:'date'},
       {k:'想再去',t:'check'},
       {k:'照片',t:'img',ph:'照片链接（可选）',full:1},
-      {k:'短评',t:'textarea',ph:'好吃在哪',full:1},
+      {k:'短评',t:'textarea',ph:'好吃在哪',full:1}
+    ]},
+  recipe: { key:'recipe', db:DB.recipe, name:'私房菜谱', icon:'谱', eyebrow:'Recipe',
+    desc:'自己的菜谱，做法和配方。', addLabel:'记菜谱',
+    fields:[
+      {k:'名称',t:'text',req:1,ph:'菜名'},
+      {k:'类型',t:'select',o:['中餐','西餐','日料','韩料','甜品','饮品','烘焙','其他'],def:'中餐'},
+      {k:'照片',t:'img',ph:'成品图（可选）',full:1},
+      {k:'来源',t:'text',ph:'从哪学来的 / 谁教你的'},
+      {k:'食材',t:'textarea',ph:'主要食材清单',full:1},
       {k:'菜谱',t:'textarea',ph:'做法 / 配方 / 笔记',full:1}
     ]},
   idea: { key:'idea', db:DB.idea, name:'灵思阁', icon:'感', eyebrow:'Sparks',
@@ -1578,11 +1591,58 @@ var MODS = {
     ]}
 };
 var ORDER = ['overview','collection','travel','av','study','food','idea'];
-var EXTRA = ['ip','series','loc','checkin'];   /* 不单独进导航：ip/series/loc 在「藏品」里管理；checkin 在「遐方坞」里管理（原 candidate 候选箱已移除） */
+var EXTRA = ['ip','series','loc','checkin','recipe'];   /* 不单独进导航：ip/series/loc 在「藏品」里管理；checkin 在「遐方坞」里管理；recipe 在「馐馔坊」里管理（v48 拆分） */
 
 /* ============ 状态 ============ */
 var store = {};
 ORDER.concat(EXTRA).forEach(function(k){ if(k!=='overview') store[k] = { rows:[], status:'loading' }; });
+
+/* v48：把旧 food 记录里的「菜谱」字段拆成独立的 recipe 记录；本地模式下自动迁移一次 */
+var _foodRecipeMigrated = false;
+function migrateFoodToRecipe(){
+  if (_foodRecipeMigrated) return;
+  if (!store.food || !store.recipe) return;
+  _foodRecipeMigrated = true;
+  var recipes=[], changed=false;
+  var recipeIds={}; (store.recipe.rows||[]).forEach(function(r){ if(r && r._id) recipeIds[String(r._id)]=true; });
+  store.food.rows=(store.food.rows||[]).map(function(r){
+    if (r && ('菜谱' in r)){
+      var hasRecipe = r['菜谱'] && String(r['菜谱']).trim();
+      if (hasRecipe){
+        var rid='recipe_'+String(r._id);
+        if (!recipeIds[rid]){
+          recipes.push({
+            _id: rid, _module:'recipe',
+            名称: r['名称']||'',
+            类型: '其他',
+            照片: r['照片']||null,
+            来源: (r['城市']||'')+(r['类型']?' · '+r['类型']:''),
+            食材: '',
+            菜谱: r['菜谱']
+          });
+        }
+      }
+      var nr=Object.assign({}, r);
+      delete nr['菜谱'];
+      changed=true;
+      return nr;
+    }
+    return r;
+  });
+  if (recipes.length){
+    store.recipe.rows=recipes.concat(store.recipe.rows);
+    store.recipe.status = store.recipe.rows.length ? 'ok' : 'empty';
+  }
+  if ((changed || recipes.length) && MODE !== 'db'){
+    if (MODE === 'localfile') queueLocalSave();
+    else persistAll();
+    render();
+  }
+}
+function tryMigrateFoodRecipe(){
+  if ((store.food && store.food.status==='loading') || (store.recipe && store.recipe.status==='loading')) return;
+  migrateFoodToRecipe();
+}
 
 /* v13：旧大类名重命名（观影→电影，音乐→留声机）；新建/筛选/统计时把旧值规范化 */
 function normalizeRow(r){
@@ -1603,6 +1663,7 @@ var ui = {
   travel:{ status:'', q:'', mapTab:'earth', ckNew:false, ckEditId:false },
   study:{ field:'', q:'', tab:'home', cat:'' },               /* v18：tab=home/书籍/杂志，子层 cat 是当前显示的分类 */
   food:{ type:'', q:'' },
+  recipe:{ type:'', q:'' },
   idea:{ cat:'', star:false, q:'' },
   year: String(new Date().getFullYear())
 };
@@ -1739,7 +1800,12 @@ function fetchAll(key, cb){
   function page(){
     if (guard++ > 40){ cb(all); return; }
     T[key].page(cursor).then(function(r){
-      all = all.concat(r && r.results ? r.results : []);
+      var rows = r && r.results ? r.results : [];
+      /* v48：food / recipe 在本地模式下按 _module 字段隔离；db 模式暂时共表不过滤 */
+      if ((key==='food' || key==='recipe') && MODE !== 'db'){
+        rows = rows.filter(function(x){ var m=(x && x['_module']) || ''; return m ? m===key : key==='food'; });
+      }
+      all = all.concat(rows);
       if (r && r.hasMore && r.nextCursor){ cursor=r.nextCursor; page(); } else cb(all);
     }).catch(function(){ cb(null); });
   }
@@ -1776,6 +1842,7 @@ function loadAll(){
       if (rows===null){ store[k].status='error'; render(); return; }
       store[k].rows=normalizeRows(rows);
       if (k==='travel') store[k].rows.forEach(migrateTravelRow);
+      if (k==='food' || k==='recipe') tryMigrateFoodRecipe();
       store[k].status= rows.length? 'ok' : 'empty';
       /* 关键：所有模式（含 local / gh）都要把相对路径封面解析成可显示 URL，否则封面整块空白 */
       resolveImagesFor(store[k].rows).then(function(){ render(); });
@@ -1785,7 +1852,7 @@ function loadAll(){
 }
 
 /* ============ 写入 ============ */
-function propsFrom(fields, vals){
+function propsFrom(fields, vals, key){
   var p={};
   fields.forEach(function(f){
     if (f.t==='geopick') return;
@@ -1808,6 +1875,8 @@ function propsFrom(fields, vals){
       p[f.k]={checkbox:!!v};
     }
   });
+  /* v48：food / recipe 在本地模式下用 _module 字段隔离；db 模式暂时共用一个线上表，不加 notion 不认识的字段 */
+  if ((key==='food' || key==='recipe') && MODE !== 'db') p['_module']={text:key};
   return p;
 }
 /* 写入成功后立刻并入本地视图，再静默回拉一次线上做校对 */
@@ -1827,6 +1896,13 @@ function localUpsert(key, id, vals){
     else if (f.t==='date') row[f.k] = v ? String(v) : null;
     else row[f.k] = (v===''||v==null) ? null : v;
   });
+  /* v48：food / recipe 在 db 模式下暂时共表，用隐藏字段 _module 区分；本地模式下也保留，方便后续拆分 */
+  if (key==='food' || key==='recipe') row['_module'] = key;
+  /* food 的经纬度通过 geopick 预填进 vals，但 fields 里已删除经纬度输入框，这里额外写回 row */
+  if (key==='food'){
+    row['纬度'] = num(vals['纬度']) || 0;
+    row['经度'] = num(vals['经度']) || 0;
+  }
   var rows = store[key].rows.filter(function(r){ return String(r._id)!==String(id); });
   rows.unshift(row);
   store[key].rows = rows;
@@ -1873,7 +1949,7 @@ function addRow(key, vals, after){
     toast(MODE === 'localfile' ? '已保存到本地 data 文件夹' : '已保存到本地（当前浏览器）');
     return;
   }
-  var m=MODS[key], props=propsFrom(m.fields, vals);
+  var m=MODS[key], props=propsFrom(m.fields, vals, key);
   mutate('新增'+m.name, function(){
     return T[key].add(props).then(function(res){
       var id = res && (res.id || res.record_id || res._id);
@@ -1890,7 +1966,7 @@ function updateRow(key, id, vals, after){
     toast(MODE === 'localfile' ? '已保存到本地 data 文件夹' : '已保存到本地');
     return;
   }
-  var m=MODS[key], props=propsFrom(m.fields, vals);
+  var m=MODS[key], props=propsFrom(m.fields, vals, key);
   mutate('修改'+m.name, function(){
     return T[key].upd(id, props).then(function(res){
       localUpsert(key, id, vals);
@@ -1950,6 +2026,11 @@ function filtered(key){
     if (q) rows=rows.filter(function(r){
       return ((r['名称']||'')+' '+(r['城市']||'')+' '+(r['短评']||'')).toLowerCase().indexOf(q)>=0; });
     rows.sort(function(a,b){ return dstr(b['打卡日期']).localeCompare(dstr(a['打卡日期'])); });
+  } else if (key==='recipe'){
+    if (f.type) rows=rows.filter(function(r){ return r['类型']===f.type; });
+    if (q) rows=rows.filter(function(r){
+      return ((r['名称']||'')+' '+(r['来源']||'')+' '+(r['食材']||'')+' '+(r['菜谱']||'')).toLowerCase().indexOf(q)>=0; });
+    rows.sort(function(a,b){ return String(b._id).localeCompare(String(a._id)); });
   } else if (key==='idea'){
     if (f.cat) rows=rows.filter(function(r){ return r['分类']===f.cat; });
     if (f.star) rows=rows.filter(function(r){ return !!r['星标']; });
@@ -2414,6 +2495,46 @@ function renderCheckinNew(){
 }
 var CKMAP=null, ckDraft={lat:null,lon:null,name:'',city:''};
 function stopCkMap(){ if (CKMAP){ try{ CKMAP.destroy(); }catch(e){} } CKMAP=null; ckDraft={lat:null,lon:null,name:'',city:''}; }
+
+/* 通用高德地图选点器（供 food 表单「地图选点」用） */
+var AMAP_PICKER_MAP=null, AMAP_PICKER_MARKER=null;
+function closeAmapPicker(){ if(AMAP_PICKER_MAP){ try{AMAP_PICKER_MAP.destroy();}catch(e){} AMAP_PICKER_MAP=null; AMAP_PICKER_MARKER=null; } }
+function openAmapPicker(onPick){
+  var akey=amapKey();
+  if(!akey){ toast('还没配置高德地图 Key：到右下角「⚙ 同步设置」填入 Key 和安全密钥'); return; }
+  var html='<div style="min-height:420px;display:flex;flex-direction:column;gap:12px">'+
+    '<div id="amapPicker" style="flex:1;min-height:320px;border-radius:12px;overflow:hidden;border:1px solid var(--hairline)"></div>'+
+    '<div style="display:flex;gap:10px;justify-content:flex-end">'+
+    '<button class="btn ghost" type="button" id="ampCancel">取消</button>'+
+    '<button class="btn primary" type="button" id="ampOk">确定选点</button></div>'+
+    '<p class="imgnote" style="margin:0">在地图上点一下放置标记，可拖动 / 缩放，确定后回填坐标。</p></div>';
+  var ov=rShowOverlay(html);
+  $('ampCancel').onclick=function(){ rCloseOverlay(); closeAmapPicker(); };
+  loadAMap(akey, amapSecret(), function(ok){
+    if(!ok){ toast('高德地图加载失败'); return; }
+    try{
+      var map=new AMap.Map('amapPicker',{zoom:4, center:[104,36], viewMode:'2D'});
+      map.addControl(new AMap.Scale());
+      map.addControl(new AMap.ToolBar({position:{right:'12px', bottom:'12px'}}));
+      AMAP_PICKER_MAP=map;
+      var lat=Number(editing.vals['纬度']), lon=Number(editing.vals['经度']);
+      if(lat && lon){ var g=wgs84ToGcj02(lat,lon); map.setZoomAndCenter(14,[g.lon,g.lat]); AMAP_PICKER_MARKER=new AMap.Marker({position:[g.lon,g.lat]}); map.add(AMAP_PICKER_MARKER); }
+      map.on('click', function(e){
+        if(!e||!e.lnglat) return;
+        if(AMAP_PICKER_MARKER){ AMAP_PICKER_MARKER.setPosition([e.lnglat.lng, e.lnglat.lat]); }
+        else { AMAP_PICKER_MARKER=new AMap.Marker({position:[e.lnglat.lng, e.lnglat.lat]}); map.add(AMAP_PICKER_MARKER); }
+      });
+      $('ampOk').onclick=function(){
+        if(!AMAP_PICKER_MARKER){ toast('请先在地图上点一下'); return; }
+        var pos=AMAP_PICKER_MARKER.getPosition();
+        var w=gcj02ToWgs84(pos.lat, pos.lng);
+        rCloseOverlay(); closeAmapPicker();
+        if(onPick) onPick(Math.round(w.lat*100000)/100000, Math.round(w.lon*100000)/100000);
+      };
+    }catch(e){ toast('地图初始化失败：'+((e&&e.message)||e)); }
+  });
+}
+
 function attachCkMap(){
   stopCkMap();
   var cv=document.getElementById('ckMap'); if(!cv) return;
@@ -2931,7 +3052,12 @@ function render(){
     act += '<button class="btn ghost sm" type="button" data-act="brand">外观</button>';
     act += '<button class="btn ghost sm" type="button" data-act="reloadall">重新拉取</button>';
   } else {
-    act += '<button class="btn primary" type="button" data-act="add" data-key="'+key+'">+ '+esc(m.addLabel)+'</button>';
+    if (key==='food'){
+      act += '<button class="btn primary" type="button" data-act="add" data-key="food">+ '+esc(MODS.food.addLabel)+'</button>';
+      act += '<button class="btn primary" type="button" data-act="add" data-key="recipe">+ '+esc(MODS.recipe.addLabel)+'</button>';
+    } else {
+      act += '<button class="btn primary" type="button" data-act="add" data-key="'+key+'">+ '+esc(m.addLabel)+'</button>';
+    }
     if (key==='collection'){
       act += '<button class="btn ghost sm" type="button" data-act="locmgr">存储地点</button>';
     }
@@ -2999,7 +3125,7 @@ function bindStage(){
   ['yearSel'].forEach(function(id){
     var n=$(id); if (n) n.addEventListener('change', function(){ ui.year=n.value; render(); });
   });
-  ['collection','travel','study','food','idea'].forEach(function(k){
+  ['collection','travel','study','food','recipe','idea'].forEach(function(k){
     var n=$('q_'+k);
     if (n){
       n.addEventListener('input', function(){ ui[k].q=n.value; });
@@ -3017,30 +3143,69 @@ document.addEventListener('click', function(ev){
   var act = node.getAttribute('data-act');
   var key = node.getAttribute('data-key');
   if (act==='geopick'){ openGlobePicker(); return; }
-  if (act==='georeloc'){
-    if (!editing || editing.key!=='travel'){ toast('先打开一个目的地，再点这里定位'); return; }
-    var locv=String(editing.vals['地点']||editing.vals['地区']||'').trim();
-    if (!locv){ toast('先填「地点」再按名称定位'); return; }
-    toast('正在按地点名重新定位…');
-    geocodeTravel(editing.vals, function(coords){
-      if (coords){
-        editing.vals['纬度']=Math.round(coords.lat*100)/100;
-        editing.vals['经度']=Math.round(coords.lon*100)/100;
-        var la=document.querySelector('[data-f="纬度"]'), lo=document.querySelector('[data-f="经度"]');
-        if (la) la.value=editing.vals['纬度'];
-        if (lo) lo.value=editing.vals['经度'];
-        toast('已重新定位到 '+editing.vals['纬度']+'°N, '+editing.vals['经度']+'°E（点保存生效）');
-      } else {
-        toast('没找到坐标，请手动点地球选位置');
-      }
+  if (act==='amappick'){
+    if (!editing || editing.key!=='food'){ toast('先打开一个美食记录再选点'); return; }
+    openAmapPicker(function(lat,lon){
+      editing.vals['纬度']=lat; editing.vals['经度']=lon;
+      toast('已选点：'+lat+'°N, '+lon+'°E（点保存生效）');
     });
     return;
   }
+  if (act==='georeloc'){
+    if (!editing || (editing.key!=='travel' && editing.key!=='food')){ toast('先打开一个目的地或美食，再点这里定位'); return; }
+    var locv='';
+    if (editing.key==='travel') locv=String(editing.vals['地点']||editing.vals['地区']||'').trim();
+    else locv=String(editing.vals['名称']||editing.vals['城市']||'').trim();
+    if (!locv){ toast(editing.key==='travel'?'先填「地点」再按名称定位':'先填「名称」或「城市」再搜索'); return; }
+    toast('正在按名称定位…');
+    if (editing.key==='travel'){
+      geocodeTravel(editing.vals, function(coords){
+        if (coords){
+          editing.vals['纬度']=Math.round(coords.lat*100)/100;
+          editing.vals['经度']=Math.round(coords.lon*100)/100;
+          var la=document.querySelector('[data-f="纬度"]'), lo=document.querySelector('[data-f="经度"]');
+          if (la) la.value=editing.vals['纬度'];
+          if (lo) lo.value=editing.vals['经度'];
+          toast('已重新定位到 '+editing.vals['纬度']+'°N, '+editing.vals['经度']+'°E（点保存生效）');
+        } else { toast('没找到坐标，请手动点地球选位置'); }
+      });
+    } else {
+      /* food：用高德搜索名称+城市 */
+      var city=String(editing.vals['城市']||'').trim();
+      var q=locv+(city?' '+city:'');
+      var akey=amapKey();
+      if (!akey){ toast('还没配置高德地图 Key'); return; }
+      loadAMap(akey, amapSecret(), function(ok){
+        if(!ok){ toast('高德地图加载失败'); return; }
+        try{
+          AMap.plugin(['AMap.PlaceSearch'], function(){
+            var ps=new AMap.PlaceSearch({pageSize:5, pageIndex:1, city: city || '全国'});
+            ps.search(q, function(st,res){
+              if(st==='complete' && res && res.poiList && res.poiList.pois && res.poiList.pois.length){
+                var p=res.poiList.pois[0]; if(!p.location){ toast('高德返回结果缺少坐标'); return; }
+                var w=gcj02ToWgs84(p.location.lat, p.location.lng);
+                editing.vals['纬度']=Math.round(w.lat*100)/100;
+                editing.vals['经度']=Math.round(w.lon*100)/100;
+                toast('已定位到「'+p.name+'」：'+editing.vals['纬度']+'°N, '+editing.vals['经度']+'°E（点保存生效）');
+              } else { toast('高德没搜到「'+q+'」，换词试试或点「地图选点」'); }
+            });
+          });
+        }catch(e){ toast('高德搜索出错：'+((e&&e.message)||e)); }
+      });
+    }
+    return;
+  }
   if (act==='amapsearch'){
-    if (!editing || editing.key!=='travel'){ toast('先打开一个目的地，再点这里定位'); return; }
+    if (!editing || (editing.key!=='travel' && editing.key!=='food')){ toast('先打开一个目的地或美食，再点这里定位'); return; }
     var box = document.querySelector('[data-amap-search]');
-    var q = (box && box.value.trim()) || String(editing.vals['地点']||editing.vals['地区']||'').trim();
-    if (!q){ toast('先填「地点」或输入搜索词'); return; }
+    var q='', city='';
+    if (editing.key==='travel'){
+      q = (box && box.value.trim()) || String(editing.vals['地点']||editing.vals['地区']||'').trim();
+    } else {
+      city = String(editing.vals['城市']||'').trim();
+      q = (box && box.value.trim()) || String(editing.vals['名称']||'').trim();
+    }
+    if (!q){ toast(editing.key==='travel'?'先填「地点」或输入搜索词':'先填「名称」或输入搜索词'); return; }
     var akey = amapKey();
     if (!akey){ toast('还没配置高德地图 Key：到右下角「⚙ 同步设置」填入 Key 和安全密钥'); return; }
     toast('正在用高德搜索「'+q+'」…');
@@ -3048,7 +3213,7 @@ document.addEventListener('click', function(ev){
       if (!ok){ toast('高德地图加载失败，检查 Key / 安全密钥与域名白名单'); return; }
       try {
         AMap.plugin(['AMap.PlaceSearch'], function(){
-          var ps = new AMap.PlaceSearch({ pageSize:5, pageIndex:1, city:'全国' });
+          var ps = new AMap.PlaceSearch({ pageSize:5, pageIndex:1, city: city || '全国' });
           ps.search(q, function(st, res){
             if (st==='complete' && res && res.poiList && res.poiList.pois && res.poiList.pois.length){
               var p = res.poiList.pois[0];
@@ -3056,21 +3221,16 @@ document.addEventListener('click', function(ev){
               var w = gcj02ToWgs84(p.location.lat, p.location.lng);
               editing.vals['纬度'] = Math.round(w.lat*100)/100;
               editing.vals['经度'] = Math.round(w.lon*100)/100;
-              if (p.name && !editing.vals['地点']) editing.vals['地点'] = p.name;
-              if (p.adname && !editing.vals['地区']) editing.vals['地区'] = p.adname;
-              else if (p.name && !editing.vals['地区']) editing.vals['地区'] = p.name;
-              if (p.pname && !editing.vals['国家']) editing.vals['国家'] = p.pname;
-              else if (p.cityname && !editing.vals['国家']) editing.vals['国家'] = p.cityname;
-              var la = document.querySelector('[data-f="纬度"]'), lo = document.querySelector('[data-f="经度"]');
-              var na = document.querySelector('[data-f="地点"]'), re = document.querySelector('[data-f="地区"]'), co = document.querySelector('[data-f="国家"]');
-              if (la) la.value = editing.vals['纬度'];
-              if (lo) lo.value = editing.vals['经度'];
-              if (na && !na.value) na.value = editing.vals['地点'];
-              if (re && !re.value) re.value = editing.vals['地区'];
-              if (co && !co.value) co.value = editing.vals['国家'];
+              if (editing.key==='travel'){
+                if (p.name && !editing.vals['地点']) editing.vals['地点'] = p.name;
+                if (p.adname && !editing.vals['地区']) editing.vals['地区'] = p.adname;
+                else if (p.name && !editing.vals['地区']) editing.vals['地区'] = p.name;
+                if (p.pname && !editing.vals['国家']) editing.vals['国家'] = p.pname;
+                else if (p.cityname && !editing.vals['国家']) editing.vals['国家'] = p.cityname;
+              }
               toast('已定位到「'+p.name+'」：'+editing.vals['纬度']+'°N, '+editing.vals['经度']+'°E（点保存生效）');
             } else {
-              toast('高德没搜到「'+q+'」，换词试试或手动选位置');
+              toast('高德没搜到「'+q+'」，换词试试或点「地图选点」手动标记');
             }
           });
         });
@@ -3161,9 +3321,11 @@ document.addEventListener('click', function(ev){
   if (act==='magadd'){ openForm('collection', null, {prefill:{'大类':'杂志'}}); return; }
   if (act==='bookcase'){ ui.study.tab=node.getAttribute('data-cat')||'书籍'; ui.study.cat=ui.study.tab; ui.view='study'; render(); return; }
   if (act==='studyback'){ ui.study.tab='home'; ui.study.cat=''; render(); return; }
-  if (act==='foodpin'){ showFoodRecipe(node.getAttribute('data-id')); return; }
+  if (act==='foodpin'){ showFoodPin(node.getAttribute('data-id')); return; }
+  if (act==='recipeopen'){ showFoodRecipe(node.getAttribute('data-id')); return; }
+  if (act==='foodedit'){ rCloseOverlay(); openForm('food', node.getAttribute('data-id')); return; }
   if (act==='studiedit'){ rCloseOverlay(); openForm('study', node.getAttribute('data-id')); return; }
-  if (act==='recipeedit'){ rCloseOverlay(); openForm('food', node.getAttribute('data-id')); return; }
+  if (act==='recipeedit'){ rCloseOverlay(); openForm('recipe', node.getAttribute('data-id')); return; }
   if (act==='ideaedit'){ rCloseOverlay(); openForm('idea', node.getAttribute('data-id')); return; }
   if (act==='f'){
     var k=node.getAttribute('data-k'), v=node.getAttribute('data-v');
@@ -3647,7 +3809,7 @@ function batchWrite(key, list, onProgress, onDone){
         queue.push({
           label:'批量新增「'+(v['名称']||'')+'」',
           key:key,
-          run:function(){ return T[key].add(propsFrom(MODS[key].fields, v)); }
+          run:function(){ return T[key].add(propsFrom(MODS[key].fields, v, key)); }
         });
       });
       renderSyncBar();
@@ -3658,7 +3820,7 @@ function batchWrite(key, list, onProgress, onDone){
     var slice=list.slice(i, i+CONC); i+=CONC;
     var pending=slice.length;
     slice.forEach(function(vals){
-      T[key].add(propsFrom(MODS[key].fields, vals)).then(function(res){
+      T[key].add(propsFrom(MODS[key].fields, vals, key)).then(function(res){
         var id = res && (res.id || res.record_id || res._id);
         if (id) localUpsert(key, id, vals);
         ok++;
@@ -3926,13 +4088,14 @@ function fieldHTML(f, v){
       '<input data-dyn-cus="'+f.k+'" type="text" placeholder="自定义…" style="display:none" autocomplete="off">'+
       '</div>';
   } else if (f.t==='geopick'){
+    var isAmap = (f.mode==='amap');
     body='<div style="display:flex;gap:8px;margin:2px 0 8px">'+
-      '<input type="text" class="search" data-amap-search placeholder="如：黄山风景区，或直接点下方按钮" style="flex:1" autocomplete="off">'+
+      '<input type="text" class="search" data-amap-search placeholder="'+esc(isAmap?'如：金强牛肉面 上海':'如：黄山风景区，或直接点下方按钮')+'" style="flex:1" autocomplete="off">'+
       '<button class="btn primary sm" type="button" data-act="amapsearch">🔍 高德搜索</button>'+
       '</div>'+
-      '<button type="button" class="btn ghost sm" data-act="geopick">📍 在地球上点选坐标</button>'+
+      '<button type="button" class="btn ghost sm" data-act="'+(isAmap?'amappick':'geopick')+'">📍 '+(isAmap?'在地图上选点':'在地球上点选坐标')+'</button>'+
       '<button type="button" class="btn ghost sm" data-act="georeloc">🌍 按名称重新定位</button>'+
-      '<span class="imgnote">输入地点名搜高德自动填坐标，或在地球上手动选</span>';
+      '<span class="imgnote">'+esc(isAmap?'输入店名 / 城市搜高德自动填坐标，或点地图手动选':'输入地点名搜高德自动填坐标，或在地球上手动选')+'</span>';
   } else if (f.t==='check'){
     body='<label class="checkrow"><input data-f="'+f.k+'" type="checkbox"'+(v?' checked':'')+'>'+esc(f.k)+'</label>';
   }
@@ -5800,21 +5963,20 @@ function showStudyBook(id){
 }
 
 /* ============================================================
-   美食 · 古朴厨房（地图 + 菜谱册的双玻璃卡）
+   美食 · 古朴厨房（v48：左侧高德美食地图，右侧独立私房菜谱册）
    ============================================================ */
 function foodBookCard(r){
   var t=r['名称']||'未命名'; var u=coverImg(r);
-  var seal=(r['类型']||'餐').slice(0,1);
-  return '<div class="rc-book" data-act="foodpin" data-id="'+esc(r._id)+'">'+
+  var seal=(r['类型']||'菜').slice(0,1);
+  return '<div class="rc-book" data-act="recipeopen" data-id="'+esc(r._id)+'">'+
     (u?'<div class="rc-thumb" style="background-image:url(\''+u.replace(/["'()\\]/g,'')+'\')"></div>':'<div class="rc-thumb"></div>')+
     '<div class="rc-body"><div class="rc-name">'+esc(t)+'</div>'+
-    '<div class="rc-sub">'+esc(r['城市']||'')+(r['类型']?' · '+esc(r['类型']):'')+'</div>'+
-    '<div class="rc-stars">'+stars(r['星级'])+'</div></div>'+
+    '<div class="rc-sub">'+esc(r['类型']||'')+(r['来源']?' · '+esc(r['来源']):'')+'</div></div>'+
     '<div class="rc-seal">'+esc(seal)+'</div></div>';
 }
 function renderFoodTwoCol(){
-  var s=store.food, rows=s.rows.slice();
-  var pinRows = rows.map(function(r){
+  var foodRows=store.food.rows.slice(), recipeRows=(store.recipe&&store.recipe.rows)||[];
+  var pinRows = foodRows.map(function(r){
     var latTxt = r['城市'] ? r['城市'] : '未标城市';
     var typeTxt = r['类型'] ? ' · '+r['类型'] : '';
     return '<div class="pin-row" data-act="foodpin" data-id="'+esc(r._id)+'">'+
@@ -5826,100 +5988,75 @@ function renderFoodTwoCol(){
     '<div class="ft-head">'+
       '<h1>馐 馔 坊</h1>'+
       '<p>T A S T E · F L A V O R · L O C A L</p>'+
-      '<div style="margin-top:14px">'+
-        '<button class="r-btn" data-act="foodadd">+ 记一笔新美味</button>'+
-      '</div>'+
     '</div>'+
     '<div class="ft-grid">'+
       '<div class="left glass-card">'+
         '<h2>美 食 地 图</h2>'+
-        '<div class="fm-hint" style="font-size:11px;letter-spacing:1px;color:var(--ink-faint);margin-bottom:8px">点图钉查看菜谱 · 点空白处标注</div>'+
-        '<canvas id="foodMap" class="foodmap"></canvas>'+
+        '<div class="fm-hint" style="font-size:11px;letter-spacing:1px;color:var(--ink-faint);margin-bottom:8px">点标记看详情 · 点地图空白处添加</div>'+
+        '<div id="foodMap" class="foodmap"></div>'+
         '<div class="ft-pin-list" style="margin-top:14px;max-height:120px;overflow:auto">'+
-          (rows.length ? pinRows : '<div style="padding:8px;color:var(--ink-faint)">还没有记录</div>')+
+          (foodRows.length ? pinRows : '<div style="padding:8px;color:var(--ink-faint)">还没有美食标记</div>')+
         '</div>'+
       '</div>'+
       '<div class="right glass-card">'+
-        '<h2>菜 谱 册</h2>'+
+        '<h2>私 房 菜 谱</h2>'+
         '<div class="recipe-page" style="font-size:11px;letter-spacing:1px;color:var(--ink-faint);margin-bottom:8px">食 · 记 · 心 · 得</div>'+
-        (rows.length?('<div class="rc-list">'+rows.map(foodBookCard).join('')+'</div>'):emptyHTML('还没有馐馔坊记录','点上方「记一笔新美味」。'))+
+        (recipeRows.length?('<div class="rc-list">'+recipeRows.map(foodBookCard).join('')+'</div>'):emptyHTML('还没有菜谱','点右上角「+ 记菜谱」。'))+
       '</div>'+
     '</div>'+
   '</div>';
 }
 
-/* 极简陆地形状（保持精简） */
-function drawLand(ctx,w,h){
-  if(typeof LAND_DATA==='undefined'||!LAND_DATA||!LAND_DATA.length) return;
-  ctx.fillStyle='rgba(110,140,80,0.6)';
-  for(var i=0;i<LAND_DATA.length;i++){
-    var polys=LAND_DATA[i];
-    var rings = (polys.length && polys[0].length && typeof polys[0][0]==='number') ? [polys] : polys;
-    for(var p=0;p<rings.length;p++){
-      var ring=rings[p]; if(!ring||!ring.length) continue;
-      ctx.beginPath();
-      for(var j=0;j<ring.length;j++){
-        var lon=ring[j][0], lat=ring[j][1];
-        var x=(lon+180)/360*w, y=(90-lat)/180*h;
-        if(j===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-      }
-      ctx.closePath(); ctx.fill();
-    }
-  }
+var FOOD_MAP=null, FOOD_MARKERS=[];
+function stopFoodMap(){
+  if(FOOD_MAP){ try{ FOOD_MAP.destroy(); }catch(e){} FOOD_MAP=null; }
+  FOOD_MARKERS=[];
 }
-var FOOD_MAP=null;
 function initFoodMap(){
   stopFoodMap();
   var cv=document.getElementById('foodMap'); if(!cv) return;
-  var wrap=cv.parentElement;
-  var w=wrap.clientWidth||480;
-  /* 手机端竖屏：把地图压扁一些、降低最小高度，避免一屏装不下 */
-  var h = IS_MOBILE ? Math.max(200, Math.round(w*0.62)) : Math.max(280, Math.round(w*0.6));
-  cv.width=w*2; cv.height=h*2; cv.style.width=w+'px'; cv.style.height=h+'px';
-  var ctx=cv.getContext('2d'); ctx.scale(2,2);
-  function draw(){
-    ctx.clearRect(0,0,w,h);
-    var g=ctx.createLinearGradient(0,0,0,h);
-    g.addColorStop(0,'#e8e2cc'); g.addColorStop(1,'#d6c8a4');
-    ctx.fillStyle=g; ctx.fillRect(0,0,w,h);
-    ctx.strokeStyle='rgba(120,90,40,0.18)'; ctx.lineWidth=1;
-    for(var gx=0;gx<=w;gx+=w/12){ ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,h); ctx.stroke(); }
-    for(var gy=0;gy<=h;gy+=h/6){ ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(w,gy); ctx.stroke(); }
-    drawLand(ctx,w,h);
-    store.food.rows.forEach(function(r){
-      var xf=num(r['经度']), yf=num(r['纬度']);
-      if(!(xf>=0&&xf<=1&&yf>=0&&yf<=1)) return;
-      var x=xf*w, y=yf*h;
-      ctx.beginPath(); ctx.arc(x,y-10,7,0,7); ctx.fillStyle='#8a3a1e'; ctx.fill();
-      ctx.beginPath(); ctx.moveTo(x-7,y-10); ctx.lineTo(x+7,y-10); ctx.lineTo(x,y+6); ctx.closePath();
-      ctx.fillStyle='#8a3a1e'; ctx.fill();
-      ctx.beginPath(); ctx.arc(x,y-10,3,0,7); ctx.fillStyle='#ffd9a0'; ctx.fill();
-    });
-  }
-  draw();
-  cv.onclick=function(e){
-    var rect=cv.getBoundingClientRect();
-    var x=(e.clientX-rect.left)/rect.width, y=(e.clientY-rect.top)/rect.height;
-    var hit=null, best=0.0025;
-    store.food.rows.forEach(function(r){
-      var xf=num(r['经度']), yf=num(r['纬度']);
-      if(!(xf>=0&&xf<=1&&yf>=0&&yf<=1)) return;
-      var d=(xf-x)*(xf-x)+(yf-y)*(yf-y);
-      if(d<best){ best=d; hit=r; }
-    });
-    if(hit) showFoodRecipe(hit._id);
-    else openForm('food', null, {prefill:{经度:Math.min(0.999,Math.max(0.001,x)), 纬度:Math.min(0.999,Math.max(0.001,y))}});
-  };
-  FOOD_MAP={cv:cv,draw:draw,w:w,h:h};
+  var tip=cv.parentNode.querySelector('.fm-hint');
+  var key=amapKey();
+  if(!key){ if(tip) tip.textContent='还没配置高德地图 Key：到右下角「⚙ 同步设置」填入 Key 和安全密钥'; return; }
+  loadAMap(key, amapSecret(), function(ok){
+    if(!ok){ if(tip) tip.textContent='高德地图加载失败'; return; }
+    try{
+      var wrap=cv.parentElement;
+      var h = IS_MOBILE ? Math.max(200, Math.round((wrap.clientWidth||480)*0.62)) : Math.max(280, Math.round((wrap.clientWidth||480)*0.6));
+      cv.style.height=h+'px';
+      var map=new AMap.Map('foodMap',{zoom:4, center:[104,36], viewMode:'2D'});
+      map.addControl(new AMap.Scale());
+      map.addControl(new AMap.ToolBar({position:{right:'12px', bottom:'12px'}}));
+      FOOD_MAP=map;
+      function renderFoodMarkers(){
+        map.remove(FOOD_MARKERS); FOOD_MARKERS=[];
+        store.food.rows.forEach(function(r){
+          var lat=Number(r['纬度']), lon=Number(r['经度']);
+          if(!(lat && lon)) return;
+          var g=wgs84ToGcj02(lat, lon);
+          var mk=new AMap.Marker({position:[g.lon,g.lat], content:mkContent('#b08850', r['名称']||''), anchor:'bottom-center'});
+          mk.on('click', function(){ showFoodPin(r._id); });
+          FOOD_MARKERS.push(mk);
+        });
+        if(FOOD_MARKERS.length) map.add(FOOD_MARKERS);
+      }
+      renderFoodMarkers();
+      map.on('click', function(e){
+        if(!e||!e.lnglat) return;
+        var w=gcj02ToWgs84(e.lnglat.lat, e.lnglat.lng);
+        openForm('food', null, {prefill:{纬度:Math.round(w.lat*100000)/100000, 经度:Math.round(w.lon*100000)/100000}});
+      });
+      if(tip) tip.textContent='点标记看详情 · 点地图空白处添加新美食';
+    }catch(e){ if(tip) tip.textContent='地图初始化失败：'+((e&&e.message)||e); }
+  });
 }
-function stopFoodMap(){ FOOD_MAP=null; }
-function showFoodRecipe(id){
+function showFoodPin(id){
   var r=(store.food.rows.filter(function(x){return String(x._id)===String(id);})[0]); if(!r) return;
   var u=coverImg(r);
   var rowsHtml='';
   function row(k,v){ if(v||v===0) rowsHtml+='<div class="rc-row"><b>'+k+'</b><span>'+esc(String(v))+'</span></div>'; }
   row('类型', r['类型']); row('城市', r['城市']);
-  row('星级', stars(r['星级'])); row('人均', '¥'+num(r['人均']));
+  row('星级', stars(r['星级'])); row('人均', num(r['人均'])?'¥'+num(r['人均']):'');
   row('打卡', dstr(r['打卡日期'])); row('想再去', r['想再去']?'是':'');
   var html =
     '<h2>'+esc(r['名称']||'未命名')+
@@ -5931,8 +6068,27 @@ function showFoodRecipe(id){
         '<div><div class="rc-tag">'+(r['类型']||'美食')+(r['城市']?' · '+esc(r['城市']):'')+'</div>'+
         (rowsHtml?'<div class="rc-rows">'+rowsHtml+'</div>':'')+'</div>'+
       '</div>'+
-      (r['短评']?'<div class="rc-text" style="margin-top:12px"><b style="color:#7a3b22">短评</b><br>'+esc(r['短评'])+'</div>':'')+
-      (r['菜谱']?'<div class="rc-text" style="margin-top:10px"><b style="color:#7a3b22">菜谱</b><br>'+esc(r['菜谱']).replace(/\n/g,'<br>')+'</div>':'')+
+      (r['短评']?'<div class="rc-text" style="margin-top:12px"><b style="color:#7a3b22">短评</b><br>'+esc(r['短评']).replace(/\n/g,'<br>')+'</div>':'')+
+      '<div class="r-actions">'+
+        '<button class="r-btn primary" data-act="foodedit" data-id="'+esc(id)+'">编辑这个美食</button>'+
+      '</div>'+
+    '</div>';
+  rShowOverlay(html);
+}
+function showFoodRecipe(id){
+  var r=(store.recipe.rows.filter(function(x){return String(x._id)===String(id);})[0]); if(!r) return;
+  var u=coverImg(r);
+  var html =
+    '<h2>'+esc(r['名称']||'未命名')+
+      '<span class="x" onclick="rCloseOverlay()">×</span>'+
+    '</h2>'+
+    '<div class="recipe-detail">'+
+      '<div class="rc-head">'+
+        (u?'<div class="rc-big" style="background-image:url(\''+u.replace(/["'()\\]/g,'')+'\')"></div>':'<div class="rc-big"></div>')+
+        '<div><div class="rc-tag">'+esc(r['类型']||'菜谱')+(r['来源']?' · '+esc(r['来源']):'')+'</div></div>'+
+      '</div>'+
+      (r['食材']?'<div class="rc-text" style="margin-top:12px"><b style="color:#7a3b22">食材</b><br>'+esc(r['食材']).replace(/\n/g,'<br>')+'</div>':'')+
+      (r['菜谱']?'<div class="rc-text" style="margin-top:10px"><b style="color:#7a3b22">做法</b><br>'+esc(r['菜谱']).replace(/\n/g,'<br>')+'</div>':'')+
       '<div class="r-actions">'+
         '<button class="r-btn primary" data-act="recipeedit" data-id="'+esc(id)+'">编辑这道菜谱</button>'+
       '</div>'+

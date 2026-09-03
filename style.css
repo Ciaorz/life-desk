@@ -222,6 +222,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .trip .top{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
 .trip h4{font:700 17px/1.3 "Songti SC",serif}
 .trip .where{color:var(--muted);font-size:11.5px;margin-top:3px;letter-spacing:.04em}
+.trip .hearts{display:flex;gap:2px;align-items:center;margin-top:6px;font-size:12px;line-height:1}
 .trip .meta{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11.5px;color:var(--muted)}
 .trip .meta b{color:var(--ink);font-weight:650}
 .trip .note{margin-top:10px;padding-top:10px;border-top:1px dashed rgba(111,89,67,.16);
@@ -1296,6 +1297,13 @@ input.search:focus{border-color:var(--accent);background:#fff}
   position: relative;
   z-index: 2;
 }
+.foodtwo .foodmap {
+  width: 100%;
+  min-height: 280px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+}
 @media (max-width: 900px) { .foodtwo .ft-grid { grid-template-columns: 1fr; } }
 .foodtwo .left, .foodtwo .right { padding: 22px; min-height: 320px; }
 .foodtwo .left h2, .foodtwo .right h2 {
@@ -1342,6 +1350,14 @@ input.search:focus{border-color:var(--accent);background:#fff}
   padding: 12px 0;
 }
 .foodtwo .recipe-page .ing { color: var(--gold); }
+.foodtwo .rc-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
+.foodtwo .rc-book { position: relative; background: var(--paper); border-radius: 14px; overflow: hidden; cursor: pointer; transition: transform .2s, box-shadow .2s; box-shadow: var(--shadow-1); }
+.foodtwo .rc-book:hover { transform: translateY(-3px); box-shadow: var(--shadow-2); }
+.foodtwo .rc-thumb { width: 100%; aspect-ratio: 4/3; background-size: cover; background-position: center; background-color: rgba(176,136,80,.12); }
+.foodtwo .rc-body { padding: 12px 12px 14px; }
+.foodtwo .rc-name { font-family: var(--serif); font-size: 14px; font-weight: 600; color: var(--ink); }
+.foodtwo .rc-sub { font-size: 11px; color: var(--ink-soft); margin-top: 4px; }
+.foodtwo .rc-seal { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: rgba(255,255,255,.82); display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--gold); font-weight: 700; }
 
 /* --- 灵感捕捉 · 银河摄影（用户提供的真实银河照片 + 柔光星尘 · 鼠标悬停触发）--- */
 .ideasky {
@@ -1521,7 +1537,7 @@ input.search{margin-bottom:12px}
   .foodtwo .left h2::before, .foodtwo .right h2::before { height: 16px; margin-right: 6px; }
   .foodtwo .ft-pin-list { max-height: 96px !important; }
   /* canvas 由 JS 按容器宽度设定像素尺寸；这里防止窄屏溢出并保持宽高比 */
-  .foodtwo canvas.foodmap { max-width: 100%; height: auto !important; }
+  .foodtwo .foodmap { width: 100%; border-radius: 12px; overflow: hidden; }
 
   /* --- 灵思阁：星空背景 --- */
   .ideasky { min-height: 0; }
@@ -1599,6 +1615,18 @@ input.search{margin-bottom:12px}
   box-shadow:0 3px 8px rgba(0,0,0,.32);font-weight:600}
 .mk-dot::after{content:"";position:absolute;left:50%;bottom:-5px;transform:translateX(-50%);
   border:5px solid transparent;border-top-color:var(--mc,#4a90d9);border-bottom:0}
+
+/* 聚合数字气泡：多个目的地重叠时显示数量，点击后放大铺开 */
+.mk-cluster{position:relative;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;
+  color:#fff;font-size:13px;line-height:1;font-weight:700;cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,.35);
+  background:#6c5ce7;transition:transform .15s,filter .15s}
+.mk-cluster:hover{transform:scale(1.08);filter:brightness(1.1)}
+.mk-cluster::after{content:"";position:absolute;left:50%;bottom:-5px;transform:translateX(-50%);
+  border:5px solid transparent;border-top-color:#6c5ce7;border-bottom:0}
+/* 目的地标记右上角的「同城打卡点数量」角标 */
+.mk-badge{position:absolute;top:-7px;right:-9px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;
+  background:#ff7043;color:#fff;font-size:10px;line-height:16px;text-align:center;font-weight:700;
+  box-shadow:0 2px 5px rgba(0,0,0,.35);border:1.5px solid #fff;pointer-events:none}
 
 /* 打卡点卡片（与想去/去过同款 .trip 风格，点一下即编辑） */
 .trip.ck{cursor:pointer}
