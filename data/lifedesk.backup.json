@@ -1,0 +1,53 @@
+{
+  "collection": [],
+  "travel": [
+    {
+      "_id": "l_mtkdt9a1p888e",
+      "地点": "黄山",
+      "国家地区": "安徽",
+      "纬度": 30.29,
+      "经度": 118.02,
+      "状态": "去过",
+      "心愿等级": "此生必去",
+      "最佳季节": null,
+      "预计天数": 0,
+      "预算": 0,
+      "出行日期": null,
+      "同伴": null,
+      "封面": [
+        {
+          "imageUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQEc7VCzhSnWbU0KUit053tuW6LVtRydckycwFYWk5Vjg&s=10"
+        }
+      ],
+      "备注": null
+    },
+    {
+      "_id": "l_mtkdu2r88wbmo",
+      "地点": "多洛米蒂",
+      "国家地区": "意大利",
+      "纬度": 46.38,
+      "经度": 11.85,
+      "状态": "想去",
+      "心愿等级": "此生必去",
+      "最佳季节": null,
+      "预计天数": 0,
+      "预算": 0,
+      "出行日期": null,
+      "同伴": null,
+      "封面": [
+        {
+          "imageUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSX6c1yBXfqFT-1U7mBb1E1bFkT3gU0wFW1UAcPG3K-fK4TgJNhRxQA3oyy&s=10"
+        }
+      ],
+      "备注": null
+    }
+  ],
+  "av": [],
+  "study": [],
+  "food": [],
+  "idea": [],
+  "ip": [],
+  "series": [],
+  "loc": [],
+  "candidate": []
+}
