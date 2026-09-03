@@ -4205,68 +4205,105 @@ function fillBookFromISBN(isbn){
     probe.src=coverUrl;
   });
 }
+/* 通用：按需加载外部脚本（识别库在扫码时才拉，不影响首屏） */
+function loadScript(src){
+  return new Promise(function(res, rej){
+    var s=document.createElement('script'); s.src=src; s.async=true;
+    s.onload=function(){ res(); }; s.onerror=function(){ rej(new Error('load fail')); };
+    document.head.appendChild(s);
+  });
+}
+/* 把扫码/选图识别出来的原始串归一化成 ISBN 并触发查书 */
+function onDetectBook(raw, cleanup){
+  var isbn=normIsbn(raw);
+  if(!isbn && /^https?:\/\//i.test(raw)){
+    var m=raw.match(/isbn[=_]?(\d{13}|\d{10})/i) || raw.match(/(\d{13})/);
+    if(m) isbn=normIsbn(m[1]);
+  }
+  if(!isbn){ toast('没认出 ISBN，可手动填：'+String(raw||'').slice(0,40)); return; }
+  if(typeof cleanup==='function') cleanup();
+  rCloseOverlay();
+  fillBookFromISBN(isbn);
+}
+/* 拍照/选图识别：微信等禁了实时摄像头的环境，用 file+capture 拿照片，本地 ZXing 解码 */
+function decodeBookPhoto(file){
+  var msg=document.getElementById('scanMsg');
+  if(msg) msg.textContent='正在识别照片中的条码…';
+  loadScript('https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js').then(function(){
+    if(!document.getElementById('scanHidden')){ if(msg) msg.textContent='已取消'; return; }
+    try{
+      var sc=new Html5Qrcode('scanHidden');
+      sc.scanFile(file, false).then(function(text){ onDetectBook(text); })
+        .catch(function(){ if(msg) msg.textContent='没在图片里认出条码，换张清晰照片，或点「手动输入」'; });
+    }catch(e){ if(msg) msg.textContent='识别库初始化失败，请用「手动输入」'; }
+  }).catch(function(){ if(msg) msg.textContent='识别库加载失败（需联网），请用「手动输入」'; });
+}
+function showManualIsbn(){
+  var html='<div class="scanwrap" style="display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:28px 22px;text-align:center">'+
+    '<div style="font-size:48px;line-height:1">⌨️</div>'+
+    '<h3 style="margin:0;font-family:var(--serif);font-size:18px;color:var(--ink)">手动输入 ISBN</h3>'+
+    '<p class="imgnote" style="max-width:320px;margin:0 auto;line-height:1.6">输入书背的 ISBN（13 位或 10 位），系统自动查书并填表。</p>'+
+    '<div style="width:100%;max-width:300px;display:flex;flex-direction:column;gap:10px;margin-top:6px">'+
+      '<input type="text" id="manualIsbn" class="search" placeholder="如 9787544253994" inputmode="numeric" autocomplete="off" style="text-align:center;font-size:16px;letter-spacing:1px">'+
+      '<button type="button" class="btn primary" id="manualLookup">查书并填入</button>'+
+      '<button type="button" class="btn ghost sm" id="manualCancel">取消</button>'+
+    '</div></div>';
+  rShowOverlay(html);
+  var inp=document.getElementById('manualIsbn'), btn=document.getElementById('manualLookup'), cancel=document.getElementById('manualCancel');
+  if(inp) setTimeout(function(){ inp.focus(); }, 80);
+  function doManual(){
+    if(!inp) return;
+    var v=normIsbn(inp.value);
+    if(!v){ toast('请输入正确的 ISBN（10 或 13 位数字）'); inp.focus(); return; }
+    rCloseOverlay(); fillBookFromISBN(v);
+  }
+  if(btn) btn.onclick=doManual;
+  if(inp) inp.addEventListener('keydown', function(e){ if(e.key==='Enter') doManual(); });
+  if(cancel) cancel.onclick=rCloseOverlay;
+}
 function openBookScanner(){
   var hasCam = ('BarcodeDetector' in window) && navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
-  if (!hasCam){
-    var html='<div class="scanwrap" style="display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:28px 22px;text-align:center">'+
-      '<div style="font-size:48px;line-height:1">⌨️</div>'+
-      '<h3 style="margin:0;font-family:var(--serif);font-size:18px;color:var(--ink)">当前浏览器无法调用摄像头</h3>'+
-      '<p class="imgnote" style="max-width:320px;margin:0 auto;line-height:1.6">微信等内置浏览器不支持扫码。请手动输入书背 ISBN，系统会自动查书并填表。</p>'+
-      '<div style="width:100%;max-width:300px;display:flex;flex-direction:column;gap:10px;margin-top:6px">'+
-        '<input type="text" id="manualIsbn" class="search" placeholder="如 9787544253994" inputmode="numeric" autocomplete="off" style="text-align:center;font-size:16px;letter-spacing:1px">'+
-        '<button type="button" class="btn primary" id="manualLookup">查书并填入</button>'+
-        '<button type="button" class="btn ghost sm" id="scanCancel">取消</button>'+
-      '</div>'+
-    '</div>';
-    rShowOverlay(html);
-    var inp=document.getElementById('manualIsbn'), btn=document.getElementById('manualLookup'), cancel=document.getElementById('scanCancel');
-    if (inp) setTimeout(function(){ inp.focus(); }, 80);
-    function doManual(){
-      if(!inp) return;
-      var v=normIsbn(inp.value);
-      if(!v){ toast('请输入正确的 ISBN（10 或 13 位数字）'); inp.focus(); return; }
-      rCloseOverlay();
-      fillBookFromISBN(v);
-    }
-    if(btn) btn.onclick=doManual;
-    if(inp) inp.addEventListener('keydown', function(e){ if(e.key==='Enter') doManual(); });
-    if(cancel) cancel.onclick=rCloseOverlay;
-    return;
+  var html='<div class="scanwrap" style="flex-direction:column;gap:14px;padding:24px 22px;align-items:center">'+
+    '<h3 style="margin:0;font-family:var(--serif);font-size:18px;color:var(--ink)">录入书籍</h3>'+
+    '<p class="imgnote" style="max-width:340px;text-align:center">三种方式任选：实时扫码、拍条形码照片、或手输 ISBN。</p>';
+  if(hasCam){
+    html+='<video id="scanVid" playsinline autoplay muted style="width:100%;max-width:320px;border-radius:12px;background:#000"></video>'+
+      '<div id="scanMsg" class="imgnote" style="margin:0">对准书背 ISBN 条码…</div>';
+  } else {
+    html+='<div style="font-size:44px;line-height:1">📷</div>'+
+      '<div id="scanMsg" class="imgnote" style="margin:0;text-align:center">本浏览器不支持实时摄像头，请用「拍照 / 选图识别」</div>';
   }
-  var html='<div class="scanwrap">'+
-    '<video id="scanVid" playsinline autoplay muted></video>'+
-    '<div class="scanframe"></div>'+
-    '<div class="scanbar"><button type="button" class="btn ghost sm" id="scanCancel">取消</button>'+
-    '<span id="scanMsg" class="imgnote" style="margin:0">对准书背的 ISBN 条码，或书上的二维码</span></div>'+
-    '</div>';
+  html+='<div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:4px">'+
+    '<label class="btn ghost" for="scanFile">📷 拍照 / 选图识别<input id="scanFile" type="file" accept="image/*" capture="environment" hidden></label>'+
+    '<button type="button" class="btn ghost" id="scanManual">✏️ 手动输入</button>'+
+    '<button type="button" class="btn ghost sm" id="scanCancel">取消</button>'+
+    '</div><div id="scanHidden" style="position:fixed;left:-9999px;top:0;width:2px;height:2px;overflow:hidden"></div></div>';
   rShowOverlay(html);
-  var vid=document.getElementById('scanVid'), msg=document.getElementById('scanMsg');
-  var stream=null, raf=0, det=null, done=false;
-  BarcodeDetector.getSupportedFormats().then(function(fmts){
-    det=new BarcodeDetector({formats: fmts.filter(function(f){ return ['ean_13','ean_8','upc_a','qr_code','code_128'].indexOf(f)>=0; })});
-  }).catch(function(){ try{ det=new BarcodeDetector(); }catch(e){ msg.textContent='此浏览器无法初始化扫码器'; } });
-  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(function(s){
-    stream=s; vid.srcObject=s; vid.play(); scanLoop();
-  }).catch(function(e){ if(msg) msg.textContent='无法打开摄像头：'+(e&&e.message||e)+'（需 HTTPS 与相机权限）'; });
-  function scanLoop(){
-    if(done) return;
-    if(vid.readyState>=2 && det){
-      det.detect(vid).then(function(res){ if(res&&res.length) onDetect(res[0].rawValue); }).catch(function(){});
+  var finp=document.getElementById('scanFile');
+  if(finp) finp.onchange=function(e){ var f=e.target.files&&e.target.files[0]; if(f) decodeBookPhoto(f); };
+  var mb=document.getElementById('scanManual'); if(mb) mb.onclick=showManualIsbn;
+  var cancel=document.getElementById('scanCancel');
+  if(hasCam){
+    var vid=document.getElementById('scanVid'), msg=document.getElementById('scanMsg');
+    var stream=null, raf=0, det=null, done=false;
+    function stopAll(){ done=true; if(raf) cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(function(t){t.stop();}); }
+    BarcodeDetector.getSupportedFormats().then(function(fmts){
+      det=new BarcodeDetector({formats: fmts.filter(function(f){ return ['ean_13','ean_8','upc_a','qr_code','code_128'].indexOf(f)>=0; })});
+    }).catch(function(){ try{ det=new BarcodeDetector(); }catch(e){ if(msg) msg.textContent='此浏览器无法初始化扫码器'; } });
+    navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(function(s){
+      stream=s; vid.srcObject=s; vid.play(); scanLoop();
+    }).catch(function(e){ if(msg) msg.textContent='无法打开摄像头：'+(e&&e.message||e)+'（需 HTTPS 与相机权限）'; });
+    function scanLoop(){
+      if(done) return;
+      if(vid.readyState>=2 && det){
+        det.detect(vid).then(function(res){ if(res&&res.length) onDetectBook(res[0].rawValue, stopAll); }).catch(function(){});
+      }
+      raf=requestAnimationFrame(scanLoop);
     }
-    raf=requestAnimationFrame(scanLoop);
+    if(cancel) cancel.onclick=function(){ stopAll(); rCloseOverlay(); };
+  } else {
+    if(cancel) cancel.onclick=rCloseOverlay;
   }
-  function stopAll(){ done=true; if(raf) cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(function(t){t.stop();}); rCloseOverlay(); }
-  function onDetect(raw){
-    if(done) return; stopAll();
-    var isbn=normIsbn(raw);
-    if(!isbn && /^https?:\/\//i.test(raw)){
-      var m=raw.match(/isbn[=_]?(\d{13}|\d{10})/i) || raw.match(/(\d{13})/);
-      if(m) isbn=normIsbn(m[1]);
-    }
-    if(!isbn){ toast('没认出 ISBN，可手动填：'+raw.slice(0,40)); return; }
-    fillBookFromISBN(isbn);
-  }
-  var cbtn=document.getElementById('scanCancel'); if(cbtn) cbtn.onclick=stopAll;
 }
 
 /* ---------- 藏品详情：点开看购入信息和存放位置 ---------- */
