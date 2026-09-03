@@ -352,10 +352,14 @@ function addDataTools(){
   if ($('dataTools')) return;
   var box = document.createElement('div');
   box.id = 'dataTools';
+  /* 手机端屏幕窄，把按钮文字缩短（桌面 / 平板保持原文案不变） */
+  var T = IS_MOBILE
+    ? { sync:'同步', exp:'导出', imp:'导入' }
+    : { sync:'⚙ 同步设置', exp:'导出数据', imp:'导入数据' };
   box.innerHTML = '<button type="button" data-act="fsa" id="fsaPick">📂 选择数据目录</button>' +
-                  '<button type="button" data-act="sync">⚙ 同步设置</button>' +
-                  '<button type="button" data-act="export">导出数据</button>' +
-                  '<button type="button" data-act="import">导入数据</button>';
+                  '<button type="button" data-act="sync">'+T.sync+'</button>' +
+                  '<button type="button" data-act="export">'+T.exp+'</button>' +
+                  '<button type="button" data-act="import">'+T.imp+'</button>';
   box.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:9999;display:flex;gap:8px';
   document.body.appendChild(box);
   box.querySelector('[data-act="fsa"]').onclick = pickFsaDirAndConnect;
@@ -369,11 +373,13 @@ function addDataTools(){
   p.innerHTML =
     '<div style="font-weight:700;margin-bottom:8px">GitHub 数据同步</div>' +
     '<div style="font-size:11px;color:#666;margin:2px 0 6px">仓库已自动填好，你只需粘贴下方 Token：</div>' +
-    '<label style="display:block;margin:4px 0">用户名(owner)<input id="ghOwner" readonly value="Ciaorz" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
-    '<label style="display:block;margin:4px 0">仓库名(repo)<input id="ghRepo" readonly value="life-desk" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
-    '<label style="display:block;margin:4px 0">分支(branch)<input id="ghBranch" readonly value="main" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
-    '<label style="display:block;margin:4px 0">数据文件路径<input id="ghPath" readonly value="data/lifedesk.json" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
-    '<label style="display:block;margin:4px 0">Token（有 repo 权限，仅存本机）<input id="ghToken" type="password" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    /* 只有 owner 保留自动填充（用户要求）；其余全部关闭，避免 Chrome 把任意文本框当用户名去匹配已保存密码 */
+    '<label style="display:block;margin:4px 0">用户名(owner)<input id="ghOwner" readonly value="Ciaorz" autocomplete="username" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    '<label style="display:block;margin:4px 0">仓库名(repo)<input id="ghRepo" readonly value="life-desk" autocomplete="off" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    '<label style="display:block;margin:4px 0">分支(branch)<input id="ghBranch" readonly value="main" autocomplete="off" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    '<label style="display:block;margin:4px 0">数据文件路径<input id="ghPath" readonly value="data/lifedesk.json" autocomplete="off" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    /* new-password：告诉浏览器这是新凭据，不要用已保存的密码来配对用户名，从而不再弹出「更新用户名」提示 */
+    '<label style="display:block;margin:4px 0">Token（有 repo 权限，仅存本机）<input id="ghToken" type="password" autocomplete="new-password" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
     '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' +
       '<button type="button" id="ghSave" style="padding:7px 12px;border:1px solid #4d3045;border-radius:7px;background:#4d3045;color:#fff;cursor:pointer;font-size:12px">保存并连接</button>' +
       '<button type="button" id="ghUpload" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">上传本地数据</button>' +
@@ -468,7 +474,8 @@ function coverImg(row){
 function hasCover(row){ return !!coverImg(row); }
 function coverStyle(row,title){
   var u = coverImg(row);
-  if (u) return 'background-image:url(\''+u.replace(/[\"'()\\]/g,'')+'\")';
+  /* 注意引号必须成对：之前结尾误写成双引号，导致整条 background-image 声明无效（封面全都不显示） */
+  if (u) return 'background-image:url("'+u.replace(/[\"'()\\]/g,'')+'")';
   var h = hue(title), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -1200,7 +1207,7 @@ function renderCatMode(){
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>藏品</h2>'+
     '<div class="hint">点开任意一件，看它的购入信息和存放位置</div></div>'+modeSeg()+'</div>'+
-    '<input class="search" id="q_collection" placeholder="搜名称 / IP / 系列 / 地点 / 短评" value="'+esc(f.q)+'" style="margin-bottom:12px">'+
+    '<input class="search" autocomplete="off" id="q_collection" placeholder="搜名称 / IP / 系列 / 地点 / 短评" value="'+esc(f.q)+'" style="margin-bottom:12px">'+
     '<div class="chips">'+
     '<button class="chip'+(f.cat?'':' on')+'" type="button" data-act="f" data-k="cat" data-v="">全部</button>'+
     CATS.map(function(t){
@@ -1304,7 +1311,7 @@ function renderTravel(){
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div class="panel-head"><div><h2>目的地</h2>'+
     '<div class="hint">按状态和心愿等级排</div></div></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
-    '<input class="search" id="q_travel" placeholder="搜地点 / 国家 / 备注" value="'+esc(f.q)+'"></div>'+
+    '<input class="search" autocomplete="off" id="q_travel" placeholder="搜地点 / 国家 / 备注" value="'+esc(f.q)+'"></div>'+
     '<div class="chips">'+
     '<button class="chip'+(f.status?'':' on')+'" type="button" data-act="f" data-k="status" data-v="">全部</button>'+
     ['想去','去过'].map(function(t){ return '<button class="chip'+(f.status===t?' on':'')+'" type="button" data-act="f" data-k="status" data-v="'+t+'">'+t+'</button>'; }).join('')+
@@ -1346,7 +1353,7 @@ function renderStudy(){
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="4rq1NhoGtp9NOnIWB2asLJ"><div class="panel-head"><div><h2>计划</h2>'+
     '<div class="hint">进度条是给自己看的，不用跟谁比</div></div></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
-    '<input class="search" id="q_study" placeholder="搜计划 / 备注" value="'+esc(f.q)+'"></div>'+
+    '<input class="search" autocomplete="off" id="q_study" placeholder="搜计划 / 备注" value="'+esc(f.q)+'"></div>'+
     '<div class="chips">'+
     '<button class="chip'+(f.field?'':' on')+'" type="button" data-act="f" data-k="field" data-v="">全部领域</button>'+
     ['语言','专业','技能','证书','兴趣'].map(function(t){
@@ -1391,7 +1398,7 @@ function renderFood(){
   h += '<section class="panel"><div class="panel-head"><div><h2>吃过的</h2>'+
     '<div class="hint">按打卡月份倒着翻</div></div></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
-    '<input class="search" id="q_food" placeholder="搜店名 / 城市 / 短评" value="'+esc(f.q)+'"></div>'+
+    '<input class="search" autocomplete="off" id="q_food" placeholder="搜店名 / 城市 / 短评" value="'+esc(f.q)+'"></div>'+
     '<div class="chips">'+
     '<button class="chip'+(f.type?'':' on')+'" type="button" data-act="f" data-k="type" data-v="">全部</button>'+
     ['餐厅','外卖','自炊','咖啡甜品','街边小吃'].map(function(t){
@@ -1428,7 +1435,7 @@ function renderIdea(){
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="enWbyi2bgio8062H0YdwbX"><div class="panel-head"><div><h2>灵感墙</h2>'+
     '<div class="hint">随手贴的，别整理，先接住</div></div></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
-    '<input class="search" id="q_idea" placeholder="搜内容 / 来源" value="'+esc(f.q)+'"></div>'+
+    '<input class="search" autocomplete="off" id="q_idea" placeholder="搜内容 / 来源" value="'+esc(f.q)+'"></div>'+
     '<div class="chips">'+
     '<button class="chip'+(f.cat?'':' on')+'" type="button" data-act="f" data-k="cat" data-v="">全部</button>'+
     ['想法','金句','待办','观察','选题'].map(function(t){
@@ -1722,7 +1729,12 @@ function refillStateOptions(host){
   sel.innerHTML = list.map(function(o){
     return '<option value="'+esc(o)+'"'+(o===cur?' selected':'')+'>'+esc(o)+'</option>'; }).join('');
 }
-/* ---------- 图片压缩：长边 800px，PNG 优先保留透明，否则 JPEG ---------- */
+/* ---------- 图片压缩：长边 800px，PNG 优先保留透明，否则 JPEG ----------
+ * 体积上限收紧到 ~160KB（原 380KB）。原因：封面 / 图片是以 base64 内联在
+ * lifedesk.json 里的，若每个条目都配图，单文件会迅速膨胀
+ * （100 张 × 380KB ≈ 38MB），既拖慢整体加载与上传，也容易顶到
+ * GitHub Contents API 的单文件上限。卡片封面实际显示尺寸很小，160KB 足够清晰。 */
+var IMG_MAX_BYTES = 160000;   /* base64 字符串长度上限（约合 120KB 二进制） */
 function compressImage(file, maxSide, cb){
   var fr=new FileReader();
   fr.onload=function(){
@@ -1737,13 +1749,13 @@ function compressImage(file, maxSide, cb){
         ctx.drawImage(img,0,0,cw,ch);
         var png='';
         try { png=cv.toDataURL('image/png'); } catch(e){}
-        if (png && png.length < 380000){ cb(png); return; }
+        if (png && png.length < IMG_MAX_BYTES){ cb(png); return; }
       }
       ctx.fillStyle='#fff'; ctx.fillRect(0,0,cw,ch);
       ctx.drawImage(img,0,0,cw,ch);
-      var q=0.82, out='';
+      var q=0.78, out='';
       try { out=cv.toDataURL('image/jpeg', q); } catch(e){ cb(''); return; }
-      while (out.length > 380000 && q > 0.42){ q-=0.12; out=cv.toDataURL('image/jpeg', q); }
+      while (out.length > IMG_MAX_BYTES && q > 0.45){ q-=0.10; out=cv.toDataURL('image/jpeg', q); }
       cb(out);
     };
     img.onerror=function(){ cb(''); };
@@ -2054,7 +2066,7 @@ function openBatchAdd(seriesName){
     '<p>批量添加</p><h2>往「'+esc(seriesName||'')+'」里加子项</h2></div>'+
     '<button class="x" type="button" data-x="1">×</button></div>'+
     '<div class="f"><label>子项名单（每行一个）</label>'+
-      '<textarea id="bNames" rows="7" placeholder="#001 妙蛙种子&#10;#002 妙蛙草&#10;#003 妙蛙花"></textarea>'+
+      '<textarea id="bNames" rows="7" autocomplete="off" placeholder="#001 妙蛙种子&#10;#002 妙蛙草&#10;#003 妙蛙花"></textarea>'+
       '<span class="imgnote">一次可以贴很多行。价格、存放位置这些在下面统一填一次就行。</span></div>'+
     '<div class="f" style="margin-top:13px"><label>编号</label>'+
       '<select id="bNoMode">'+
@@ -2105,7 +2117,7 @@ function openBatchAdd(seriesName){
       rows.map(function(r,i){
         return '<div style="display:flex;gap:7px;align-items:center;padding:3px 0">'+
           '<span style="font-size:11px;color:var(--muted);width:32px;flex:0 0 32px;letter-spacing:.04em">'+esc(r.no||'—')+'</span>'+
-          '<input data-bn="'+i+'" value="'+esc(r.name)+'" style="flex:1;min-height:32px;padding:0 9px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
+          '<input data-bn="'+i+'" value="'+esc(r.name)+'" autocomplete="off" style="flex:1;min-height:32px;padding:0 9px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
           '<button class="btn link" type="button" data-bd="'+i+'" style="color:var(--red)">×</button></div>';
       }).join('')+'</div>';
     box.querySelectorAll('[data-bn]').forEach(function(inp){
@@ -2232,7 +2244,7 @@ function openPasteImport(seriesName){
     '<p>粘贴导入</p><h2>把订单内容贴进来</h2></div>'+
     '<button class="x" type="button" data-x="1">×</button></div>'+
     '<div class="f"><label>订单内容（每行一个物品，链接单独一行）</label>'+
-      '<textarea id="iText" rows="7" placeholder="宝可梦金属徽章 皮卡丘　¥39.00　2026-08-15&#10;https://detail.tmall.com/item.htm?id=123&#10;杰尼龟,45.50,2026-08-16"></textarea>'+
+      '<textarea id="iText" rows="7" autocomplete="off" placeholder="宝可梦金属徽章 皮卡丘　¥39.00　2026-08-15&#10;https://detail.tmall.com/item.htm?id=123&#10;杰尼龟,45.50,2026-08-16"></textarea>'+
       '<span class="imgnote">商品标题、订单行、导出的表格都能贴。<b>链接行不会被瞎解析</b>，会原样存进候选箱等你确认。</span></div>'+
     '<div style="margin:16px 0 10px;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted)">这些字段对写入藏品的条目生效</div>'+
     '<div class="fgrid" id="iCommon"></div>'+
@@ -2264,9 +2276,9 @@ function openPasteImport(seriesName){
       box.innerHTML='<div style="max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:8px 10px">'+
         items.map(function(r,i){
           return '<div style="display:flex;gap:7px;align-items:center;padding:3px 0">'+
-            '<input data-in="'+i+'" value="'+esc(r.name)+'" style="flex:1;min-width:0;min-height:32px;padding:0 9px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
-            '<input data-ip="'+i+'" value="'+esc(r.price==null?'':r.price)+'" placeholder="价格" style="width:72px;flex:0 0 72px;min-height:32px;padding:0 8px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
-            '<input data-id="'+i+'" value="'+esc(r.date)+'" placeholder="日期" style="width:102px;flex:0 0 102px;min-height:32px;padding:0 8px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
+            '<input data-in="'+i+'" value="'+esc(r.name)+'" autocomplete="off" style="flex:1;min-width:0;min-height:32px;padding:0 9px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
+            '<input data-ip="'+i+'" autocomplete="off" value="'+esc(r.price==null?'':r.price)+'" placeholder="价格" style="width:72px;flex:0 0 72px;min-height:32px;padding:0 8px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
+            '<input data-id="'+i+'" autocomplete="off" value="'+esc(r.date)+'" placeholder="日期" style="width:102px;flex:0 0 102px;min-height:32px;padding:0 8px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
             '<button class="btn link" type="button" data-idd="'+i+'" style="color:var(--red)">×</button></div>';
         }).join('')+'</div>';
       box.querySelectorAll('[data-in]').forEach(function(inp){
@@ -2444,7 +2456,7 @@ function openCandImport(){
         '<option value="cand">用候选里各自的价格</option>'+
         '<option value="one">统一填一个价格</option></select></div>'+
       '<div class="f" id="cPriceWrap" style="display:none"><label>统一价格</label>'+
-        '<input id="cPrice" type="number" placeholder="0.00"></div>'+
+        '<input id="cPrice" type="number" autocomplete="off" placeholder="0.00"></div>'+
     '</div>'+
     '<div style="margin:14px 0 10px;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted)">这些字段对全部条目生效</div>'+
     '<div class="fgrid" id="cCommon"></div>'+
@@ -2584,17 +2596,18 @@ function fieldHTML(f, v){
   var body='', cls='f'+(f.full?' full':'');
   if (f.t==='text' || f.t==='number' || f.t==='currency' || f.t==='date'){
     var type = f.t==='number'||f.t==='currency' ? 'number' : (f.t==='date'?'date':'text');
-    body='<input data-f="'+f.k+'" type="'+type+'" value="'+esc(v)+'" placeholder="'+esc(f.ph||'')+'"'+
+    /* autocomplete=off：阻止 Chrome 把「国家地区」之类字段当成用户名去匹配已保存的密码 */
+    body='<input data-f="'+f.k+'" type="'+type+'" value="'+esc(v)+'" placeholder="'+esc(f.ph||'')+'" autocomplete="off"'+
       (f.min!=null?' min="'+f.min+'"':'')+(f.max!=null?' max="'+f.max+'"':'')+'>';
   } else if (f.t==='img'){
     body='<div class="imgwrap" data-k="'+f.k+'">'+
       '<div class="imgprev" data-img-prev="'+f.k+'"'+(v?' style="background-image:url(&quot;'+esc(v)+'&quot;)"':'')+'></div>'+
-      '<div class="imgrow"><input data-f="'+f.k+'" type="text" value="'+esc(v)+'" placeholder="'+esc(f.ph||'图片链接')+'">'+
+      '<div class="imgrow"><input data-f="'+f.k+'" type="text" value="'+esc(v)+'" placeholder="'+esc(f.ph||'图片链接')+'" autocomplete="off">'+
       '<label class="btn ghost sm upl" for="up_'+f.k+'">上传<input id="up_'+f.k+'" type="file" accept="image/*" data-img-file="'+f.k+'" hidden></label></div>'+
       '<span class="imgnote" data-img-note="'+f.k+'">上传的图会先在浏览器里压到长边 800px 再存</span>'+
       '</div>';
   } else if (f.t==='textarea'){
-    body='<textarea data-f="'+f.k+'" placeholder="'+esc(f.ph||'')+'">'+esc(v)+'</textarea>';
+    body='<textarea data-f="'+f.k+'" placeholder="'+esc(f.ph||'')+'" autocomplete="off">'+esc(v)+'</textarea>';
   } else if (f.t==='select'){
     body='<select data-f="'+f.k+'">'+f.o.map(function(o){
       return '<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+esc(o)+'</option>'; }).join('')+'</select>';
@@ -2611,7 +2624,7 @@ function fieldHTML(f, v){
   } else if (f.t==='dyn'){
     body='<div class="dynwrap" data-k="'+f.k+'" data-src="'+f.src+'">'+
       '<select data-dyn-sel="'+f.k+'"><option value="">（无）</option></select>'+
-      '<input data-dyn-cus="'+f.k+'" type="text" placeholder="自定义…" style="display:none">'+
+      '<input data-dyn-cus="'+f.k+'" type="text" placeholder="自定义…" style="display:none" autocomplete="off">'+
       '</div>';
   } else if (f.t==='geopick'){
     body='<button type="button" class="btn ghost sm" data-act="geopick">📍 在地球上点选坐标</button>'+
@@ -2780,26 +2793,47 @@ try{
 }catch(e){}
 
 /* ============ 启动：先渲染界面，再拉数据 ============ */
+/* 顶部状态条：默认只显示标题（如「已连接 GitHub 仓库」）+ 向右箭头；
+   点箭头展开完整说明，箭头变向左；再点收起。避免一坨长文字常驻占屏。 */
 function bootBanner(){
   var box=$('offlineBox');
   if (MODE === 'db'){ box.className='offline'; return; }
+  var title, detail, cls;
   if (MODE === 'localfile'){
-    box.className='offline show gh';
-    box.innerHTML='<b>本地文件模式</b>：数据保存在本机 <b>data/lifedesk.json</b>（由本地服务器读写）。'+
+    cls = 'offline show gh';
+    title = '本地文件模式';
+    detail = '数据保存在本机 <b>data/lifedesk.json</b>（由本地服务器读写）。'+
       '点右下角「⚙ 同步设置」连上 GitHub 后，可用「上传本地数据」把这份文件<b>覆盖推到云端</b>。';
-    return;
-  }
-  if (MODE === 'gh'){
-    box.className='offline show gh';
-    box.innerHTML='<b>已连接 GitHub 仓库</b>：'+esc(GH.owner)+'/'+esc(GH.repo)+'（'+esc(GH.branch)+'）。'+
+  } else if (MODE === 'gh'){
+    cls = 'offline show gh';
+    title = '已连接 GitHub 仓库';
+    detail = esc(GH.owner)+'/'+esc(GH.repo)+'（'+esc(GH.branch)+'）。'+
       '录入的书籍 / 手办 / 电影等数据会<b>实时同步到仓库云端</b>，任何设备打开都能看到同一份。'+
       '右下角「⚙ 同步设置」可查看或修改连接。';
-    return;
+  } else {
+    cls = 'offline show';
+    title = '离线模式';
+    detail = '数据保存在<b>当前浏览器</b>的本地存储（localStorage），不会上传任何服务器。'+
+      '换设备 / 清缓存前，请用右下角「导出数据」备份；想换电脑使用，导出后在另一台导入即可。'+
+      '要让数据云端同步，点右下角「⚙ 同步设置」连一个 GitHub 仓库。';
   }
-  box.className='offline show';
-  box.innerHTML='<b>离线模式</b>：数据保存在<b>当前浏览器</b>的本地存储（localStorage），不会上传任何服务器。'+
-    '换设备 / 清缓存前，请用右下角「导出数据」备份；想换电脑使用，导出后在另一台导入即可。'+
-    '要让数据云端同步，点右下角「⚙ 同步设置」连一个 GitHub 仓库。';
+  box.className = cls;
+  box.innerHTML =
+    '<button type="button" class="offline-toggle" id="offlineToggle" aria-expanded="false">'+
+      '<span class="offline-title">'+title+'</span>'+
+      '<span class="offline-arrow" aria-hidden="true">›</span>'+
+    '</button>'+
+    '<div class="offline-detail" id="offlineDetail" hidden>'+detail+'</div>';
+  var tgl = $('offlineToggle');
+  if (tgl && !tgl._bound){
+    tgl._bound = true;
+    tgl.onclick = function(){
+      var d = $('offlineDetail'), a = tgl.querySelector('.offline-arrow');
+      var opening = d.hasAttribute('hidden');
+      if (opening){ d.removeAttribute('hidden'); if (a) a.textContent = '‹'; tgl.classList.add('open'); tgl.setAttribute('aria-expanded','true'); }
+      else { d.setAttribute('hidden',''); if (a) a.textContent = '›'; tgl.classList.remove('open'); tgl.setAttribute('aria-expanded','false'); }
+    };
+  }
 }
 document.addEventListener('keydown', function(e){ if(e.key==='Escape' && !$('sheetHost').hidden) closeSheet(); });
 
@@ -4527,7 +4561,9 @@ function initFoodMap(){
   stopFoodMap();
   var cv=document.getElementById('foodMap'); if(!cv) return;
   var wrap=cv.parentElement;
-  var w=wrap.clientWidth||480, h=Math.max(280, Math.round(w*0.6));
+  var w=wrap.clientWidth||480;
+  /* 手机端竖屏：把地图压扁一些、降低最小高度，避免一屏装不下 */
+  var h = IS_MOBILE ? Math.max(200, Math.round(w*0.62)) : Math.max(280, Math.round(w*0.6));
   cv.width=w*2; cv.height=h*2; cv.style.width=w+'px'; cv.style.height=h+'px';
   var ctx=cv.getContext('2d'); ctx.scale(2,2);
   function draw(){
@@ -4619,7 +4655,11 @@ function initFireworks(){
   stopFireworks();
   var cv=document.getElementById('ideaSky'); if(!cv) return;
   var wrap=cv.parentElement;
-  var w=wrap.clientWidth||600, h=Math.max(380, Math.round(w*0.62));
+  var w=wrap.clientWidth||600;
+  /* 手机端：星空高度跟随视口（约 52vh），并限制不超过宽度 1.05 倍，避免竖屏时被撑得过高 */
+  var h = IS_MOBILE
+    ? Math.max(260, Math.min(Math.round((window.innerHeight||700)*0.52), Math.round(w*1.05)))
+    : Math.max(380, Math.round(w*0.62));
   cv.width=w*2; cv.height=h*2;
   cv.style.width=w+'px'; cv.style.height=h+'px';
   var ctx=cv.getContext('2d'); ctx.scale(2,2);

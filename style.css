@@ -125,6 +125,16 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .offline{display:none;margin:0 0 16px;padding:13px 16px;border-radius:16px;
   background:#f2ece0;border:1px solid var(--line);font-size:12.5px;color:var(--muted)}
 .offline.show{display:block}
+/* 状态条可折叠：默认只显示标题 + 向右箭头，点击展开完整说明并变为向左箭头 */
+.offline-toggle{display:flex;align-items:center;gap:7px;width:100%;
+  padding:0;border:0;background:none;cursor:pointer;text-align:left;
+  font:inherit;color:inherit;line-height:1.4}
+.offline-toggle .offline-title{font-weight:700;color:var(--ink)}
+.offline-arrow{flex:0 0 auto;display:inline-block;font-size:15px;line-height:1;
+  color:var(--muted);transition:transform .18s ease}
+.offline-toggle:hover .offline-arrow{transform:translateX(2px)}
+.offline-toggle.open:hover .offline-arrow{transform:translateX(-2px)}
+.offline-detail{margin-top:7px;line-height:1.7}
 
 /* GitHub 同步状态指示器（常驻小药丸，左下角） */
 .ghstatus{display:none;position:fixed;left:14px;bottom:14px;z-index:9998;
@@ -557,6 +567,11 @@ input.search:focus{border-color:var(--accent);background:#fff}
   z-index: -1;
   pointer-events: none;
 }
+/* 影音厅：电影 / 留声机两个展柜整体向上移 120px。
+   移动 .museum-side（展柜的定位容器）而不是 .mcase-persp 本身，
+   这样不会覆盖展柜自身的 transform 与 hover 的 translateY 效果。 */
+.avhall .museum-side { transform: translateY(-120px); }
+
 /* 蒙右下角「AI生成」水印：用一块更深的玻璃块在最右下方托住，避免与原图水印打架 */
 .museum .wm-mask, .studyroom .wm-mask, .foodtwo .wm-mask, .avhall .wm-mask {
   position: absolute; right: 0; bottom: 0;
@@ -1401,4 +1416,26 @@ button[data-x="1"] {
 body {
   min-height: 100vh;
   min-height: 100dvh;
+}
+
+/* ============================================================
+   小屏（手机）适配
+   ============================================================ */
+@media (max-width: 600px) {
+  /* --- 美食记录：地图 + 菜谱册 --- */
+  .foodtwo .ft-grid { gap: 14px; padding: 14px 12px 56px; }
+  .foodtwo .left, .foodtwo .right { padding: 16px 14px; min-height: 0; }
+  .foodtwo .left h2, .foodtwo .right h2 { font-size: 18px; letter-spacing: 1px; }
+  .foodtwo .left h2::before, .foodtwo .right h2::before { height: 16px; margin-right: 6px; }
+  .foodtwo .ft-pin-list { max-height: 96px !important; }
+  /* canvas 由 JS 按容器宽度设定像素尺寸；这里防止窄屏溢出并保持宽高比 */
+  .foodtwo canvas.foodmap { max-width: 100%; height: auto !important; }
+
+  /* --- 灵感捕捉：星空背景 --- */
+  .ideasky { min-height: 0; }
+  .ideasky canvas#ideaSky { max-width: 100%; height: auto !important; }
+  .ideasky .idea-add { right: 16px !important; bottom: 16px !important; }
+
+  /* --- 影音厅：小屏下展柜整体再收一点，配合已有的 -120px 上移 --- */
+  .avhall .museum-side { transform: translateY(-120px) scale(.86); }
 }
