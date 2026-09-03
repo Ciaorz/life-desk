@@ -1092,6 +1092,27 @@ input.search:focus{border-color:var(--accent);background:#fff}
   color: var(--ink);
   text-align: center;
 }
+/* 影音厅 · 经典列表：按大类分组的段头 */
+.avclassic-list { position: relative; z-index: 2; }
+.classic-group { margin-bottom: 8px; }
+.classic-cat {
+  font-family: var(--serif);
+  font-size: 16px;
+  letter-spacing: 2px;
+  color: var(--gold-soft, #e8c98a);
+  padding: 22px 36px 0;
+  margin: 0;
+  display: flex; align-items: baseline; gap: 10px;
+}
+.classic-cat em {
+  font-style: normal;
+  font-size: 12px;
+  letter-spacing: 0;
+  opacity: .6;
+  background: rgba(0,0,0,.18);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
 
 /* --- 文渊斋：3D 立体书 + 阳光书房布局 ------------------------------------------- */
 .studyroom .book-floor {

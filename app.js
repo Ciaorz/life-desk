@@ -274,13 +274,21 @@ var IMG_DIR = 'images';
 var DATA_PREFIX = 'data';
 
 /* 每个模块用哪个字段当分片键 */
-var SHARD_FIELD = { travel:'状态', collection:'小类', study:'领域', food:'类型', recipe:'', idea:'分类' };
+var SHARD_FIELD = { travel:'状态', collection:'小类', av:'大类', study:'领域', food:'类型', recipe:'', idea:'分类' };
 /* 旅行：状态值 → 类目名（用户口径是「去过的地方」「想去的地方」） */
 var TRAVEL_CAT = { '去过':'去过的地方', '想去':'想去的地方' };
 
 function shardCatOf(mk, row){
   if (mk === 'ip') return 'ip';
   if (mk === 'series') return 'series';
+  /* v54：书籍 / 杂志 在 collection 里按「大类」分片，其它藏品按「小类」分片 */
+  if (mk === 'collection'){
+    var big = String(row && row['大类'] || '').trim();
+    if (big === '书籍' || big === '杂志') return big;
+    var f = SHARD_FIELD[mk]; if (!f || !row) return '';
+    var v = String(row[f] || '').trim(); if (!v) return '';
+    return v;
+  }
   var f = SHARD_FIELD[mk]; if (!f || !row) return '';
   var v = String(row[f] || '').trim(); if (!v) return '';
   if (mk === 'travel') return TRAVEL_CAT[v] || v;
@@ -329,6 +337,15 @@ function normalizeIndex(idx){
   /* IP / 系列单独存为 ip-data.json / series-data.json，便于管理它们与物品的关联 */
   if (!idx.shards.ip) idx.shards.ip = { file:'ip-data.json', module:'ip', coverDir:'ip-封面' };
   if (!idx.shards.series) idx.shards.series = { file:'series-data.json', module:'series', coverDir:'系列-封面' };
+  /* v54：把电影 / 留声机 / 书籍 / 杂志 预注册为独立分片，各自有自己的 data/{cat}-data.json 和 images/{cat}-封面 */
+  [
+    { cat:'电影',    module:'av',        file:'电影-data.json',    coverDir:'电影-封面' },
+    { cat:'留声机',  module:'av',        file:'留声机-data.json',  coverDir:'留声机-封面' },
+    { cat:'书籍',    module:'collection', file:'书籍-data.json',    coverDir:'书籍-封面' },
+    { cat:'杂志',    module:'collection', file:'杂志-data.json',    coverDir:'杂志-封面' }
+  ].forEach(function(sh){
+    if (!idx.shards[sh.cat]) idx.shards[sh.cat] = { file:sh.file, module:sh.module, coverDir:sh.coverDir };
+  });
   return idx;
 }
 async function fsReadIndex(){ return normalizeIndex(await fsReadJSON(_LOCALFS_FILE)); }
@@ -1614,12 +1631,50 @@ var MAG_FIELDS = [
   {k:'存放位置', t:'dyn', src:'loc'},
   {k:'照片', t:'img', ph:'封面图（可选）', full:1}
 ];
-/* 按当前 大类 返回 collection 实际要用的字段集；其它模块原样返回 */
+/* v54：电影 / 留声机 专用录入字段 */
+var MOVIE_FIELDS = [
+  {k:'名称', t:'text', req:1, ph:'影片名 / 剧集名', full:1},
+  {k:'小类', t:'select', o:['电影','剧集','纪录片','动画'], def:'电影'},
+  {k:'导演', t:'text', ph:'导演 / 主创', full:1},
+  {k:'演员', t:'textarea', ph:'主要演员', full:1},
+  {k:'上映年份', t:'text', ph:'如 2023'},
+  {k:'国家/地区', t:'text', ph:'如 美国 / 日本 / 韩国'},
+  {k:'状态', t:'select', o:['想看','在看','看完','搁置'], def:'想看'},
+  {k:'星级', t:'stars', max:5},
+  {k:'片源', t:'text', ph:'影院 / 流媒体 / 蓝光 / 硬盘'},
+  {k:'完成日期', t:'date'},
+  {k:'简介', t:'textarea', ph:'一句话剧情 / 为什么想看', full:1},
+  {k:'短评', t:'textarea', ph:'观后感', full:1},
+  {k:'封面', t:'img', ph:'海报图（可选）', full:1}
+];
+var MUSIC_FIELDS = [
+  {k:'名称', t:'text', req:1, ph:'专辑名 / 单曲名 / 唱片名', full:1},
+  {k:'小类', t:'select', o:['黑胶','CD','磁带','数字'], def:'黑胶'},
+  {k:'音乐人', t:'text', ph:'歌手 / 乐队 / 演奏者', full:1},
+  {k:'发行年份', t:'text', ph:'如 2023'},
+  {k:'流派', t:'text', ph:'如 摇滚 / 爵士 / 古典 / 流行'},
+  {k:'状态', t:'select', o:['想收','已预订','在库','已出'], def:'在库'},
+  {k:'星级', t:'stars', max:5},
+  {k:'购入价格', t:'currency', ph:'0.00'},
+  {k:'购入日期', t:'date'},
+  {k:'存储地点', t:'dyn', src:'loc'},
+  {k:'简介', t:'textarea', ph:'这张唱片的故事', full:1},
+  {k:'短评', t:'textarea', ph:'听感', full:1},
+  {k:'封面', t:'img', ph:'封套图（可选）', full:1}
+];
+/* 按当前 大类 返回 collection/av 实际要用的字段集；其它模块原样返回。
+   注意：db 模式（Notion 线上表）字段固定，不能动态扩展，故仍用 MODS 里的通用 schema。 */
 function activeFields(key, vals){
+  if (MODE === 'db') return (MODS[key] && MODS[key].fields) ? MODS[key].fields : [];
   if (key==='collection' && vals){
     var c = vals['大类'];
     if (c==='书籍') return BOOK_FIELDS;
     if (c==='杂志') return MAG_FIELDS;
+  }
+  if (key==='av' && vals){
+    var a = vals['大类'];
+    if (a==='电影') return MOVIE_FIELDS;
+    if (a==='留声机') return MUSIC_FIELDS;
   }
   return (MODS[key] && MODS[key].fields) ? MODS[key].fields : [];
 }
@@ -1692,7 +1747,7 @@ function normalizeRows(rows){
 var ui = {
   view:'overview',
   collection:{ mode:'cat', cat:'', sub:'', q:'', view:'wall', ipId:null, seriesId:null, inbox:false, classic:false, editing:false },
-  av:{ cat:'', sub:'', q:'' },
+  av:{ cat:'', sub:'', q:'', classic:false },
   travel:{ status:'', q:'', mapTab:'earth', ckNew:false, ckEditId:false },
   study:{ field:'', q:'', tab:'home', cat:'' },               /* v18：tab=home/书籍/杂志，子层 cat 是当前显示的分类 */
   food:{ type:'', q:'' },
@@ -1879,9 +1934,29 @@ function loadAll(){
       store[k].status= rows.length? 'ok' : 'empty';
       /* 关键：所有模式（含 local / gh）都要把相对路径封面解析成可显示 URL，否则封面整块空白 */
       resolveImagesFor(store[k].rows).then(function(){ render(); });
+      /* v54：collection/av 都读完后，把错放在 collection 里的影视/音乐迁回 av */
+      if (store.collection && store.collection.status !== 'loading' &&
+          store.av && store.av.status !== 'loading') migrateAvFromCollection();
     });
   });
   render();
+}
+/* v54：启动时把错放在 collection 里的电影/留声机记录迁回 store.av，避免两边计数对不上 */
+function migrateAvFromCollection(){
+  if (!store.collection || !store.av) return;
+  var moved=[];
+  store.collection.rows = store.collection.rows.filter(function(r){
+    if (r && AV_CATS.indexOf(r['大类']) >= 0){
+      moved.push(r); return false;
+    }
+    return true;
+  });
+  if (!moved.length) return;
+  var existing={}; (store.av.rows||[]).forEach(function(r){ if(r && r._id) existing[String(r._id)]=true; });
+  moved.forEach(function(r){ if(!existing[String(r._id)]) store.av.rows.push(r); });
+  store.av.status = store.av.rows.length ? 'ok' : 'empty';
+  store.collection.status = store.collection.rows.length ? 'ok' : 'empty';
+  if (MODE !== 'db'){ if (MODE === 'localfile') queueLocalSave(); else persistAll(); render(); }
 }
 
 /* ============ 写入 ============ */
@@ -1932,6 +2007,8 @@ function localUpsert(key, id, vals){
   /* v49：collection 的书籍/杂志录入 schema 不渲染「大类」字段，但存储仍需 大类，
      否则文渊斋「我的书架」按 大类 过滤时找不到它们 */
   if (key==='collection' && vals && vals['大类']) row['大类'] = vals['大类'];
+  /* v54：av 的电影/留声机 schema 也不渲染「大类」，但渲染和分片都靠它，必须存回 row */
+  if (key==='av' && vals && vals['大类']) row['大类'] = vals['大类'];
   /* v48：food / recipe 在 db 模式下暂时共表，用隐藏字段 _module 区分；本地模式下也保留，方便后续拆分 */
   if (key==='food' || key==='recipe') row['_module'] = key;
   /* food 的经纬度通过 geopick 预填进 vals，但 fields 里已删除经纬度输入框，这里额外写回 row */
@@ -1976,9 +2053,35 @@ function mutate(label, run, optimistic, key, after){
     if (optimistic) render();
   });
 }
+/* v54：本地文件模式下，向一个尚无任何条目的专属类目（电影/留声机/书籍/杂志）添加第一条时，
+   先弹窗询问是否新建该类目的 data/{类目}-data.json 与 images/{类目}-封面/ 目录，
+   让用户明确知道数据落到了哪个文件。返回需要新建的类目名，否则返回 null。 */
+var DEDICATED_CATS = ['电影','留声机','书籍','杂志'];
+function firstEntryForCategory(key, vals){
+  if (MODE !== 'localfile') return null;
+  var cat = shardCatOf(key, vals);
+  if (!cat || DEDICATED_CATS.indexOf(cat) < 0) return null;
+  var has = (store[key] && store[key].rows || []).some(function(r){ return shardCatOf(key, r) === cat; });
+  return has ? null : cat;
+}
 function addRow(key, vals, after){
   if (MODE !== 'db'){
     var id = 'l_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+    var newCat = firstEntryForCategory(key, vals);
+    if (newCat){
+      var fname = shardFileName(newCat), cdir = coverDirName(newCat);
+      askConfirm(
+        '你正在添加第一个「'+newCat+'」条目。\n确认后将在本地 data 文件夹新建：\n• '+fname+'（该类专属数据文件）\n• images/'+cdir+'/（封面图片目录）\n\n确定创建这个专属数据文件吗？',
+        function(){
+          localUpsert(key, id, vals);
+          if (after) after();
+          render();
+          toast('已创建「'+newCat+'」数据文件，并保存了首条记录');
+        },
+        { yesLabel:'创建并保存', yesColor:'#2f8f5b', title:'新建类目数据文件' }
+      );
+      return;
+    }
     localUpsert(key, id, vals);
     if (after) after();
     render();
@@ -2042,6 +2145,12 @@ function filtered(key){
       if (!isNaN(na) && !isNaN(nb) && na!==nb) return na-nb;
       return dstr(b['购入日期']).localeCompare(dstr(a['购入日期']));
     });
+  } else if (key==='av'){
+    if (f.cat) rows=rows.filter(function(r){ return r['大类']===f.cat; });
+    if (f.sub) rows=rows.filter(function(r){ return (r['小类']||'未分类')===f.sub; });
+    if (q) rows=rows.filter(function(r){
+      return ((r['名称']||'')+' '+(r['导演/音乐人']||'')+' '+(r['演员/乐队']||'')+' '+(r['简介']||'')+' '+(r['短评']||'')).toLowerCase().indexOf(q)>=0; });
+    rows.sort(function(a,b){ return dstr(b['完成日期']||b['购入日期']).localeCompare(dstr(a['完成日期']||a['购入日期'])); });
   } else if (key==='travel'){
     if (f.status) rows=rows.filter(function(r){ return r['状态']===f.status; });
     if (q) rows=rows.filter(function(r){
@@ -3091,6 +3200,9 @@ function render(){
     if (key==='food'){
       act += '<button class="btn primary" type="button" data-act="add" data-key="food">+ '+esc(MODS.food.addLabel)+'</button>';
       act += '<button class="btn primary" type="button" data-act="add" data-key="recipe">+ '+esc(MODS.recipe.addLabel)+'</button>';
+    } else if (key==='av'){
+      act += '<button class="btn primary" type="button" data-act="avaddmovie">+ 添加电影</button>';
+      act += '<button class="btn primary" type="button" data-act="avaddmusic">+ 添加留声机</button>';
     } else {
       act += '<button class="btn primary" type="button" data-act="add" data-key="'+key+'">+ '+esc(m.addLabel)+'</button>';
     }
@@ -3275,8 +3387,11 @@ document.addEventListener('click', function(ev){
     return;
   }
   if (act==='scanisbn'){ openBookScanner(); return; }
-  if (act==='go'){ ui.view=key; if(key==='collection'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; } window.scrollTo(0,0); render(); return; }
+  if (act==='go'){ ui.view=key; if(key==='collection'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; } if(key==='av'){ ui.av.classic=false; ui.av.cat=''; ui.av.sub=''; } window.scrollTo(0,0); render(); return; }
   if (act==='add'){ openForm(key, null); return; }
+  if (act==='avaddmovie'){ openForm('av', null, {prefill:{'大类':'电影'}}); return; }
+  if (act==='avaddmusic'){ openForm('av', null, {prefill:{'大类':'留声机'}}); return; }
+  if (act==='avclassic'){ ui.av.classic=true; ui.av.cat=''; ui.av.sub=''; render(); return; }
   if (act==='edit'){ openForm(key, node.getAttribute('data-id')); return; }
   if (act==='item'){ openItemDetail(key, node.getAttribute('data-id')); return; }
   if (act==='reload'){ reloadOne(key); return; }
@@ -3351,7 +3466,7 @@ document.addEventListener('click', function(ev){
   if (act==='musreset'){ MUSEUM_LAYOUT={}; saveMuseumLayout(); ui.collection.editing=false; render(); toast('已重置展厅布局'); return; }
   if (act==='avzone'){ ui.av.cat=node.getAttribute('data-v'); ui.av.sub=''; render(); return; }
   if (act==='avcabinet'){ ui.av.sub=node.getAttribute('data-v'); render(); return; }
-  if (act==='avback'){ if (ui.av.sub){ ui.av.sub=''; } else { ui.av.cat=''; } render(); return; }
+  if (act==='avback'){ if (ui.av.classic){ ui.av.classic=false; } else if (ui.av.sub){ ui.av.sub=''; } else { ui.av.cat=''; } render(); return; }
   if (act==='studybook'){ showStudyBook(node.getAttribute('data-id')); return; }
   if (act==='studyadd'){ openForm('study', null); return; }
   if (act==='bookadd'){ openForm('collection', null, {prefill:{'大类':'书籍'}}); return; }
@@ -3996,8 +4111,9 @@ function openForm(key, id, opts){
   } catch(e){}
 
   var host=$('sheetHost');
+  var titleName = (key==='av' && editing.vals['大类']) ? editing.vals['大类'] : m.name;
   var h='<div class="sheet"><div class="sheet-head"><div>'+
-    '<p>'+esc(m.eyebrow)+'</p><h2>'+(id?'编辑':'添加')+' · '+esc(m.name)+'</h2></div>'+
+    '<p>'+esc(m.eyebrow)+'</p><h2>'+(id?'编辑':'添加')+' · '+esc(titleName)+'</h2></div>'+
     '<button class="x" type="button" data-x="1" aria-label="关闭">×</button></div>'+
     '<div class="fgrid">'+activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('')+'</div>'+
     (key==='collection' && editing.vals['大类']==='书籍' ? '<div class="scanbar"><button type="button" class="btn primary sm" data-act="scanisbn">📷 扫码录入（ISBN / 二维码）</button><span class="imgnote">手机打开本页，扫书背条码或书上二维码，自动填书名·作者·出版社</span></div>' : '')+
@@ -4407,13 +4523,17 @@ function openLocManager(){
   $('locAdd').onclick=function(){ openForm('loc', null, {after: openLocManager}); };
 }
 
-function askConfirm(msg, onYes){
+function askConfirm(msg, onYes, opts){
+  opts = opts || {};
+  var yesLabel = opts.yesLabel || '删除';
+  var yesColor = opts.yesColor || 'var(--red)';
+  var title = opts.title || '要继续吗';
   var host=$('sheetHost');
-  host.innerHTML='<div class="sheet"><div class="sheet-head"><div><p>确认</p><h2>要继续吗</h2></div>'+
+  host.innerHTML='<div class="sheet"><div class="sheet-head"><div><p>确认</p><h2>'+esc(title)+'</h2></div>'+
     '<button class="x" type="button" data-x="1">×</button></div>'+
-    '<p style="font-size:13.5px;line-height:1.8;color:var(--muted)">'+esc(msg)+'</p>'+
+    '<p style="font-size:13.5px;line-height:1.8;color:var(--muted);white-space:pre-line">'+esc(msg)+'</p>'+
     '<div class="sheet-actions"><button class="btn ghost" type="button" data-x="1">再想想</button>'+
-    '<button class="btn primary" type="button" id="yesBtn" style="background:var(--red)">删除</button></div></div>';
+    '<button class="btn primary" type="button" id="yesBtn" style="background:'+yesColor+'">'+esc(yesLabel)+'</button></div></div>';
   host.hidden=false;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
   $('yesBtn').onclick=function(){ closeSheet(); onYes(); };
@@ -5891,7 +6011,40 @@ function renderCollectionMuseum(){
    影音厅 · 歌剧院（v16：从藏品馆分出来的电影/留声机收藏）
    ============================================================ */
 function renderAVHall(){
-  var s=store.collection, f=ui.av;
+  var s=store.av, f=ui.av;
+
+  /* 经典列表：所有影音（电影 + 留声机）的扁平总览，按大类分组 */
+  if (f.classic){
+    var items = s.rows.slice().sort(function(a,b){
+      return dstr(b['完成日期']||b['购入日期']).localeCompare(dstr(a['完成日期']||a['购入日期']));
+    });
+    var hc = '<div class="avhall"><div class="wm-mask"></div>'+
+      '<div class="museum-crumb"><button class="r-back" data-act="avback">← 返回大厅</button>'+
+        '<h2>经典列表</h2><span>'+items.length+' 部</span></div>';
+    if (!items.length){
+      hc += emptyHTML('影音厅还空着','点右上角「添加电影 / 留声机」放第一部进来。')+'</div>';
+      return hc;
+    }
+    var byCat={};
+    items.forEach(function(r){ var c=r['大类']||'未分类'; (byCat[c]=byCat[c]||[]).push(r); });
+    hc += '<div class="avclassic-list">';
+    Object.keys(byCat).forEach(function(cat){
+      hc += '<div class="classic-group"><h3 class="classic-cat">'+esc(cat)+' <em>'+byCat[cat].length+'</em></h3><div class="mcasewall">';
+      hc += byCat[cat].map(function(r){
+        var t=r['名称']||'未命名';
+        var u=coverImg(r);
+        return '<div class="item-card glass-card" data-act="item" data-key="av" data-id="'+esc(r._id)+'">'+
+          (u
+            ? '<div class="thumb" style="background-image:url(\''+u.replace(/["'()\\]/g,'')+'\')"></div>'
+            : '<div class="thumb"><b>'+esc(String(t).slice(0,1))+'</b></div>'
+          )+
+          '<div class="ttl">'+esc(t)+'</div></div>';
+      }).join('');
+      hc += '</div></div>';
+    });
+    hc += '</div></div>';
+    return hc;
+  }
 
   /* 第 1 层：2 大类（电影/留声机）—— 歌剧院透视展柜 */
   if (!f.cat){
@@ -5963,8 +6116,7 @@ function renderAVHall(){
   h3+='<div class="mcasewall">'+arr.map(function(r){
     var t=r['名称']||'未命名';
     var u=coverImg(r);
-    return '<div class="item-card glass-card" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
-      ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
+    return '<div class="item-card glass-card" data-act="item" data-key="av" data-id="'+esc(r._id)+'">'+
       (u
         ? '<div class="thumb" style="background-image:url(\''+u.replace(/["'()\\]/g,'')+'\')"></div>'
         : '<div class="thumb"><b>'+esc(String(t).slice(0,1))+'</b></div>'
