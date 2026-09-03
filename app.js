@@ -8,7 +8,6 @@ var IS_MOBILE = window.__IS_MOBILE__ === true;  /* 移动端标识（保留；�
 var DB = {
   collection: '6xC81f403Az4cQm0QIX2TK',
   ip:         '7UhgQiYUZQsGe67bu7IsqT',
-  candidate:  'WvayERPNjlFZlsyWYAPj4f',
   series:     'FgvzeV95yrs29QEYZGuuAk',
   loc:        'A1Hkp3lWhNNSjURHnqjwAg',
   travel:     'eXqg6O484hQTwO9afBcwZl',
@@ -27,10 +26,6 @@ var T = {
             add:  function(p){ return db.addRecord({databaseId:'7UhgQiYUZQsGe67bu7IsqT', properties: p}); },
             upd:  function(id, p){ return db.updateRecord({databaseId:'7UhgQiYUZQsGe67bu7IsqT', recordId: id, properties: p}); },
             del:  function(id){ return db.deleteRecord({databaseId:'7UhgQiYUZQsGe67bu7IsqT', recordId: id}); } },
-  candidate:  { page: function(cursor){ return db.query({databaseId:'WvayERPNjlFZlsyWYAPj4f', pageSize:100, startCursor: cursor || null}); },
-            add:  function(p){ return db.addRecord({databaseId:'WvayERPNjlFZlsyWYAPj4f', properties: p}); },
-            upd:  function(id, p){ return db.updateRecord({databaseId:'WvayERPNjlFZlsyWYAPj4f', recordId: id, properties: p}); },
-            del:  function(id){ return db.deleteRecord({databaseId:'WvayERPNjlFZlsyWYAPj4f', recordId: id}); } },
   series:     { page: function(cursor){ return db.query({databaseId:'FgvzeV95yrs29QEYZGuuAk', pageSize:100, startCursor: cursor || null}); },
             add:  function(p){ return db.addRecord({databaseId:'FgvzeV95yrs29QEYZGuuAk', properties: p}); },
             upd:  function(id, p){ return db.updateRecord({databaseId:'FgvzeV95yrs29QEYZGuuAk', recordId: id, properties: p}); },
@@ -1278,8 +1273,9 @@ var AV_CATS = ['电影','留声机'];                          /* 影音厅（�
 var BOOK_CATS = ['书籍','杂志'];                          /* 文渊斋里的书与杂志 */
 /* v13 重命名：观影→电影，音乐→留声机（与新封面图 + 用户 8 张图对齐） */
 var LEGACY_CATS = {'观影':'电影','音乐':'留声机','杯子':'杯盏','服装':'着物'};
-/* 表单「类别」下拉的完整可选项（博物馆 6 类 + 影音厅 2 类 + 文渊斋 2 类） */
-var CATS_FORM = CATS.concat(AV_CATS).concat(BOOK_CATS);
+/* 表单「类别」下拉的可选项：只保留博物馆 6 类。
+   v30：电影/留声机已归「影音厅」、书籍/杂志已归「文渊斋」，藏品表单不再列出这 4 类。 */
+var CATS_FORM = CATS.slice();
 /* 旧"书籍/杂志"分类——已挪到文渊斋，仅识别数据库里的旧数据用 */
 var LEGACY_BOOK_CATS = BOOK_CATS;
 var SUBS = {
@@ -1333,7 +1329,6 @@ var MODS = {
       {k:'系列',t:'dyn',src:'series'},
       {k:'编号',t:'text',ph:'如 025，系列子项用'},
       {k:'状态',t:'select',o:STATES_ALL,def:'在库'},
-      {k:'星级',t:'stars',max:5},
       {k:'存储地点',t:'dyn',src:'loc'},
       {k:'购入日期',t:'date'},
       {k:'购入价格',t:'currency',ph:'0.00'},
@@ -1347,17 +1342,6 @@ var MODS = {
       {k:'IP名称',t:'text',req:1,ph:'如 宝可梦 / 三丽鸥 / 某部番剧',full:1},
       {k:'IP图像',t:'img',ph:'图片链接，或点右侧上传',full:1},
       {k:'简介',t:'textarea',ph:'这个 IP 的来历，你喜欢它什么',full:1}
-    ]},
-  candidate: { key:'candidate', db:DB.candidate, name:'候选箱', icon:'收', eyebrow:'Inbox',
-    desc:'先把东西收进来，再挑哪些真的买了。', addLabel:'加一条候选',
-    fields:[
-      {k:'名称',t:'text',req:1,ph:'东西叫什么',full:1},
-      {k:'来源链接',t:'text',ph:'商品/订单链接（可留空）',full:1},
-      {k:'来源平台',t:'select',o:['淘宝','天猫','京东','小红书','拼多多','抖音','闲鱼','其他'],def:'其他'},
-      {k:'价格',t:'currency',ph:'0.00'},
-      {k:'状态',t:'select',o:['待选','已入库','忽略'],def:'待选'},
-      {k:'图片',t:'img',ph:'图片链接，或点上传',full:1},
-      {k:'规格备注',t:'textarea',ph:'款式、编号、规格…',full:1}
     ]},
   series: { key:'series', db:DB.series, name:'系列', icon:'套', eyebrow:'Series',
     desc:'成套的东西，按套来记，还差哪几个一眼看到。', addLabel:'新增系列',
@@ -1392,7 +1376,7 @@ var MODS = {
       {k:'短评',t:'textarea',ph:'一句话就够',full:1}
     ]},
   travel: { key:'travel', db:DB.travel, name:'遐方坞', icon:'旅', eyebrow:'Where to',
-    desc:'想去的地方先记下来，走着走着就到了。', addLabel:'添加目的地',
+    desc:'想去的地方先记下来，走着走着就到了。', addLabel:'目的地',
     fields:[
       {k:'地点',t:'text',req:1,ph:'京都 / 冰岛 / 某个小镇'},
       {k:'国家地区',t:'text',ph:'日本 关西'},
@@ -1451,7 +1435,7 @@ var MODS = {
     ]}
 };
 var ORDER = ['overview','collection','travel','av','study','food','idea'];
-var EXTRA = ['ip','series','loc','candidate'];   /* 不单独进导航，在「藏品」里管理 */
+var EXTRA = ['ip','series','loc','checkin'];   /* 不单独进导航：ip/series/loc 在「藏品」里管理；checkin 在「遐方坞」里管理（原 candidate 候选箱已移除） */
 
 /* ============ 状态 ============ */
 var store = {};
@@ -1473,8 +1457,7 @@ var ui = {
   view:'overview',
   collection:{ mode:'cat', cat:'', sub:'', q:'', view:'wall', ipId:null, seriesId:null, inbox:false, classic:false, editing:false },
   av:{ cat:'', sub:'', q:'' },
-  candSel:{},
-  travel:{ status:'', q:'' },
+  travel:{ status:'', q:'', mapTab:'earth', ckNew:false },
   study:{ field:'', q:'', tab:'home', cat:'' },               /* v18：tab=home/书籍/杂志，子层 cat 是当前显示的分类 */
   food:{ type:'', q:'' },
   idea:{ cat:'', star:false, q:'' },
@@ -1922,8 +1905,7 @@ function extraStrip(){
   var out=[];
   if (store.ip.status==='error')
     out.push('IP 库读取失败 <button class="btn link" type="button" data-act="reload" data-key="ip">重试</button>');
-  if (store.candidate.status==='error')
-    out.push('候选箱读取失败 <button class="btn link" type="button" data-act="reload" data-key="candidate">重试</button>');
+
   if (store.series.status==='error')
     out.push('系列读取失败 <button class="btn link" type="button" data-act="reload" data-key="series">重试</button>');
   if (store.loc.status==='error')
@@ -2000,8 +1982,7 @@ function renderCollection(){
     '<div class="panel-head"><div><h2>概览</h2>'+
     '<div class="hint">在库 / '+ui.year+' 年入手 / 投入 / 分类分布</div></div>'+ysel+'</div>'+collStats()+'</section>';
   var m=ui.collection.mode;
-  var body = ui.collection.inbox ? renderInbox()
-    : (m==='ip' ? renderIpMode() : (m==='series' ? renderSeriesMode() : renderCatMode()));
+  var body = (m==='ip' ? renderIpMode() : (m==='series' ? renderSeriesMode() : renderCatMode()));
   return strip + head + body;
 }
 function renderCatMode(){
@@ -2100,16 +2081,13 @@ function renderIpDetail(){
 }
 
 /* ---------- 打卡点 ----------
-   每个目的地（景区 / 城市）下可以有若干打卡点，存在该条记录的「打卡点」字段里：
-   [{名称, 纬度, 经度, 打卡时间, 备注}] */
-function checkinsOf(row){
-  var a = row && row['打卡点'];
-  return Array.isArray(a) ? a : [];
-}
+   打卡点是「遐方坞」里的一类独立记录：在地图上标记一个去过 / 想记的地方，
+   字段：地点名字、日期、城市景区、封面图片、内容，外加经纬度。
+   与「目的地」分开：目的地显示在 3D 地球上（想去 / 去过），打卡点只显示在高德地图上。
+   打卡点存在独立的 store.checkin 表里，随其它数据一起落盘（localfile / gh / local 都支持）。 */
 function checkinTotal(){
-  var n = 0;
-  ((store.travel && store.travel.rows) || []).forEach(function(r){ n += checkinsOf(r).length; });
-  return n;
+  var rows = (store.checkin && store.checkin.rows) || [];
+  return rows.length;
 }
 /* 打卡点入口：先选景区 / 城市 */
 /* ============================================================
@@ -2194,142 +2172,170 @@ function loadAMap(key, secret, cb){
   };
   document.head.appendChild(sc);
 }
-/* 往某条目的地记录里加一个打卡点（存的仍是 WGS-84，与地球保持一致） */
-function addCheckin(row, lat, lon, name){
-  if (!row) return;
-  if (!Array.isArray(row['打卡点'])) row['打卡点'] = [];
-  row['打卡点'].push({
-    '名称': name || ('打卡点 ' + (row['打卡点'].length + 1)),
-    '纬度': Math.round(lat * 100000) / 100000,
-    '经度': Math.round(lon * 100000) / 100000,
-    '打卡时间': today()
+/*（旧版「在目的地里嵌套打卡点」的流程已废弃，改用「遐方坞 → +打卡点」的独立全屏地图页，见 renderCheckinNew / attachCkMap / saveCheckin）*/
+
+/* 地图标记的小圆点（蓝=想去 / 绿=去过 / 橙=打卡点） */
+function mkContent(color, label){
+  var txt = (label||'').length>6 ? (String(label).slice(0,6)+'…') : (label||'');
+  return '<div class="mk-dot" style="--mc:'+color+'"><span>'+esc(txt)+'</span></div>';
+}
+/* ---------- 新建打卡点：独立全屏地图页 ---------- */
+function renderCheckinNew(){
+  var t = new Date().toISOString().slice(0,10);
+  var h = '<div class="strip">'+stripHTML('travel')+'</div>';
+  h += '<section class="panel"><div class="panel-head"><div><h2>新建打卡点</h2>'+
+       '<div class="hint">先搜城市 / 景区，在地图上点一下标位置，再填好信息</div></div>'+
+       '<button class="btn ghost sm" data-act="ckcancel">← 返回</button></div>';
+  h += '<div class="ck-search"><input id="ckSearch" class="search" autocomplete="off" placeholder="搜索城市 / 景区，如：西湖、成都、京都">'+
+       '<button class="btn primary sm" type="button" id="ckSearchBtn">搜索</button></div>';
+  h += '<div id="ckMap" class="ck-map"></div><div id="ckTip" class="ck-tip"></div>';
+  h += '<div class="ck-form">'+
+       '<div class="fgrid">'+
+       '  <div class="f"><label>地点名字 *</label><input id="ckName" type="text" autocomplete="off" placeholder="如 西湖断桥"></div>'+
+       '  <div class="f"><label>日期</label><input id="ckDate" type="date" value="'+t+'"></div>'+
+       '  <div class="f"><label>城市 / 景区</label><input id="ckCity" type="text" autocomplete="off" placeholder="搜索后自动填，也可手填"></div>'+
+       '  <div class="f"><label>封面图片</label><input id="ckCover" type="text" autocomplete="off" placeholder="图片链接（可选）"></div>'+
+       '</div>'+
+       '<div class="f" style="margin-top:8px"><label>内容</label><textarea id="ckContent" placeholder="当时的心情、发生了什么…"></textarea></div>'+
+       '<div id="ckErr" class="ck-err"></div>'+
+       '<div class="sheet-actions" style="margin-top:14px">'+
+       '  <button class="btn ghost" type="button" data-act="ckcancel">取消</button>'+
+       '  <button class="btn primary" type="button" data-act="cksave">保存打卡点</button></div>'+
+       '</div></section>';
+  return h;
+}
+var CKMAP=null, ckDraft={lat:null,lon:null,name:'',city:''};
+function stopCkMap(){ if (CKMAP){ try{ CKMAP.destroy(); }catch(e){} } CKMAP=null; ckDraft={lat:null,lon:null,name:'',city:''}; }
+function attachCkMap(){
+  stopCkMap();
+  var cv=document.getElementById('ckMap'); if(!cv) return;
+  var tip=document.getElementById('ckTip');
+  var key=amapKey();
+  if(!key){ if(tip) tip.textContent='还没配置高德地图 Key：到右下角「⚙ 同步设置」填入 Key 和安全密钥后才能用地图。'; return; }
+  loadAMap(key, amapSecret(), function(ok){
+    if(!ok){ if(tip) tip.textContent='高德地图加载失败，检查 Key / 安全密钥与域名白名单。'; return; }
+    try{
+      var map=new AMap.Map('ckMap',{ zoom:5, center:[104,36], viewMode:'2D' });
+      map.addControl(new AMap.Scale());
+      map.addControl(new AMap.ToolBar({ position:{ right:'16px', bottom:'64px' } }));
+      CKMAP=map;
+      var marker=null;
+      function setMarker(lon,lat){
+        var w=gcj02ToWgs84(lat,lon); ckDraft.lat=w.lat; ckDraft.lon=w.lon;
+        var g=wgs84ToGcj02(w.lat,w.lon);
+        if(marker){ marker.setPosition([g.lon,g.lat]); }
+        else { marker=new AMap.Marker({ position:[g.lon,g.lat], content:mkContent('#ff7043','打卡点'), anchor:'bottom-center' }); map.add(marker); }
+      }
+      map.on('click', function(e){ if(e&&e.lnglat) setMarker(e.lnglat.lng, e.lnglat.lat); });
+      AMap.plugin(['AMap.PlaceSearch'], function(){
+        var ps=new AMap.PlaceSearch({ pageSize:1, pageIndex:1, city:'全国' });
+        var box=document.getElementById('ckSearch');
+        var btn=document.getElementById('ckSearchBtn');
+        function doSearch(q){
+          q=(q||'').trim(); if(!q) return;
+          ps.search(q, function(st, res){
+            if(st==='complete' && res && res.poiList && res.poiList.pois && res.poiList.pois.length){
+              var p=res.poiList.pois[0]; if(!p.location) return;
+              map.setZoomAndCenter(14, [p.location.lng, p.location.lat]);
+              setMarker(p.location.lng, p.location.lat);
+              if(box) box.value=p.name;
+              var n=document.getElementById('ckName'); if(n && !n.value) n.value=p.name;
+              var c=document.getElementById('ckCity'); if(c && !c.value) c.value=(p.city||p.pname||'');
+              ckDraft.name=p.name; ckDraft.city=p.city||p.pname||'';
+              if(tip) tip.textContent='已定位到「'+p.name+'」，可拖动或再点地图调整位置。';
+            } else if(tip){ tip.textContent='没搜到「'+q+'」，换个词或直接在地图上点一下。'; }
+          });
+        }
+        if(btn) btn.onclick=function(){ doSearch(box?box.value:''); };
+        if(box) box.addEventListener('keydown', function(e){ if(e&&e.key==='Enter'){ e.preventDefault(); doSearch(box.value); } });
+      });
+    }catch(e){ if(tip) tip.textContent='地图初始化失败：'+((e&&e.message)||e); }
   });
-  if (MODE === 'localfile'){ queueLocalSave(); } else { persistAll(); }
-  toast('已打卡：' + (name || '新打卡点'));
+}
+function saveCheckin(){
+  var nameEl=document.getElementById('ckName');
+  var name=nameEl?nameEl.value.trim():'';
+  var err=document.getElementById('ckErr');
+  if(!name){ if(nameEl) nameEl.focus(); if(err) err.textContent='请先填「地点名字」。'; return; }
+  if(ckDraft.lat==null || ckDraft.lon==null){ if(err) err.textContent='请先在地图上点一下标出位置（或搜索后点结果）。'; return; }
+  var row={
+    _id: 'ck_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7),
+    地点名字: name,
+    城市景区: (document.getElementById('ckCity')?document.getElementById('ckCity').value.trim():'') || ckDraft.city || '',
+    日期: (document.getElementById('ckDate')?document.getElementById('ckDate').value:''),
+    封面图片: (document.getElementById('ckCover')?document.getElementById('ckCover').value.trim():''),
+    内容: (document.getElementById('ckContent')?document.getElementById('ckContent').value.trim():''),
+    纬度: Math.round(ckDraft.lat*100000)/100000,
+    经度: Math.round(ckDraft.lon*100000)/100000
+  };
+  if(!store.checkin) store.checkin={rows:[]};
+  store.checkin.rows.unshift(row);
+  if (MODE==='localfile'){ queueLocalSave(); } else { persistAll(); }
+  ui.travel.ckNew=false;
+  toast('已保存打卡点：'+name);
   render();
 }
-function initCheckinMap(){
-  stopCheckinMap();
-  var wrap = document.querySelector('.checkin-wrap'); if (!wrap) return;
-  var tip = wrap.querySelector('.checkin-tip');
-  var cv = document.getElementById('checkinMap'); if (!cv) return;
-  var rows = (store.travel && store.travel.rows) || [];
-  var row = rows.filter(function(r){ return String(r._id) === String(ui.travel.checkinRow); })[0];
-  if (!row){ return; }
-  var key = amapKey();
-  if (!key){
-    if (tip) tip.innerHTML = '还没配置高德地图 Key。<br>'+
-      '到右下角「⚙ 同步设置」里填入 Key 和安全密钥保存后，回来就能在地图上打卡了。';
+/* ---------- 展示框「地图」模式：高德中国地图，显示想去 / 去过 / 打卡点 ---------- */
+var CHINAMAP=null;
+function stopChinaMap(){ if (CHINAMAP){ try{ CHINAMAP.destroy(); }catch(e){} } CHINAMAP=null; }
+function attachChinaMap(){
+  stopChinaMap();
+  var cv=document.getElementById('chinaMap'); if(!cv) return;
+  var tip=document.getElementById('chinaTip');
+  var key=amapKey();
+  if(!key){
+    if(tip) tip.innerHTML='还没配置高德地图 Key。<br>到右下角「⚙ 同步设置」里填入 Key 和安全密钥保存后，回来就能看到打卡地图了。';
     return;
   }
-  if (tip) tip.textContent = '地图加载中…';
   loadAMap(key, amapSecret(), function(ok){
-    if (!ok){
-      if (tip) tip.innerHTML = '高德地图加载失败。<br>检查 Key / 安全密钥是否正确，以及当前域名是否在白名单里。';
-      return;
-    }
-    try {
-      var lat = Number(row['纬度']), lon = Number(row['经度']);
-      var has = isFinite(lat) && isFinite(lon) && (lat || lon);
-      var gc = has ? wgs84ToGcj02(lat, lon) : { lat: 39.915, lon: 116.404 };
-      var map = new AMap.Map('checkinMap', {
-        zoom: 15,
-        center: [gc.lon, gc.lat],
-        viewMode: '2D'
-      });
+    if(!ok){ if(tip) tip.innerHTML='高德地图加载失败。'; return; }
+    try{
+      var map=new AMap.Map('chinaMap',{ zoom:4, center:[104,36], viewMode:'2D' });
       map.addControl(new AMap.Scale());
-      map.addControl(new AMap.ToolBar({ position: { right: '16px', bottom: '48px' } }));
-      if (tip) tip.textContent = '在地图上点一下，就在那里打卡';
-      CKMAP = map;
-      /* 已有打卡点：WGS-84 → GCJ-02 后显示 */
-      checkinsOf(row).forEach(function(c, i){
-        var g2 = wgs84ToGcj02(Number(c['纬度']), Number(c['经度']));
-        var name = String(c['名称'] || ('打卡点 ' + (i + 1)));
-        var mk = new AMap.Marker({ position: [g2.lon, g2.lat], title: name });
-        mk.setLabel({ content: name, direction: 'top' });
-        map.add(mk);
+      map.addControl(new AMap.ToolBar({ position:{ right:'16px', bottom:'48px' } }));
+      CHINAMAP=map;
+      /* 目的地：蓝=想去 / 绿=去过 */
+      ((store.travel && store.travel.rows)||[]).forEach(function(r){
+        var lat=Number(r['纬度']), lon=Number(r['经度']);
+        if(!(lat&&lon)){ var c=CITY_LOOKUP[String(r['地点']||'').trim()]; if(c){lat=c[0];lon=c[1];} else return; }
+        var g=wgs84ToGcj02(lat,lon);
+        var col = r['状态']==='去过' ? '#3bb273' : '#4a90d9';
+        map.add(new AMap.Marker({ position:[g.lon,g.lat], content:mkContent(col, r['地点']||''), anchor:'bottom-center' }));
       });
-      /* 点地图打卡：拿到的 GCJ-02 要还原成 WGS-84 再存 */
-      map.on('click', function(e){
-        if (!e || !e.lnglat) return;
-        var name = window.prompt('给这个打卡点起个名字（可留空）');
-        if (name === null) return;
-        var w = gcj02ToWgs84(e.lnglat.lat, e.lnglat.lng);
-        addCheckin(row, w.lat, w.lon, (name || '').trim());
+      /* 打卡点：橙 */
+      ((store.checkin && store.checkin.rows)||[]).forEach(function(r){
+        var lat=Number(r['纬度']), lon=Number(r['经度']);
+        if(!(lat&&lon)) return;
+        var g=wgs84ToGcj02(lat,lon);
+        map.add(new AMap.Marker({ position:[g.lon,g.lat], content:mkContent('#ff7043', r['地点名字']||'打卡点'), anchor:'bottom-center' }));
       });
-    } catch(e){
-      console.error('高德地图初始化失败', e);
-      if (tip) tip.innerHTML = '地图初始化失败：' + ((e && e.message) || e);
-    }
+      if(tip) tip.textContent='蓝=想去 · 绿=去过 · 橙=打卡点（可滚轮缩放看城市）';
+    }catch(e){ if(tip) tip.innerHTML='地图初始化失败：'+((e&&e.message)||e); }
   });
 }
 
-function renderCheckinList(){
-  var rows = (store.travel && store.travel.rows) || [];
-  var h = '<div class="strip">'+stripHTML('travel')+'</div>';
-  h += '<section class="panel"><div class="panel-head"><div><h2>打卡点</h2>'+
-       '<div class="hint">选一个景区或城市，进去打卡具体地点</div></div>'+
-       '<button class="btn ghost sm" data-act="checkinback">← 返回</button></div>';
-  if (!rows.length){
-    h += emptyHTML('还没有目的地','先添加一个想去 / 去过的地方，就能在里面打卡了。');
-    return h + '</section>';
-  }
-  h += '<div class="trips">';
-  rows.forEach(function(r){
-    var n = checkinsOf(r).length;
-    h += '<div class="trip" data-act="checkinopen" data-id="'+esc(r._id)+'">'+
-      '<div class="top"><h4>'+esc(r['地点']||'未命名')+'</h4>'+statusPill(r['状态'])+'</div>'+
-      '<div class="where">'+esc(r['国家地区']||'')+'</div>'+
-      '<div class="meta"><span>已打卡 <b>'+n+'</b> 处</span></div>'+
-      '</div>';
-  });
-  h += '</div></section>';
-  return h;
-}
-/* 某个目的地的打卡地图 + 打卡点清单 */
-function renderCheckinMap(id){
-  var rows = (store.travel && store.travel.rows) || [];
-  var row = rows.filter(function(r){ return String(r._id)===String(id); })[0];
-  if (!row) return renderCheckinList();
-  var list = checkinsOf(row);
-  var h = '<div class="strip">'+stripHTML('travel')+'</div>';
-  h += '<section class="panel"><div class="panel-head"><div><h2>'+esc(row['地点']||'目的地')+' · 打卡点</h2>'+
-       '<div class="hint">在地图上点一下，就在那里打个卡</div></div>'+
-       '<button class="btn ghost sm" data-act="checkinback">← 返回</button></div>';
-  h += '<div class="checkin-wrap">'+
-       '<canvas id="checkinMap" class="checkin-map"></canvas>'+
-       '<div class="checkin-tip">地图加载中…</div>'+
-       '</div>';
-  h += '<div class="checkin-list">';
-  if (!list.length){
-    h += '<div class="hint" style="padding:10px 0">还没有打卡点，在地图上点一下试试。</div>';
-  } else {
-    list.forEach(function(c, i){
-      h += '<div class="checkin-row">'+
-        '<b>'+esc(c['名称']||('打卡点 '+(i+1)))+'</b>'+
-        '<span>'+esc(c['打卡时间']||'')+'</span>'+
-        '<button class="btn ghost sm" data-act="checkindel" data-i="'+i+'">删除</button>'+
-        '</div>';
-    });
-  }
-  h += '</div></section>';
-  return h;
-}
 
 function renderTravel(){
   var f=ui.travel, rows=filtered('travel'), s=store.travel;
-  /* 打卡点子页面优先 */
-  if (f.checkinRow) return renderCheckinMap(f.checkinRow);
-  if (f.checkin) return renderCheckinList();
+  /* 新建打卡点：独立全屏地图页 */
+  if (f.ckNew) return renderCheckinNew();
   var h='<div class="strip">'+stripHTML('travel')+'</div>';
   var cnt={ '想去':0,'去过':0 };
   s.rows.forEach(function(r){ if(cnt[r['状态']]!=null) cnt[r['状态']]++; });
   h += '<section class="panel"><div class="statgrid">'+
     '<div class="stat"><u>想去</u><b>'+cnt['想去']+'</b><i>处</i></div>'+
     '<div class="stat"><u>去过</u><b>'+cnt['去过']+'</b><i>处</i></div>'+
-    '<div class="stat clickable" data-act="checkin" title="进入打卡点"><u>打卡点</u><b>'+checkinTotal()+'</b><i>个</i></div>'+
+    '<div class="stat clickable" data-act="addcheckin" title="在地图上标记一个打卡点"><u>打卡点</u><b>'+checkinTotal()+'</b><i>个</i></div>'+
     '</div></section>';
-  h += '<section class="earth-hero" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div id="globeSlot"></div></section>';
+  /* 地球 / 地图 选项卡：地球显示 3D 地球（想去/去过）；地图接入高德显示中国区域（想去/去过/打卡点） */
+  h += '<section class="earth-hero" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl">'+
+    '<div class="map-tabs">'+
+      '<button class="mtab'+(f.mapTab!=='map'?' on':'')+'" type="button" data-act="maptab" data-v="earth">地球</button>'+
+      '<button class="mtab'+(f.mapTab==='map'?' on':'')+'" type="button" data-act="maptab" data-v="map">地图</button>'+
+    '</div>'+
+    '<div class="earth-panel"'+(f.mapTab==='map'?' hidden':'')+'><div id="globeSlot"></div></div>'+
+    '<div class="map-panel"'+(f.mapTab!=='map'?' hidden':'')+'><div id="chinaMap" class="china-map"></div><div id="chinaTip" class="map-tip"></div></div>'+
+    '</section>';
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div class="panel-head"><div><h2>目的地</h2>'+
     '<div class="hint">按状态和心愿等级排</div></div></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
@@ -2496,14 +2502,10 @@ function render(){
   } else {
     act += '<button class="btn primary" type="button" data-act="add" data-key="'+key+'">+ '+esc(m.addLabel)+'</button>';
     if (key==='collection'){
-      var pc = candPending().length;
-      act += '<button class="btn '+(ui.collection.inbox?'':'ghost')+' sm" type="button" data-act="inbox">'+
-        '候选箱'+(pc?(' '+pc):'')+'</button>';
-      if (!ui.collection.inbox){
-        act += '<button class="btn ghost sm" type="button" data-act="batchadd" data-name="">批量添加</button>';
-        act += '<button class="btn ghost sm" type="button" data-act="importer" data-name="">粘贴导入</button>';
-        act += '<button class="btn ghost sm" type="button" data-act="locmgr">存储地点</button>';
-      }
+      act += '<button class="btn ghost sm" type="button" data-act="locmgr">存储地点</button>';
+    }
+    if (key==='travel'){
+      act += '<button class="btn primary" type="button" data-act="addcheckin">+ 打卡点</button>';
     }
     act += '<button class="btn ghost sm" type="button" data-act="reload" data-key="'+key+'">重新拉取</button>';
   }
@@ -2520,11 +2522,15 @@ function render(){
   /* 重建 stage 前先把常驻地球宿主移出文档（挂回 body），避免被 innerHTML 销毁导致 WebGL 上下文丢失 */
   var _gh=$('globeHost'); if(_gh && _gh.parentNode){ _gh.parentNode.removeChild(_gh); document.body.appendChild(_gh); _gh.hidden=true; }
   $('stage').innerHTML=h;
-  if (key==='travel'){ attachGlobe(); } else { detachGlobe(); }
+  if (key==='travel'){
+    if (ui.travel.ckNew){ detachGlobe(); }
+    else if (ui.travel.mapTab==='map'){ detachGlobe(); attachChinaMap(); }
+    else { attachGlobe(); }
+  } else { detachGlobe(); }
   if (key==='study'){ /* 文渊斋暂无常驻 3D 场景 */ }
   if (key==='idea'){ initFireworks(); } else { stopFireworks(); }
   if (key==='food'){ initFoodMap(); } else { stopFoodMap(); }
-  if (key==='travel' && ui.travel && ui.travel.checkinRow){ initCheckinMap(); } else { stopCheckinMap(); }
+  if (key==='travel' && ui.travel && ui.travel.ckNew){ attachCkMap(); } else { stopCkMap(); }
   if (key==='collection'){ applyMuseumLayout(); }
 
   bindStage();
@@ -2606,27 +2612,16 @@ document.addEventListener('click', function(ev){
   if (act==='reload'){ reloadOne(key); return; }
   if (act==='reloadall'){ loadAll(); toast('正在重新拉取线上数据'); return; }
   if (act==='brand'){ openBrand(); return; }
-  if (act==='checkin'){ ui.travel.checkin=true; ui.travel.checkinRow=null; window.scrollTo(0,0); render(); return; }
-  if (act==='checkinback'){ ui.travel.checkinRow=null; ui.travel.checkin=false; render(); return; }
-  if (act==='checkinopen'){ ui.travel.checkinRow=node.getAttribute('data-id'); window.scrollTo(0,0); render(); return; }
-  if (act==='checkindel'){
-    var cid=ui.travel.checkinRow, cidx=parseInt(node.getAttribute('data-i'),10);
-    var crow=((store.travel&&store.travel.rows)||[]).filter(function(r){return String(r._id)===String(cid);})[0];
-    if (crow && Array.isArray(crow['打卡点']) && cidx>=0 && cidx<crow['打卡点'].length){
-      crow['打卡点'].splice(cidx,1);
-      if (MODE==='localfile'){ queueLocalSave(); } else { persistAll(); }
-      toast('已删除该打卡点'); render();
-    }
-    return;
-  }
+  if (act==='addcheckin'){ ui.travel.ckNew=true; window.scrollTo(0,0); render(); return; }
+  if (act==='maptab'){ ui.travel.mapTab = node.getAttribute('data-v') || 'earth'; render(); return; }
+  if (act==='ckcancel'){ ui.travel.ckNew=false; render(); return; }
+  if (act==='cksave'){ saveCheckin(); return; }
   if (act==='view'){ ui[ui.view].view=node.getAttribute('data-v'); render(); return; }
   if (act==='cmode'){ ui.collection.mode=node.getAttribute('data-v'); ui.collection.ipId=null; ui.collection.seriesId=null; render(); return; }
   if (act==='ipopen'){ ui.collection.ipId=node.getAttribute('data-id'); render(); return; }
   if (act==='ipback'){ ui.collection.ipId=null; render(); return; }
   if (act==='seriesopen'){ ui.collection.seriesId=node.getAttribute('data-id'); render(); return; }
   if (act==='seriesback'){ ui.collection.seriesId=null; render(); return; }
-  if (act==='batchadd'){ openBatchAdd(node.getAttribute('data-name')); return; }
-  if (act==='importer'){ openPasteImport(node.getAttribute('data-name')); return; }
   if (act==='delseries'){
     var sid=node.getAttribute('data-id');
     var sn=(store.series.rows.filter(function(x){ return String(x._id)===String(sid); })[0]||{})['系列名称']||'';
@@ -2638,44 +2633,6 @@ document.addEventListener('click', function(ev){
     return;
   }
   if (act==='locmgr'){ openLocManager(); return; }
-  /* 候选箱 */
-  if (act==='openlink') return;
-  if (act==='inbox'){
-    ui.collection.inbox = !ui.collection.inbox;
-    render(); return;
-  }
-  if (act==='candadd'){
-    openForm('candidate', null, {after:function(){ ui.collection.inbox=true; render(); }});
-    return;
-  }
-  if (act==='candedit'){
-    openForm('candidate', node.getAttribute('data-id'), {after:function(){ ui.collection.inbox=true; render(); }});
-    return;
-  }
-  if (act==='candtoggle'){
-    var cid=String(node.getAttribute('data-id'));
-    ui.candSel[cid] = !ui.candSel[cid];
-    render(); return;
-  }
-  if (act==='candall'){
-    candPending().forEach(function(r){ ui.candSel[String(r._id)]=true; });
-    render(); return;
-  }
-  if (act==='candnone'){ ui.candSel={}; render(); return; }
-  if (act==='candskip'){
-    var sid2=node.getAttribute('data-id');
-    delete ui.candSel[String(sid2)];
-    updateRow('candidate', sid2, {状态:'忽略'});
-    return;
-  }
-  if (act==='canddel'){
-    var did=node.getAttribute('data-id');
-    var dn=(store.candidate.rows.filter(function(x){ return String(x._id)===String(did); })[0]||{})['名称']||'这条候选';
-    delete ui.candSel[String(did)];
-    deleteRow('candidate', did, dn);
-    return;
-  }
-  if (act==='candimport'){ openCandImport(); return; }
   if (act==='addinitem'){
     openForm('collection', null, {prefill:{IP: node.getAttribute('data-ip')}});
     return;
@@ -2984,8 +2941,7 @@ function renderSeriesDetail(){
       (se['所属IP']?'<p>IP · '+esc(se['所属IP'])+'</p>':'')+
       (se['说明']?'<p>'+esc(se['说明'])+'</p>':'')+
       '<div class="acts">'+
-        '<button class="btn primary sm" type="button" data-act="batchadd" data-name="'+esc(name)+'">批量添加子项</button>'+
-        '<button class="btn ghost sm" type="button" data-act="importer" data-name="'+esc(name)+'">从订单粘贴导入</button>'+
+
         '<button class="btn ghost sm" type="button" data-act="edit" data-key="series" data-id="'+esc(se._id)+'">编辑系列</button>'+
         '<button class="btn ghost sm" type="button" data-act="delseries" data-id="'+esc(se._id)+'" style="color:var(--red)">删除系列</button>'+
       '</div></div></div>';
@@ -3093,115 +3049,7 @@ function batchDefaults(seriesName){
   editing.vals['状态']='在库';
   if (se && se['所属IP']) editing.vals['IP']=se['所属IP'];
   return se;
-}
-function openBatchAdd(seriesName){
-  var host=$('sheetHost');
-  var se=batchDefaults(seriesName);
-  var target=se ? num(se['目标数量']) : 0;
-  host.innerHTML='<div class="sheet"><div class="sheet-head"><div>'+
-    '<p>批量添加</p><h2>往「'+esc(seriesName||'')+'」里加子项</h2></div>'+
-    '<button class="x" type="button" data-x="1">×</button></div>'+
-    '<div class="f"><label>子项名单（每行一个）</label>'+
-      '<textarea id="bNames" rows="7" autocomplete="off" placeholder="#001 妙蛙种子&#10;#002 妙蛙草&#10;#003 妙蛙花"></textarea>'+
-      '<span class="imgnote">一次可以贴很多行。价格、存放位置这些在下面统一填一次就行。</span></div>'+
-    '<div class="f" style="margin-top:13px"><label>编号</label>'+
-      '<select id="bNoMode">'+
-        '<option value="auto">自动顺序编号（001, 002…）</option>'+
-        '<option value="extract">从名字里认（如 #025 皮卡丘 → 025）</option>'+
-        '<option value="none">不编号</option>'+
-      '</select></div>'+
-    '<div style="margin:16px 0 10px;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted)">这些字段对所有子项生效</div>'+
-    '<div class="fgrid" id="bCommon"></div>'+
-    '<div style="margin-top:16px;display:flex;gap:9px;flex-wrap:wrap">'+
-      '<button class="btn ghost" type="button" id="bPreview">生成预览</button>'+
-      '<span class="imgnote" style="margin:0;align-self:center" id="bCount"></span>'+
-    '</div>'+
-    '<div id="bPrev" style="margin-top:12px"></div>'+
-    '<div id="bProg"></div>'+
-    '<div class="sheet-actions">'+
-      '<button class="btn ghost" type="button" data-x="1">关闭</button>'+
-      '<button class="btn primary" type="button" id="bGo">写入</button></div></div>';
-  host.hidden=false;
-  host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
-  host.onclick=function(e){ if(e.target===host) closeSheet(); };
-
-  var common=$('bCommon');
-  common.innerHTML=commonFields().map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('');
-  wireFormControls(host, null);
-
-  var rows=[];
-  function build(){
-    var lines=$('bNames').value.split(/\r?\n/).map(function(s){ return s.trim(); }).filter(Boolean);
-    var mode=$('bNoMode').value;
-    return lines.map(function(line,i){
-      var no='', name=line;
-      if (mode==='auto') no=pad3(i+1);
-      else if (mode==='extract'){
-        var mm=line.match(/^[#＃]?\s*(\d{1,4})\s*[\.、:：\-]?\s*/);
-        if (mm){ no=pad3(parseInt(mm[1],10)); name=line.slice(mm[0].length).trim()||line; }
-      }
-      return {no:no, name:name};
-    });
-  }
-  function draw(){
-    rows=build();
-    var box=$('bPrev');
-    $('bCount').textContent = rows.length ? ('共 '+rows.length+' 条'+(target?('，目标 '+target+' 个'):'')) : '';
-    $('bGo').textContent = rows.length ? ('写入 '+rows.length+' 条') : '写入';
-    if (!rows.length){ box.innerHTML=''; return; }
-    box.innerHTML='<div style="max-height:250px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:8px 10px">'+
-      rows.map(function(r,i){
-        return '<div style="display:flex;gap:7px;align-items:center;padding:3px 0">'+
-          '<span style="font-size:11px;color:var(--muted);width:32px;flex:0 0 32px;letter-spacing:.04em">'+esc(r.no||'—')+'</span>'+
-          '<input data-bn="'+i+'" value="'+esc(r.name)+'" autocomplete="off" style="flex:1;min-height:32px;padding:0 9px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
-          '<button class="btn link" type="button" data-bd="'+i+'" style="color:var(--red)">×</button></div>';
-      }).join('')+'</div>';
-    box.querySelectorAll('[data-bn]').forEach(function(inp){
-      inp.addEventListener('input', function(){
-        var i=parseInt(inp.getAttribute('data-bn'),10);
-        if (rows[i]) rows[i].name=inp.value;
-      });
-    });
-    box.querySelectorAll('[data-bd]').forEach(function(b){
-      b.onclick=function(){
-        var i=parseInt(b.getAttribute('data-bd'),10);
-        var lines=$('bNames').value.split(/\r?\n/);
-        var keep=[], idx=0;
-        lines.forEach(function(l){
-          if (l.trim()){ if (idx!==i) keep.push(l); idx++; }
-          else keep.push(l);
-        });
-        $('bNames').value=keep.join('\n');
-        draw();
-      };
-    });
-  }
-  $('bNames').addEventListener('input', function(){ if (rows.length) draw(); });
-  $('bNoMode').addEventListener('change', draw);
-  $('bPreview').onclick=draw;
-  $('bGo').onclick=function(){
-    rows=build();
-    if (!rows.length){ toast('先贴名单，再点「生成预览」'); return; }
-    var list=rows.map(function(r){
-      var v={}; Object.keys(editing.vals).forEach(function(k){ v[k]=editing.vals[k]; });
-      v['名称']=r.name; v['编号']=r.no;
-      return v;
-    });
-    $('bProg').innerHTML=progressBox('bP');
-    $('bGo').disabled=true;
-    batchWrite('collection', list,
-      function(done,total,ok,fail){ tickProgress('bP',done,total,ok,fail); },
-      function(ok, fails){
-        $('bGo').disabled=false;
-        var t=$('bP'+'Txt');
-        if (t) t.textContent='完成：成功 '+ok+' 条'+(fails.length?('，'+fails.length+' 条没成功，已放进待同步'):'');
-        toast(fails.length ? ('写入完成，'+fails.length+' 条失败，可重试') : ('已写入 '+ok+' 条'));
-        render();
-      });
-  };
-}
-
-/* ---------- 平台识别与链接判定 ---------- */
+}/* ---------- 平台识别与链接判定 ---------- */
 function platformOf(url){
   var u=String(url||'').toLowerCase();
   if (!u) return '其他';
@@ -3273,277 +3121,6 @@ function parseImportText(text){
   });
   return {items:items, links:links};
 }
-function openPasteImport(seriesName){
-  batchDefaults(seriesName);
-  var host=$('sheetHost');
-  host.innerHTML='<div class="sheet"><div class="sheet-head"><div>'+
-    '<p>粘贴导入</p><h2>把订单内容贴进来</h2></div>'+
-    '<button class="x" type="button" data-x="1">×</button></div>'+
-    '<div class="f"><label>订单内容（每行一个物品，链接单独一行）</label>'+
-      '<textarea id="iText" rows="7" autocomplete="off" placeholder="宝可梦金属徽章 皮卡丘　¥39.00　2026-08-15&#10;https://detail.tmall.com/item.htm?id=123&#10;杰尼龟,45.50,2026-08-16"></textarea>'+
-      '<span class="imgnote">商品标题、订单行、导出的表格都能贴。<b>链接行不会被瞎解析</b>，会原样存进候选箱等你确认。</span></div>'+
-    '<div style="margin:16px 0 10px;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted)">这些字段对写入藏品的条目生效</div>'+
-    '<div class="fgrid" id="iCommon"></div>'+
-    '<div style="margin-top:16px;display:flex;gap:9px;flex-wrap:wrap">'+
-      '<button class="btn ghost" type="button" id="iParse">解析</button>'+
-      '<span class="imgnote" style="margin:0;align-self:center" id="iCount"></span>'+
-    '</div>'+
-    '<div id="iPrev" style="margin-top:12px"></div>'+
-    '<div id="iLinkBox" style="margin-top:12px"></div>'+
-    '<div id="iProg"></div>'+
-    '<div class="sheet-actions">'+
-      '<button class="btn ghost" type="button" data-x="1">关闭</button>'+
-      '<button class="btn ghost sm" type="button" id="iToCand" style="display:none">把链接存进候选箱</button>'+
-      '<button class="btn primary" type="button" id="iGo">写入</button></div></div>';
-  host.hidden=false;
-  host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
-  host.onclick=function(e){ if(e.target===host) closeSheet(); };
-  var common=$('iCommon');
-  common.innerHTML=commonFields().map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('');
-  wireFormControls(host, null);
-
-  var items=[], links=[];
-  function paint(){
-    var box=$('iPrev');
-    $('iCount').textContent = (items.length||links.length)
-      ? ('认出 '+items.length+' 个物品'+(links.length?(' 和 '+links.length+' 个链接'):'')) : '';
-    $('iGo').textContent = items.length ? ('写入 '+items.length+' 条') : '写入';
-    if (!items.length){ box.innerHTML=''; } else {
-      box.innerHTML='<div style="max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:8px 10px">'+
-        items.map(function(r,i){
-          return '<div style="display:flex;gap:7px;align-items:center;padding:3px 0">'+
-            '<input data-in="'+i+'" value="'+esc(r.name)+'" autocomplete="off" style="flex:1;min-width:0;min-height:32px;padding:0 9px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
-            '<input data-ip="'+i+'" autocomplete="off" value="'+esc(r.price==null?'':r.price)+'" placeholder="价格" style="width:72px;flex:0 0 72px;min-height:32px;padding:0 8px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
-            '<input data-id="'+i+'" autocomplete="off" value="'+esc(r.date)+'" placeholder="日期" style="width:102px;flex:0 0 102px;min-height:32px;padding:0 8px;border:1px solid #ddd4c8;border-radius:9px;background:#fbf8f3">'+
-            '<button class="btn link" type="button" data-idd="'+i+'" style="color:var(--red)">×</button></div>';
-        }).join('')+'</div>';
-      box.querySelectorAll('[data-in]').forEach(function(inp){
-        inp.addEventListener('input', function(){ items[+inp.getAttribute('data-in')].name=inp.value; });
-      });
-      box.querySelectorAll('[data-ip]').forEach(function(inp){
-        inp.addEventListener('input', function(){
-          var v=parseFloat(inp.value); items[+inp.getAttribute('data-ip')].price=isNaN(v)?null:v; });
-      });
-      box.querySelectorAll('[data-id]').forEach(function(inp){
-        inp.addEventListener('input', function(){ items[+inp.getAttribute('data-id')].date=inp.value; });
-      });
-      box.querySelectorAll('[data-idd]').forEach(function(b){
-        b.onclick=function(){ items.splice(+b.getAttribute('data-idd'),1); paint(); };
-      });
-    }
-    /* 链接单独一块，说清楚哪些抓得到哪些抓不到 */
-    var lb=$('iLinkBox'), btn=$('iToCand');
-    if (!links.length){ lb.innerHTML=''; btn.style.display='none'; return; }
-    btn.style.display='';
-    btn.textContent='把 '+links.length+' 个链接存进候选箱';
-    var plats={}; links.forEach(function(l){ plats[l.platform]=(plats[l.platform]||0)+1; });
-    var unreachable=Object.keys(plats).filter(function(p){ return !platformReachable(p); });
-    lb.innerHTML='<div class="buybox"><h4>认出 '+links.length+' 个链接</h4>'+
-      '<div style="font-size:12.5px;line-height:1.75;color:#5f574c">'+
-      '<div style="margin-bottom:8px">'+Object.keys(plats).map(function(p){
-        return '<span class="plat'+(platformReachable(p)?' ok':'')+'">'+esc(p)+' '+plats[p]+'</span>';
-      }).join(' ')+'</div>'+
-      (unreachable.length
-        ? '<div>链接我没法直接抓内容：'+esc(unreachable.join('、'))+' 都要登录或者有反爬，'+
-          '打开只会拿到登录页。所以先把链接存进候选箱，你再补名字和图片，<b>或者</b>在自己的浏览器里装<a target="_blank" rel="noopener" href="https://www.workbuddy.cn/space/d/0T6YxIzqAxLn1kmeBuLK8n" style="color:var(--accent);text-decoration:underline">订单抓取小工具</a>，登录后一键抓。</div>'
-        : '<div>京东的商品页我能试着抓，把链接发到对话里我来填；其他平台的商品页也都要登录。你也可以在自己的浏览器里装<a target="_blank" rel="noopener" href="https://www.workbuddy.cn/space/d/0T6YxIzqAxLn1kmeBuLK8n" style="color:var(--accent);text-decoration:underline">订单抓取小工具</a>，登录后一键抓。</div>')+
-      '</div></div>';
-  }
-  $('iText').addEventListener('input', function(){ if (items.length||links.length) draw(); });
-  function draw(){
-    var r=parseImportText($('iText').value);
-    items=r.items; links=r.links;
-    paint();
-  }
-  $('iParse').onclick=draw;
-  $('iToCand').onclick=function(){
-    if (!links.length) return;
-    var list=links.map(function(l){
-      return {名称:'', 来源链接:l.url, 来源平台:l.platform, 价格:'', 图片:'', 规格备注:''};
-    });
-    $('iProg').innerHTML=progressBox('iC');
-    batchWrite('candidate', list,
-      function(done,total,ok,fail){ tickProgress('iC',done,total,ok,fail); },
-      function(ok, fails){
-        var t=$('iC'+'Txt');
-        if (t) t.textContent='完成：'+ok+' 个链接已进候选箱'+(fails.length?('，'+fails.length+' 个失败'):'');
-        links=[]; paint();
-        toast(ok+' 个链接已存进候选箱');
-        render();
-      });
-  };
-  $('iGo').onclick=function(){
-    if (!items.length){ toast('先贴订单内容，再点「解析」'); return; }
-    var list=items.map(function(r){
-      var v={}; Object.keys(editing.vals).forEach(function(k){ v[k]=editing.vals[k]; });
-      v['名称']=r.name;
-      v['购入价格']=r.price==null?'':r.price;
-      v['购入日期']=r.date||'';
-      if (r.code) v['编号']=r.code;
-      if (r.image) v['封面']=r.image;
-      if (typeof window!=='undefined' && window.__debug) console.log('IMP item', JSON.stringify(r), '->', JSON.stringify(v));
-      return v;
-    });
-    $('iProg').innerHTML=progressBox('iP');
-    $('iGo').disabled=true;
-    batchWrite('collection', list,
-      function(done,total,ok,fail){ tickProgress('iP',done,total,ok,fail); },
-      function(ok, fails){
-        $('iGo').disabled=false;
-        var t=$('iP'+'Txt');
-        if (t) t.textContent='完成：成功 '+ok+' 条'+(fails.length?('，'+fails.length+' 条没成功，已放进待同步'):'');
-        toast(fails.length ? ('导入完成，'+fails.length+' 条失败，可重试') : ('已导入 '+ok+' 条'));
-        render();
-      });
-  };
-}
-
-/* ---------- 候选箱 ---------- */
-function candPending(){
-  return store.candidate.rows.filter(function(r){
-    return r['状态']!=='已入库' && r['状态']!=='忽略';
-  });
-}
-function candCard(r){
-  var name=String(r['名称']||'');
-  var plat=r['来源平台']||'其他';
-  var price=num(r['价格']);
-  var link=String(r['来源链接']||'');
-  var on=!!ui.candSel[String(r._id)];
-  var label=name || (link ? '（待补名字）' : '未命名');
-  return '<div class="ipcard cand'+(on?' on':'')+'" data-act="candtoggle" data-id="'+esc(r._id)+'"'+
-    ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-    '<div class="ph" style="'+coverStyle(r,name||link||'?')+'">'+
-      (hasCover(r)?'':'<b>'+esc(String(label).slice(0,1))+'</b>')+
-      '<span class="tick">✓</span></div>'+
-    '<div class="bd"><strong>'+esc(label)+'</strong>'+
-      '<span><span class="plat'+(platformReachable(plat)?' ok':'')+'">'+esc(plat)+'</span>'+
-      (price?' · ¥'+price.toFixed(2):'')+'</span>'+
-      (r['规格备注']?'<span>'+esc(r['规格备注'])+'</span>':'')+
-      '<div class="cops">'+
-        (link?'<a href="'+esc(link)+'" target="_blank" rel="noopener" data-act="openlink">打开链接</a>':'')+
-        '<button type="button" data-act="candedit" data-id="'+esc(r._id)+'">编辑</button>'+
-        '<button type="button" data-act="candskip" data-id="'+esc(r._id)+'">忽略</button>'+
-        '<button type="button" data-act="canddel" data-id="'+esc(r._id)+'" style="color:var(--red)">删除</button>'+
-      '</div></div></div>';
-}
-function renderInbox(){
-  var s=store.candidate;
-  var pend=candPending();
-  var done=s.rows.filter(function(r){ return r['状态']==='已入库'; });
-  var skip=s.rows.filter(function(r){ return r['状态']==='忽略'; });
-  var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-    '<div class="panel-head"><div><h2>候选箱</h2>'+
-    '<div class="hint">先把东西收进来，再挑哪些真的买了</div></div>'+
-    '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
-      '<button class="btn ghost sm" type="button" data-act="candadd">+ 手动加</button>'+
-      '<button class="btn ghost sm" type="button" data-act="importer" data-name="">粘贴导入</button>'+
-      '<button class="btn ghost sm" type="button" data-act="inbox">← 回到藏品</button>'+
-    '</div></div>';
-  if (s.status==='loading'){ h += emptyHTML('正在读线上数据…',''); return h+'</section>'; }
-  if (s.status==='error'){ h += emptyHTML('没能读到候选箱','点上面的「重试」再拉一次。'); return h+'</section>'; }
-  if (!pend.length){
-    h += emptyHTML('候选箱是空的',
-      '三条路：① 顶栏「粘贴导入」里贴订单文本或链接 ② 点「手动加」自己填 ③ 自己浏览器里装一个<a target="_blank" rel="noopener" href="https://www.workbuddy.cn/space/d/0T6YxIzqAxLn1kmeBuLK8n" style="color:var(--accent);text-decoration:underline">订单抓取小工具</a>，登录后一键把订单页抓成文本');
-  } else {
-    var n=Object.keys(ui.candSel).filter(function(k){ return ui.candSel[k]; }).length;
-    h += '<div style="display:flex;gap:9px;align-items:center;margin-bottom:14px;flex-wrap:wrap">'+
-      '<button class="btn primary sm" type="button" data-act="candimport">把选中的加入藏品</button>'+
-      '<span class="imgnote" style="margin:0">已选 '+n+' / '+pend.length+'</span>'+
-      '<button class="btn link" type="button" data-act="candall">全选</button>'+
-      '<button class="btn link" type="button" data-act="candnone">全不选</button>'+
-      '</div>';
-    h += '<div class="ipgrid">'+pend.map(candCard).join('')+'</div>';
-  }
-  if (skip.length){
-    h += '<div class="grp" style="margin-top:24px"><h4>已忽略 <i>'+skip.length+'</i></h4>'+
-      '<div class="ipgrid">'+skip.map(candCard).join('')+'</div></div>';
-  }
-  if (done.length){
-    h += '<div class="grp" style="margin-top:24px"><h4>已入库 <i>'+done.length+'</i></h4>'+
-      '<div class="ipgrid">'+done.map(candCard).join('')+'</div></div>';
-  }
-  return h+'</section>';
-}
-/* 把选中的候选转成藏品 */
-function openCandImport(){
-  var ids=Object.keys(ui.candSel).filter(function(k){ return ui.candSel[k]; });
-  if (!ids.length){ toast('先在候选箱里选几条'); return; }
-  var list=ids.map(function(id){
-    return store.candidate.rows.filter(function(r){ return String(r._id)===String(id); })[0];
-  }).filter(Boolean);
-  if (!list.length){ toast('选中的条目已经不在了'); return; }
-  editing={key:'collection', id:null, vals:{}};
-  MODS.collection.fields.forEach(function(f){ editing.vals[f.k]=fieldVal(null,f); });
-  editing.vals['状态']='在库';
-  var host=$('sheetHost');
-  host.innerHTML='<div class="sheet"><div class="sheet-head"><div>'+
-    '<p>入库</p><h2>把 '+list.length+' 条候选加入藏品</h2></div>'+
-    '<button class="x" type="button" data-x="1">×</button></div>'+
-    '<div style="max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:9px 11px;margin-bottom:16px">'+
-      list.map(function(c){
-        return '<div style="display:flex;gap:9px;align-items:center;padding:3px 0;font-size:12.5px">'+
-          '<span style="color:var(--muted);flex:0 0 auto">'+(num(c['价格'])?('¥'+num(c['价格']).toFixed(2)):'—')+'</span>'+
-          '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+
-            esc(c['名称']||'（待补名字）')+'</span></div>';
-      }).join('')+'</div>'+
-    '<div class="fgrid" style="margin-bottom:4px">'+
-      '<div class="f"><label>价格怎么定</label><select id="cPriceMode">'+
-        '<option value="cand">用候选里各自的价格</option>'+
-        '<option value="one">统一填一个价格</option></select></div>'+
-      '<div class="f" id="cPriceWrap" style="display:none"><label>统一价格</label>'+
-        '<input id="cPrice" type="number" autocomplete="off" placeholder="0.00"></div>'+
-    '</div>'+
-    '<div style="margin:14px 0 10px;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted)">这些字段对全部条目生效</div>'+
-    '<div class="fgrid" id="cCommon"></div>'+
-    '<div id="cProg"></div>'+
-    '<div class="sheet-actions">'+
-      '<button class="btn ghost" type="button" data-x="1">关闭</button>'+
-      '<button class="btn primary" type="button" id="cGo">写入 '+list.length+' 条</button></div></div>';
-  host.hidden=false;
-  host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
-  host.onclick=function(e){ if(e.target===host) closeSheet(); };
-  var common=$('cCommon');
-  common.innerHTML=commonFields().map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('');
-  wireFormControls(host, null);
-  $('cPriceMode').addEventListener('change', function(){
-    $('cPriceWrap').style.display = $('cPriceMode').value==='one' ? '' : 'none';
-  });
-  $('cGo').onclick=function(){
-    var mode=$('cPriceMode').value;
-    var one=parseFloat($('cPrice').value);
-    var items=list.map(function(c){
-      var v={}; Object.keys(editing.vals).forEach(function(k){ v[k]=editing.vals[k]; });
-      v['名称']=c['名称']||'（待补名字）';
-      v['封面']=coverImg(c)||'';
-      v['购入价格']= (mode==='one' && !isNaN(one)) ? one : num(c['价格']);
-      v['购入渠道']= v['购入渠道'] || c['来源平台'] || '';
-      v['短评']= v['短评'] || c['规格备注'] || '';
-      /* 候选箱里手动写的「编号 / 系列」也带过去 */
-      if (!v['编号'] && c['规格备注'] && /^[#＃]?\d{1,4}/.test(c['规格备注'])) v['编号'] = c['规格备注'].replace(/^[#＃]\s*/,'').match(/^\d{1,4}/)[0];
-      return v;
-    });
-    $('cProg').innerHTML=progressBox('cP');
-    $('cGo').disabled=true;
-    batchWrite('collection', items,
-      function(done,total,ok,fail){ tickProgress('cP',done,total,ok,fail); },
-      function(ok, fails){
-        $('cGo').disabled=false;
-        var t=$('cP'+'Txt');
-        /* 成功的候选标记为已入库 */
-        var okIds=Object.keys(ui.candSel).filter(function(k){ return ui.candSel[k]; });
-        okIds.forEach(function(id){
-          updateRow('candidate', id, {状态:'已入库'}, null);
-        });
-        ui.candSel={};
-        if (t) t.textContent='完成：成功 '+ok+' 条'+(fails.length?('，'+fails.length+' 条没成功，已放进待同步'):'');
-        toast(fails.length ? ('入库完成，'+fails.length+' 条失败，可重试') : ('已入库 '+ok+' 条'));
-        render();
-      });
-  };
-}
-
-
 function openForm(key, id, opts){
   var m=MODS[key];
   var row=null;

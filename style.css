@@ -1507,3 +1507,36 @@ input.search{margin-bottom:12px}
     box-shadow: 0 6px 18px rgba(60, 40, 20, .22);
   }
 }
+
+/* ============ 遐方坞：地球 / 地图 选项卡 ============ */
+.map-tabs{position:absolute;top:14px;left:14px;z-index:6;display:flex;gap:6px;padding:5px;border-radius:14px;
+  background:rgba(8,14,30,.55);border:1px solid rgba(150,190,255,.18);backdrop-filter:blur(8px)}
+.mtab{border:0;background:transparent;color:#cdd9f5;font-size:13px;line-height:1;padding:8px 16px;border-radius:10px;cursor:pointer;transition:background .15s,color .15s}
+.mtab:hover{color:#fff}
+.mtab.on{background:#fff;color:#16203a;font-weight:700}
+.earth-panel,.map-panel{position:absolute;inset:0}
+.earth-panel[hidden],.map-panel[hidden]{display:none}
+.china-map{position:absolute;inset:0;width:100%;height:100%}
+.earth-hero .amap-container{height:100%!important}
+.map-tip{position:absolute;left:14px;bottom:14px;z-index:6;max-width:78%;font-size:12px;line-height:1.5;
+  color:#eaf1ff;background:rgba(8,14,30,.6);padding:7px 12px;border-radius:12px;border:1px solid rgba(150,190,255,.18)}
+
+/* ============ 新建打卡点（独立全屏地图页） ============ */
+.ck-search{display:flex;gap:8px;margin:6px 0 14px}
+.ck-search .search{flex:1}
+.ck-map{width:100%;height:440px;border-radius:16px;overflow:hidden;background:#eef1ea;margin-bottom:14px}
+.ck-map .amap-container{height:100%!important}
+.ck-tip{font-size:12.5px;line-height:1.5;color:#5b6b86;min-height:18px;margin:-6px 0 10px}
+.ck-err{color:#e5484d;font-size:13px;min-height:18px;margin:2px 0 6px}
+/* 高德自定义 HTML 标记点（地点名字 / 城市标签） */
+.mk-dot{position:relative;display:inline-flex;align-items:center;justify-content:center;background:var(--mc,#4a90d9);
+  color:#fff;font-size:11px;line-height:1;padding:4px 9px;border-radius:11px;white-space:nowrap;
+  box-shadow:0 3px 8px rgba(0,0,0,.32);font-weight:600}
+.mk-dot::after{content:"";position:absolute;left:50%;bottom:-5px;transform:translateX(-50%);
+  border:5px solid transparent;border-top-color:var(--mc,#4a90d9);border-bottom:0}
+
+@media (max-width:640px){
+  .ck-map{height:320px}
+  .map-tabs{top:10px;left:10px}
+  .mtab{padding:7px 12px}
+}
