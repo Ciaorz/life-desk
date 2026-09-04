@@ -1,0 +1,24 @@
+{
+  "schema": 2,
+  "cat": "series",
+  "module": "series",
+  "rows": [
+    {
+      "_id": "l_mtmofrvwre3ou",
+      "系列名称": "30周年151金属徽章",
+      "所属IP": "宝可梦",
+      "目标数量": 151,
+      "系列封面": [
+        {
+          "imageUrl": "data/images/series-封面/series-0001.jpg",
+          "viewport": {
+            "s": 1,
+            "x": 0,
+            "y": 0
+          }
+        }
+      ],
+      "说明": null
+    }
+  ]
+}

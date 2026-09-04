@@ -8,7 +8,7 @@
       "纬度": 30.29,
       "经度": 118.02,
       "状态": "去过",
-      "心愿等级": "此生必去",
+      "心愿等级": 5,
       "最佳季节": null,
       "预计天数": 0,
       "预算": 0,
@@ -16,19 +16,43 @@
       "同伴": null,
       "封面": [
         {
-          "imageUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQEc7VCzhSnWbU0KUit053tuW6LVtRydckycwFYWk5Vjg&s=10"
+          "imageUrl": "data/images/去过的地方-封面/去过的地方-0001.jpg"
         }
       ],
-      "备注": null
+      "备注": null,
+      "国家": "安徽",
+      "地区": "黄山"
+    },
+    {
+      "_id": "l_mtl53ooc3ako3",
+      "地点": "巫山",
+      "国家地区": "重庆巫山县",
+      "纬度": 30.94,
+      "经度": 107.95,
+      "状态": "去过",
+      "心愿等级": 4,
+      "最佳季节": null,
+      "预计天数": 0,
+      "预算": 0,
+      "出行日期": null,
+      "同伴": null,
+      "封面": [
+        {
+          "imageUrl": "data/images/想去的地方-封面/想去的地方-0003.jpg"
+        }
+      ],
+      "备注": null,
+      "国家": "重庆巫山县",
+      "地区": "巫山"
     },
     {
       "_id": "l_mtkdu2r88wbmo",
-      "地点": "多洛米蒂",
-      "国家地区": "意大利",
-      "纬度": 46.38,
-      "经度": 11.85,
+      "地点": "奥蒂塞伊",
+      "国家地区": "意大利 多洛米蒂",
+      "纬度": 31.29,
+      "经度": 120.65,
       "状态": "想去",
-      "心愿等级": "此生必去",
+      "心愿等级": 5,
       "最佳季节": null,
       "预计天数": 0,
       "预算": 0,
@@ -36,18 +60,76 @@
       "同伴": null,
       "封面": [
         {
-          "imageUrl": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSX6c1yBXfqFT-1U7mBb1E1bFkT3gU0wFW1UAcPG3K-fK4TgJNhRxQA3oyy&s=10"
+          "imageUrl": "data/images/想去的地方-封面/想去的地方-0002.jpg"
         }
       ],
-      "备注": null
+      "备注": null,
+      "国家": "意大利",
+      "地区": "多洛米蒂"
     }
   ],
-  "av": [],
+  "av": [
+    {
+      "_id": "l_mtlufoszfs2te",
+      "名称": "欢迎来龙餐馆",
+      "大类": "电影",
+      "小类": "电影",
+      "IP": null,
+      "系列": null,
+      "编号": null,
+      "状态": "在库",
+      "星级": 0,
+      "存储地点": null,
+      "购入日期": null,
+      "购入价格": 0,
+      "封面": null,
+      "短评": null
+    },
+    {
+      "_id": "l_mtluetoo0ph7i",
+      "名称": "欢迎来龙餐馆",
+      "大类": "电影",
+      "小类": "电影",
+      "IP": null,
+      "系列": null,
+      "编号": null,
+      "状态": "在库",
+      "星级": 0,
+      "存储地点": null,
+      "购入日期": null,
+      "购入价格": 0,
+      "封面": null,
+      "短评": null
+    }
+  ],
   "study": [],
   "food": [],
   "idea": [],
-  "ip": [],
+  "ip": [
+    {
+      "_id": "l_mtldc9je5j6la",
+      "IP名称": "宝可梦",
+      "IP图像": [
+        {
+          "imageUrl": "https://i2.kknews.cc/nBruJ2BTApPZEHPcRxpNwnSF2QOysL6YMw/0.jpg"
+        }
+      ],
+      "简介": null
+    }
+  ],
   "series": [],
   "loc": [],
-  "candidate": []
+  "checkin": [
+    {
+      "_id": "ck_mtl7jsyhtmmts",
+      "地点名字": "三峡龙脊",
+      "城市景区": "巫峡",
+      "日期": "2026-09-03",
+      "封面图片": "https://drmetastar.com/wp-content/uploads/2025/11/rilcher_20251129_0008.jpg",
+      "内容": "",
+      "纬度": 31.07722,
+      "经度": 109.87425
+    }
+  ],
+  "recipe": []
 }

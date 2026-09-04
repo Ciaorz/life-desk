@@ -281,6 +281,10 @@ var TRAVEL_CAT = { '去过':'去过的地方', '想去':'想去的地方' };
 function shardCatOf(mk, row){
   if (mk === 'ip') return 'ip';
   if (mk === 'series') return 'series';
+  /* v54：美食 / 菜谱 各自一个独立分片文件（不再按 类型 细分，也不再留在主文件），
+     这样 data/ 下是 美食-data.json + images/美食-封面/ 与 菜谱-data.json + images/菜谱-封面/ */
+  if (mk === 'food') return '美食';
+  if (mk === 'recipe') return '菜谱';
   /* v54：书籍 / 杂志 在 collection 里按「大类」分片，其它藏品按「小类」分片 */
   if (mk === 'collection'){
     var big = String(row && row['大类'] || '').trim();
@@ -337,12 +341,14 @@ function normalizeIndex(idx){
   /* IP / 系列单独存为 ip-data.json / series-data.json，便于管理它们与物品的关联 */
   if (!idx.shards.ip) idx.shards.ip = { file:'ip-data.json', module:'ip', coverDir:'ip-封面' };
   if (!idx.shards.series) idx.shards.series = { file:'series-data.json', module:'series', coverDir:'系列-封面' };
-  /* v54：把电影 / 留声机 / 书籍 / 杂志 预注册为独立分片，各自有自己的 data/{cat}-data.json 和 images/{cat}-封面 */
+  /* v54：把电影 / 留声机 / 书籍 / 杂志 / 美食 / 菜谱 预注册为独立分片，各自有自己的 data/{cat}-data.json 和 images/{cat}-封面 */
   [
     { cat:'电影',    module:'av',        file:'电影-data.json',    coverDir:'电影-封面' },
     { cat:'留声机',  module:'av',        file:'留声机-data.json',  coverDir:'留声机-封面' },
     { cat:'书籍',    module:'collection', file:'书籍-data.json',    coverDir:'书籍-封面' },
-    { cat:'杂志',    module:'collection', file:'杂志-data.json',    coverDir:'杂志-封面' }
+    { cat:'杂志',    module:'collection', file:'杂志-data.json',    coverDir:'杂志-封面' },
+    { cat:'美食',    module:'food',       file:'美食-data.json',    coverDir:'美食-封面' },
+    { cat:'菜谱',    module:'recipe',     file:'菜谱-data.json',    coverDir:'菜谱-封面' }
   ].forEach(function(sh){
     if (!idx.shards[sh.cat]) idx.shards[sh.cat] = { file:sh.file, module:sh.module, coverDir:sh.coverDir };
   });
@@ -517,8 +523,19 @@ async function scanMaxImageSeqFor(dirName){
   } catch(e){}
   return max;
 }
+/* 取一条记录最像「名字」的字段，用于封面文件命名（如 电影-千与千寻-0001.jpg） */
+function rowDisplayName(r){
+  if (!r) return '';
+  var keys = ['名称','计划','地点','店名','菜名','菜谱名','IP名称','系列名称','地点名称','内容'];
+  for (var i=0;i<keys.length;i++){
+    var v = String(r[keys[i]] || '').trim();
+    if (v) return safeFileName(v);
+  }
+  return '';
+}
 /* 保存前：把 base64 或外链图片都落到本地磁盘，row 内改为相对路径。
-   文件名 {类目}-0001.jpg / {类目}-0002.jpg … 在每个类目文件夹内独立递增，
+   文件名 {类目}-{条目名}-0001.jpg / {类目}-{条目名}-0002.jpg …
+   （条目名可缺省，例如批量导入时），在每个类目文件夹内独立递增，
    避免 ip-封面 第一张变成 ip-0005 这种跨目录跳号。 */
 async function externalizeImages(cat, rows, startSeq){
   if (!_fsaHandle || !rows || !rows.length) return startSeq;
@@ -551,7 +568,9 @@ async function externalizeImages(cat, rows, startSeq){
         }
         if (!bytes || !bytes.length) continue;
         seq++;
-        var name = safeFileName(cat) + "-" + pad4(seq) + "." + ext;   /* 例：唱片-0001.jpg */
+        var dn = rowDisplayName(r);
+        /* 例：留声机-测试音乐-0001.jpg（条目名为空时退化为 留声机-0001.jpg） */
+        var name = safeFileName(cat) + "-" + (dn ? dn + "-" : "") + pad4(seq) + "." + ext;
         var rel = coverDirPath(cat) + name;
         var ok = await _fsaWriteBinary([IMG_DIR, dirName], name, bytes);
         if (ok){
@@ -1069,10 +1088,24 @@ function queueLocalSave(){
 
 /* 选择/更换数据目录并连接：连接后若目录为空则把当前内存数据写入，避免切换丢数据 */
 async function pickFsaDirAndConnect(){
+  if (!('showDirectoryPicker' in window)){
+    toast('当前浏览器不支持选择本地目录，请用 Chrome / Edge / Opera 桌面版打开');
+    return;
+  }
   var h = null;
-  try { h = await pickFsaDir(); } catch(e){ if (!(e && e.name==='AbortError')) console.warn('选择目录失败', e); return; }
+  try {
+    /* 直接在事件处理链里调用 showDirectoryPicker，减少 await 层级，避免用户手势丢失 */
+    h = await window.showDirectoryPicker({ mode:'readwrite' });
+    _fsaHandle = h;
+    await _fsaSaveHandle(h);
+  } catch(e){
+    if (e && e.name === 'AbortError'){ toast('已取消选择目录'); return; }
+    console.warn('选择目录失败', e);
+    toast('选择目录失败：' + ((e && (e.message || e.name)) || '未知错误') + '。请用 Chrome / Edge 桌面版打开，并避免在 iframe 内使用。');
+    return;
+  }
   if (!h) return;
-  _fsaHandle = h; MODE = 'localfile';
+  MODE = 'localfile';
   var existing = await new Promise(function(res){ localfsRead(function(o){ res(o); }); });
   var isEmpty = !existing || Object.keys(existing).length === 0;
   if (isEmpty){ await new Promise(function(res){ localfsWrite(snapshotAll(), function(){ res(); }); }); }
@@ -1548,9 +1581,9 @@ var MODS = {
       {k:'地点',t:'text',ph:'如 清水寺 / 蓝湖温泉',full:1},
       {k:'国家',t:'text',ph:'如 日本 / 冰岛'},
       {k:'地区',t:'text',ph:'如 京都 / 雷克雅未克'},
-      {k:'纬度',t:'number',ph:'如 35.68（点下方地球自动填）'},
+      {k:'纬度',t:'number',ph:'如 35.68（点下方地图自动填）'},
       {k:'经度',t:'number',ph:'如 139.69'},
-      {k:'_geo',t:'geopick',full:1},
+      {k:'_geo',t:'geopick',mode:'amap',full:1},
       {k:'状态',t:'select',o:['想去','去过'],def:'想去'},
       {k:'心愿等级',t:'hearts',max:5,def:3},
       {k:'最佳季节',t:'text',ph:'三月底到四月初'},
@@ -1742,7 +1775,18 @@ function normalizeRow(r){
 function normalizeRows(rows){
   if (!rows) return rows;
   for (var i=0; i<rows.length; i++) normalizeRow(rows[i]);
-  return rows;
+  /* v58：按 _id 去重，后出现的优先（分片文件里的版本比主文件里的遗留旧拷贝新）。
+     修复「编辑后大类丢失 → 同一条同时留在主文件与分片」造成的重复计数（如美食 12 条、影音 2 部）。 */
+  var seen={}, out=[];
+  for (var j=rows.length-1; j>=0; j--){
+    var r=rows[j]; if (!r) continue;
+    var k=String(r._id||'');
+    if (k && seen[k]) continue;
+    if (k) seen[k]=true;
+    out.push(r);
+  }
+  out.reverse();
+  return out;
 }
 var ui = {
   view:'overview',
@@ -1750,7 +1794,7 @@ var ui = {
   av:{ cat:'', sub:'', q:'', classic:false },
   travel:{ status:'', q:'', mapTab:'earth', ckNew:false, ckEditId:false },
   study:{ field:'', q:'', tab:'home', cat:'' },               /* v18：tab=home/书籍/杂志，子层 cat 是当前显示的分类 */
-  food:{ type:'', q:'' },
+  food:{ type:'', q:'', view:'list' },
   recipe:{ type:'', q:'' },
   idea:{ cat:'', star:false, q:'' },
   year: String(new Date().getFullYear())
@@ -1937,6 +1981,9 @@ function loadAll(){
       /* v54：collection/av 都读完后，把错放在 collection 里的影视/音乐迁回 av */
       if (store.collection && store.collection.status !== 'loading' &&
           store.av && store.av.status !== 'loading') migrateAvFromCollection();
+      /* v54：food/recipe 都读完后，把主文件里的美食/菜谱拆到各自独立分片文件 */
+      if (store.food && store.food.status !== 'loading' &&
+          store.recipe && store.recipe.status !== 'loading') migrateFoodRecipeToOwnFiles();
     });
   });
   render();
@@ -1957,6 +2004,21 @@ function migrateAvFromCollection(){
   store.av.status = store.av.rows.length ? 'ok' : 'empty';
   store.collection.status = store.collection.rows.length ? 'ok' : 'empty';
   if (MODE !== 'db'){ if (MODE === 'localfile') queueLocalSave(); else persistAll(); render(); }
+}
+/* v54：把原本躺在主文件（lifedesk.json __main）里的 美食 / 菜谱 记录，拆到各自独立的
+   美食-data.json / 菜谱-data.json（含各自的 images/美食-封面 / images/菜谱-封面 封面目录）。
+   仅本地文件模式需要；用一次性 localStorage 标记避免每次刷新都重写。 */
+var _frSplitDone = false;
+function migrateFoodRecipeToOwnFiles(){
+  if (_frSplitDone) return;
+  _frSplitDone = true;
+  if (MODE !== 'localfile' || !_fsaHandle) return;
+  var has = (store.food && store.food.rows.length) || (store.recipe && store.recipe.rows.length);
+  if (!has) return;
+  var flag; try { flag = localStorage.getItem('lifedesk_v54_fr_split'); } catch(e){}
+  if (flag === '1') return;
+  try { localStorage.setItem('lifedesk_v54_fr_split', '1'); } catch(e){}
+  queueLocalSave();   /* 触发一次落盘：美食→美食-data.json、菜谱→菜谱-data.json */
 }
 
 /* ============ 写入 ============ */
@@ -1990,7 +2052,11 @@ function propsFrom(fields, vals, key){
 /* 写入成功后立刻并入本地视图，再静默回拉一次线上做校对 */
 function localUpsert(key, id, vals){
   if (!store[key]) return;
-  var row={_id:id};
+  /* v58：以旧记录为底合并，而不是从零重建。
+     电影/留声机/书籍/杂志 的专用表单不含「大类」输入项，
+     若从零重建，编辑保存一次大类就丢，导致分片筛选 0 部 + 主文件/分片各留一份旧新拷贝（计数翻倍）。 */
+  var prev = (store[key].rows || []).filter(function(r){ return String(r._id)===String(id); })[0] || {};
+  var row=Object.assign({}, prev, {_id:id});
   activeFields(key, vals).forEach(function(f){
     if (f.t==='geopick') return;
     var v=vals[f.k];
@@ -2056,9 +2122,10 @@ function mutate(label, run, optimistic, key, after){
 /* v54：本地文件模式下，向一个尚无任何条目的专属类目（电影/留声机/书籍/杂志）添加第一条时，
    先弹窗询问是否新建该类目的 data/{类目}-data.json 与 images/{类目}-封面/ 目录，
    让用户明确知道数据落到了哪个文件。返回需要新建的类目名，否则返回 null。 */
-var DEDICATED_CATS = ['电影','留声机','书籍','杂志'];
+var DEDICATED_CATS = ['电影','留声机','书籍','杂志','美食','菜谱'];
 function firstEntryForCategory(key, vals){
-  if (MODE !== 'localfile') return null;
+  /* v58+：只要是第一次向某个专属类目录入，不管当前是否已经连接本地目录，都返回类目名。
+     调用方（addRow）根据 MODE 决定：localfile 直接建文件；其它模式先引导选目录再建文件。 */
   var cat = shardCatOf(key, vals);
   if (!cat || DEDICATED_CATS.indexOf(cat) < 0) return null;
   var has = (store[key] && store[key].rows || []).some(function(r){ return shardCatOf(key, r) === cat; });
@@ -2070,13 +2137,30 @@ function addRow(key, vals, after){
     var newCat = firstEntryForCategory(key, vals);
     if (newCat){
       var fname = shardFileName(newCat), cdir = coverDirName(newCat);
+      /* 必须先关掉表单再弹确认窗；否则 saveBtn.onclick 紧接着会 closeSheet()，把确认窗一起隐藏 */
+      closeSheet();
       askConfirm(
         '你正在添加第一个「'+newCat+'」条目。\n确认后将在本地 data 文件夹新建：\n• '+fname+'（该类专属数据文件）\n• images/'+cdir+'/（封面图片目录）\n\n确定创建这个专属数据文件吗？',
         function(){
-          localUpsert(key, id, vals);
-          if (after) after();
-          render();
-          toast('已创建「'+newCat+'」数据文件，并保存了首条记录');
+          if (MODE === 'localfile'){
+            /* 已连接目录：先并入内存，再显式建分片文件（保证是 v2 分片格式，而不是单文件 lifedesk.json） */
+            localUpsert(key, id, vals);
+            if (_fsaTimer){ clearTimeout(_fsaTimer); _fsaTimer = null; }
+            createShard(newCat, key).then(function(){
+              if (after) after();
+              render();
+              toast('已创建「'+newCat+'」数据文件，并保存了首条记录');
+            });
+          } else if (_FSA_SUPPORT){
+            /* 未连接目录但浏览器支持 FSA：先选目录，再保存 */
+            saveFirstDedicatedEntry(newCat, key, id, vals, after);
+          } else {
+            /* 浏览器不支持 FSA：回退 localStorage */
+            toast('当前浏览器不支持本地目录，数据将临时保存在浏览器 localStorage');
+            localUpsert(key, id, vals);
+            if (after) after();
+            render();
+          }
         },
         { yesLabel:'创建并保存', yesColor:'#2f8f5b', title:'新建类目数据文件' }
       );
@@ -2097,6 +2181,59 @@ function addRow(key, vals, after){
     });
   }, null, key, after);
 }
+/* 首次向专属类目录入且尚未连接本地目录时：先选目录，再保存。
+   目录为空则直接把当前内存（含本条新记录）写进去；目录已有数据则先加载再合并本条记录。 */
+async function saveFirstDedicatedEntry(newCat, key, id, vals, after){
+  if (!('showDirectoryPicker' in window)){
+    toast('当前浏览器不支持选择本地目录，请用 Chrome / Edge / Opera 桌面版打开');
+    localUpsert(key, id, vals);
+    if (after) after();
+    render();
+    return;
+  }
+  var h = null;
+  try {
+    h = await window.showDirectoryPicker({ mode:'readwrite' });
+    _fsaHandle = h;
+    await _fsaSaveHandle(h);
+  } catch(e){
+    if (e && e.name === 'AbortError'){ toast('已取消选择目录'); return; }
+    console.warn('选择目录失败', e);
+    toast('选择目录失败：' + ((e && (e.message || e.name)) || '未知错误'));
+    return;
+  }
+  if (!h) return;
+  MODE = 'localfile';
+  /* 清掉刚 localUpsert 可能排上的防抖写盘，交给下面的 createShard 一次性按分片格式写入，
+     避免先写一份单文件 lifedesk.json、再写分片造成格式不一致 */
+  if (_fsaTimer){ clearTimeout(_fsaTimer); _fsaTimer = null; }
+  var existing = await new Promise(function(res){ localfsRead(function(o){ res(o); }); });
+  var isEmpty = !existing || Object.keys(existing).length === 0;
+  if (isEmpty){
+    localUpsert(key, id, vals);
+    if (_fsaTimer){ clearTimeout(_fsaTimer); _fsaTimer = null; }
+    await createShard(newCat, key);
+  } else {
+    await new Promise(function(res){
+      loadLocalAll(function(obj){
+        Object.keys(obj || {}).forEach(function(mk){
+          if (!store[mk]) store[mk] = {rows:[], status:'ok'};
+          store[mk].rows = normalizeRows(obj[mk] || []);
+          store[mk].status = store[mk].rows.length ? 'ok' : 'empty';
+        });
+        localUpsert(key, id, vals);
+        if (_fsaTimer){ clearTimeout(_fsaTimer); _fsaTimer = null; }
+        createShard(newCat, key).then(function(){ res(); });
+      });
+    });
+  }
+  await writeReadme();
+  setGhStatus('localfile');
+  refreshFsaButtons();
+  if (after) after();
+  render();
+  toast('已连接本地数据目录，并创建「'+newCat+'」专属文件');
+}
 function updateRow(key, id, vals, after){
   if (MODE !== 'db'){
     localUpsert(key, id, vals);
@@ -2115,7 +2252,8 @@ function updateRow(key, id, vals, after){
 }
 function deleteRow(key, id, name, after){
   if (MODE !== 'db'){
-    store[key].rows = store[key].rows.filter(function(r){ return r._id!==id; });
+    var sid=String(id);
+    store[key].rows = store[key].rows.filter(function(r){ return String(r._id)!==sid; });
     store[key].status = store[key].rows.length ? 'ok' : 'empty';
     if (MODE === 'gh'){ queueGhSave(); localCacheSet(); }
     else if (MODE === 'localfile'){ queueLocalSave(); }
@@ -2221,7 +2359,10 @@ function renderOverview(){
     ['collection','藏'],['travel','旅'],['av','音'],['study','学'],['food','食'],['idea','感']
   ].map(function(p){
     var m=MODS[p[0]], s=store[p[0]];
-    var n = s.status==='loading' ? '读取中' : (s.status==='error' ? '读取失败' : String(s.rows.length)+(m.unit||' 条'));
+    /* v58：馐馔坊计数 = 美食 + 私房菜谱（之前只算美食，菜谱被漏掉） */
+    var count = s.rows.length;
+    if (p[0]==='food' && store.recipe) count += store.recipe.rows.length;
+    var n = s.status==='loading' ? '读取中' : (s.status==='error' ? '读取失败' : String(count)+(m.unit||' 条'));
     var bg = MOD_BG[p[0]] || '';
     return '<button class="ovcard" type="button" data-act="go" data-key="'+p[0]+'"'+
       ' style="--ovbg:url(\''+bg+'\')">'+
@@ -2238,6 +2379,9 @@ function renderOverview(){
   var owned=cs.rows.filter(function(r){ return r['状态']==='在库'; });
   var bought=cs.rows.filter(function(r){ return yr(r['购入日期'])===year; });
   var spend=0; bought.forEach(function(r){ spend += num(r['购入价格']); });
+  /* v58：有价格但没填购入日期的藏品不会计入「年投入」，给出明确提示避免误解 */
+  var noDateCost = cs.rows.filter(function(r){ return !yr(r['购入日期']) && num(r['购入价格'])>0; });
+  var allCost = 0; cs.rows.forEach(function(r){ allCost += num(r['购入价格']); });
   var byCat={}; cs.rows.forEach(function(r){ var k=r['大类']||'其他'; byCat[k]=(byCat[k]||0)+1; });
   var maxC=1; Object.keys(byCat).forEach(function(k){ if(byCat[k]>maxC) maxC=byCat[k]; });
   var ys={}; cs.rows.forEach(function(r){ var y=yr(r['购入日期']); if(y) ys[y]=1; });
@@ -2250,11 +2394,12 @@ function renderOverview(){
 
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+year+' 年的藏品</h2>'+
-    '<div class="hint">按购入日期统计</div></div>'+ysel+'</div>'+
+    '<div class="hint">按购入日期统计'+(noDateCost.length ? ' · '+noDateCost.length+' 件没填「购入日期」未计入当年投入' : '')+'</div></div>'+ysel+'</div>'+
     '<div class="statgrid">'+
       '<div class="stat"><u>在库</u><b>'+owned.length+'</b><i>件</i></div>'+
       '<div class="stat"><u>'+year+' 年入手</u><b>'+bought.length+'</b><i>件</i></div>'+
       '<div class="stat"><u>'+year+' 年投入</u><b>¥'+Math.round(spend)+'</b></div>'+
+      '<div class="stat"><u>累计投入</u><b>¥'+Math.round(allCost)+'</b></div>'+
       '<div class="stat"><u>IP 数</u><b>'+store.ip.rows.length+'</b><i>个</i></div>'+
     '</div>';
   if (cs.rows.length){
@@ -2824,7 +2969,12 @@ function saveCheckin(){
 }
 /* ---------- 展示框「地图」模式：高德中国地图，显示想去 / 去过（打卡点按需展开） ---------- */
 var CHINAMAP=null, MAP_MARKERS=[], MAP_EXPAND_KEY=null;
-function stopChinaMap(){ if (CHINAMAP){ try{ CHINAMAP.destroy(); }catch(e){} } CHINAMAP=null; MAP_MARKERS=[]; MAP_EXPAND_KEY=null; }
+function stopChinaMap(){
+  /* v58：延迟销毁。若在点击事件回调里同步 destroy()，AMap 内部会在事件分发途中访问
+     已销毁对象，抛出 Uncaught Invalid Object: LngLat/Pixel(NaN, NaN)（即遐方坞点气泡的报错） */
+  if (CHINAMAP){ var m=CHINAMAP; CHINAMAP=null; setTimeout(function(){ try{ m.destroy(); }catch(e){} }, 0); }
+  MAP_MARKERS=[]; MAP_EXPAND_KEY=null;
+}
 function clearMapMarkers(){
   if (CHINAMAP && MAP_MARKERS.length){ try{ CHINAMAP.remove(MAP_MARKERS); }catch(e){} MAP_MARKERS=[]; }
 }
@@ -2856,6 +3006,35 @@ function collectMapPoints(){
   });
   return pts;
 }
+/* 安全地把视野框到一组坐标上：高德 2.0 专用写法（无 Bounds.extend、无裸数组第二参）。
+   gs = [{lon,lat}, ...]；单点直接定位，多点用手算的包围盒 setBounds（不传第二参）。 */
+function fitMapToPoints(gs){
+  if (!CHINAMAP) return;
+  var valid=(gs||[]).filter(function(g){ return g && isFinite(g.lon) && isFinite(g.lat); });
+  if (!valid.length) return;
+  try {
+    if (valid.length===1){
+      CHINAMAP.setZoomAndCenter(12, [valid[0].lon, valid[0].lat]);
+      return;
+    }
+    var minLon=valid[0].lon, maxLon=valid[0].lon, minLat=valid[0].lat, maxLat=valid[0].lat;
+    var sLon=0, sLat=0;
+    valid.forEach(function(g){
+      if (g.lon<minLon) minLon=g.lon; if (g.lon>maxLon) maxLon=g.lon;
+      if (g.lat<minLat) minLat=g.lat; if (g.lat>maxLat) maxLat=g.lat;
+      sLon+=g.lon; sLat+=g.lat;
+    });
+    if (!isFinite(minLon) || !isFinite(minLat)) return;
+    /* 完全重合的点（包围盒无面积）会让 setBounds 算出 NaN 缩放，直接定位即可 */
+    if (minLon===maxLon && minLat===maxLat){
+      CHINAMAP.setZoomAndCenter(12, [minLon, minLat]);
+      return;
+    }
+    CHINAMAP.setBounds(new AMap.Bounds([minLon, minLat], [maxLon, maxLat]));
+  } catch(e){
+    try { CHINAMAP.setZoomAndCenter(11, [sLon/valid.length, sLat/valid.length]); } catch(_){}
+  }
+}
 /* 按屏幕像素网格聚合目的地；单点标记右上角显示同城打卡点数量；点击放大并铺开同城打卡点 */
 function renderMapMarkers(){
   if (!CHINAMAP) return;
@@ -2866,6 +3045,8 @@ function renderMapMarkers(){
   var threshold=56; /* px，同一网格内视为重叠 */
   var grid={};
   pts.forEach(function(p){
+    /* v58：坐标必须有限才参与聚合，杜绝 LngLat(NaN, NaN) 标记 */
+    if (!p || !p.g || !isFinite(p.g.lon) || !isFinite(p.g.lat)) return;
     try {
       var px=CHINAMAP.lngLatToContainer([p.g.lon, p.g.lat]);
       var gx=Math.floor(px.x/threshold), gy=Math.floor(px.y/threshold);
@@ -2879,19 +3060,27 @@ function renderMapMarkers(){
   });
   Object.keys(grid).forEach(function(k){
     var cell=grid[k];
-    if (cell.items.length===1){
-      var p=cell.items[0];
-      var mk=new AMap.Marker({ position:[p.g.lon, p.g.lat], content:mkContent(p.color, p.name, p.ckCount), anchor:'bottom-center', extData:{items:[p]} });
-      mk.on('click', function(){ onTravelMarkerClick(p); });
-      MAP_MARKERS.push(mk);
+    var valid = cell.items.filter(function(it){ return it && it.g && isFinite(it.g.lon) && isFinite(it.g.lat); });
+    if (!valid.length) return;
+    if (valid.length===1){
+      var p=valid[0];
+      try {
+        var mk=new AMap.Marker({ position:[p.g.lon, p.g.lat], content:mkContent(p.color, p.name, p.ckCount), anchor:'bottom-center', extData:{items:[p]} });
+        mk.on('click', function(){ onTravelMarkerClick(p); });
+        MAP_MARKERS.push(mk);
+      } catch(e){ console.warn('创建地图标记失败', e); }
     } else {
-      var n=cell.items.length, sumLat=0, sumLon=0;
-      cell.items.forEach(function(it){ sumLat+=it.g.lat; sumLon+=it.g.lon; });
-      var mk=new AMap.Marker({ position:[sumLon/n, sumLat/n], content:mkClusterContent(n), anchor:'center', extData:{items:cell.items} });
+      var n=valid.length, sumLat=0, sumLon=0;
+      valid.forEach(function(it){ sumLat+=it.g.lat; sumLon+=it.g.lon; });
+      var mk=new AMap.Marker({ position:[sumLon/n, sumLat/n], content:mkClusterContent(n), anchor:'center', extData:{items:valid} });
       mk.on('click', function(){
-        var bounds=new AMap.Bounds();
-        cell.items.forEach(function(it){ bounds.extend([it.g.lon, it.g.lat]); });
-        try { CHINAMAP.setBounds(bounds, [60, 60, 60, 60]); } catch(e){}
+        if (!CHINAMAP || !cell.items.length) return;
+        var valid = cell.items.filter(function(it){ return it && it.g && isFinite(it.g.lon) && isFinite(it.g.lat); });
+        if (!valid.length) return;
+        /* v58：高德 2.0 已移除 Bounds.extend()，且 setBounds 第二参必须是对象（不是裸数组）。
+           旧写法会让高德在动画帧里拿到 NaN padding，抛出 LngLat/Pixel(NaN, NaN) 且无法被 try 捕获。
+           改为手算包围盒 + 单点直接 setZoomAndCenter。 */
+        fitMapToPoints(valid.map(function(it){ return it.g; }));
       });
       MAP_MARKERS.push(mk);
     }
@@ -2911,16 +3100,18 @@ function renderMapMarkers(){
 }
 /* 点击目的地标记：弹卡片 + 若有同城打卡点则放大铺开 */
 function onTravelMarkerClick(p){
+  if (!p || !p.row) return;
+  if (!p.g || !isFinite(p.g.lon) || !isFinite(p.g.lat)){ showMapCard(p.row, 'travel'); return; }
   showMapCard(p.row, 'travel');
   if (p.cityKey && p.ckCount>0){
     MAP_EXPAND_KEY=p.cityKey;
-    var bounds=new AMap.Bounds();
-    bounds.extend([p.g.lon, p.g.lat]);
+    /* v58：同样弃用 Bounds.extend + 裸数组第二参，改用 fitMapToPoints */
+    var gs=[p.g];
     findCityCheckins(p.cityKey).forEach(function(ck){
       var lat=Number(ck['纬度']), lon=Number(ck['经度']);
-      if (lat && lon){ var g=wgs84ToGcj02(lat, lon); bounds.extend([g.lon, g.lat]); }
+      if (lat && lon) gs.push(wgs84ToGcj02(lat, lon));
     });
-    try { CHINAMAP.setBounds(bounds, [60, 60, 60, 60]); } catch(e){ renderMapMarkers(); }
+    try { fitMapToPoints(gs); } catch(e){ renderMapMarkers(); }
   }
 }
 function attachChinaMap(){
@@ -3200,9 +3391,14 @@ function render(){
     if (key==='food'){
       act += '<button class="btn primary" type="button" data-act="add" data-key="food">+ '+esc(MODS.food.addLabel)+'</button>';
       act += '<button class="btn primary" type="button" data-act="add" data-key="recipe">+ '+esc(MODS.recipe.addLabel)+'</button>';
+      act += '<button class="btn ghost sm" type="button" data-act="foodstars">星级榜</button>';
     } else if (key==='av'){
       act += '<button class="btn primary" type="button" data-act="avaddmovie">+ 添加电影</button>';
       act += '<button class="btn primary" type="button" data-act="avaddmusic">+ 添加留声机</button>';
+    } else if (key==='study'){
+      act += '<button class="btn primary" type="button" data-act="bookadd">+ 书籍</button>';
+      act += '<button class="btn primary" type="button" data-act="magadd">+ 杂志</button>';
+      act += '<button class="btn primary" type="button" data-act="studyadd">+ 学习计划</button>';
     } else {
       act += '<button class="btn primary" type="button" data-act="add" data-key="'+key+'">+ '+esc(m.addLabel)+'</button>';
     }
@@ -3222,7 +3418,7 @@ function render(){
   else if (key==='travel') h=renderTravel();
   else if (key==='av') h=renderAVHall();
   else if (key==='study') h=renderStudyRoom();
-  else if (key==='food') h=renderFoodTwoCol();
+  else if (key==='food') h=(ui.food.view==='stars' ? renderFoodStars() : renderFoodTwoCol());
   else if (key==='idea') h=renderIdeaSky();
   /* 重建 stage 前先把常驻地球宿主移出文档（挂回 body），避免被 innerHTML 销毁导致 WebGL 上下文丢失 */
   var _gh=$('globeHost'); if(_gh && _gh.parentNode){ _gh.parentNode.removeChild(_gh); document.body.appendChild(_gh); _gh.hidden=true; }
@@ -3292,9 +3488,12 @@ document.addEventListener('click', function(ev){
   var key = node.getAttribute('data-key');
   if (act==='geopick'){ openGlobePicker(); return; }
   if (act==='amappick'){
-    if (!editing || editing.key!=='food'){ toast('先打开一个美食记录再选点'); return; }
+    /* v58：美食与遐方坞统一用高德地图点选（地球不好选），选完坐标回填输入框 */
+    if (!editing || (editing.key!=='food' && editing.key!=='travel')){ toast('先打开一个美食或目的地记录再选点'); return; }
     openAmapPicker(function(lat,lon){
       editing.vals['纬度']=lat; editing.vals['经度']=lon;
+      var la=document.querySelector('[data-f="纬度"]'), lo=document.querySelector('[data-f="经度"]');
+      if (la) la.value=lat; if (lo) lo.value=lon;
       toast('已选点：'+lat+'°N, '+lon+'°E（点保存生效）');
     });
     return;
@@ -3474,6 +3673,8 @@ document.addEventListener('click', function(ev){
   if (act==='bookcase'){ ui.study.tab=node.getAttribute('data-cat')||'书籍'; ui.study.cat=ui.study.tab; ui.view='study'; render(); return; }
   if (act==='studyback'){ ui.study.tab='home'; ui.study.cat=''; render(); return; }
   if (act==='foodpin'){ showFoodPin(node.getAttribute('data-id')); return; }
+  if (act==='foodstars'){ ui.food.view='stars'; render(); return; }
+  if (act==='foodlist'){ ui.food.view='list'; render(); return; }
   if (act==='recipeopen'){ showFoodRecipe(node.getAttribute('data-id')); return; }
   if (act==='foodedit'){ rCloseOverlay(); openForm('food', node.getAttribute('data-id')); return; }
   if (act==='studiedit'){ rCloseOverlay(); openForm('study', node.getAttribute('data-id')); return; }
@@ -4092,7 +4293,17 @@ function openForm(key, id, opts){
   var row=null;
   if (id){ var arr=store[key].rows.filter(function(r){ return String(r._id)===String(id); }); row=arr[0]||null; }
   editing={key:key,id:id,vals:{}};
-  activeFields(key, row||{}).forEach(function(f){ editing.vals[f.k]=fieldVal(row,f); });
+  /* v56：prefill（如 大类=电影/留声机/书籍/杂志）会决定最终字段集，先把它种进 seed，
+     这样 activeFields 一开始就拿对字段，避免旧字段残留导致两个入口进同一套表单 */
+  var seed = row || {};
+  if (opts && opts.prefill){
+    seed = Object.assign({}, row || {}, opts.prefill);
+  }
+  activeFields(key, seed).forEach(function(f){ editing.vals[f.k]=fieldVal(row,f); });
+  /* v58：大类不在电影/留声机/书籍/杂志专用表单里渲染，但分片与筛选全靠它，必须带回 vals */
+  if ((key==='av' || key==='collection') && seed['大类']!=null && editing.vals['大类']==null){
+    editing.vals['大类']=seed['大类'];
+  }
 
   /* 外部预填（比如在某个 IP 下添加时，把 IP 先带上） */
   if (opts && opts.prefill){
@@ -4111,9 +4322,16 @@ function openForm(key, id, opts){
   } catch(e){}
 
   var host=$('sheetHost');
-  var titleName = (key==='av' && editing.vals['大类']) ? editing.vals['大类'] : m.name;
+  /* 表单标题按具体类目个性化：影音厅的电影/留声机、文渊斋的书籍/杂志 */
+  var titleName = m.name;
+  if ((key==='av' || key==='collection') && editing.vals['大类']){
+    titleName = editing.vals['大类'];
+  }
+  var eyebrowName = m.eyebrow;
+  if (key==='collection' && editing.vals['大类'] === '书籍') eyebrowName = 'Learning';
+  if (key==='collection' && editing.vals['大类'] === '杂志') eyebrowName = 'Periodical';
   var h='<div class="sheet"><div class="sheet-head"><div>'+
-    '<p>'+esc(m.eyebrow)+'</p><h2>'+(id?'编辑':'添加')+' · '+esc(titleName)+'</h2></div>'+
+    '<p>'+esc(eyebrowName)+'</p><h2>'+(id?'编辑':'添加')+' · '+esc(titleName)+'</h2></div>'+
     '<button class="x" type="button" data-x="1" aria-label="关闭">×</button></div>'+
     '<div class="fgrid">'+activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('')+'</div>'+
     (key==='collection' && editing.vals['大类']==='书籍' ? '<div class="scanbar"><button type="button" class="btn primary sm" data-act="scanisbn">📷 扫码录入（ISBN / 二维码）</button><span class="imgnote">手机打开本页，扫书背条码或书上二维码，自动填书名·作者·出版社</span></div>' : '')+
@@ -4123,7 +4341,7 @@ function openForm(key, id, opts){
     '<button class="btn primary" type="button" id="saveBtn">保存</button></div></div>';
   host.innerHTML=h; host.hidden=false;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
-  host.onclick=function(e){ if(e.target===host) closeSheet(); };
+  bindSheetBackdrop(host);
   /* 目的地表单的「高德搜索」框默认带当前地点名，减少重复输入 */
   if (key==='travel'){
     var as = host.querySelector('[data-amap-search]');
@@ -4172,10 +4390,13 @@ function openForm(key, id, opts){
   };
   var del=$('delBtn');
   if (del) del.onclick=function(){
+    /* v58：必须先取名称再 closeSheet()——closeSheet 会把 editing 置空，
+       之后再读 editing.vals 会抛 Cannot read properties of null，导致删除流程中断报错 */
+    var _f0 = activeFields(key, (editing && editing.vals) || {})[0] || {k:'名称'};
+    var delName = String((row && row[_f0.k]) || '这条记录');
     closeSheet();
-    var _f0 = activeFields(key, editing.vals)[0];
-    askConfirm('删除「'+String(row&&(row[_f0.k])||'这条记录')+'」？删掉就找不回来了。', function(){
-      deleteRow(key, id, String(row&&row[_f0.k]||''));
+    askConfirm('删除「'+delName+'」？删掉就找不回来了。', function(){
+      deleteRow(key, id, delName);
     });
   };
 }
@@ -4257,6 +4478,12 @@ function fieldHTML(f, v){
   var lab = f.t==='geopick' ? '' : '<label>'+esc(f.lab||f.k)+(f.req?' *':'')+'</label>';
   return '<div class="'+cls+'">'+lab+body+
     (f.req?'<span class="err">这一项必填</span>':'')+'</div>';
+}
+/* v58：点背景关闭表单的守卫——必须「按下」和「松开」都在背景上才关闭。
+   否则在输入框里选文字复制、拖到卡片外松手，click.target 落在背景上会误关表单。 */
+function bindSheetBackdrop(host){
+  host.addEventListener('mousedown', function(e){ host._downOnBackdrop=(e.target===host); });
+  host.onclick=function(e){ if(e.target===host && host._downOnBackdrop){ host._downOnBackdrop=false; closeSheet(); } };
 }
 function closeSheet(){ $('sheetHost').hidden=true; $('sheetHost').innerHTML=''; editing=null; formAfter=null; }
 
@@ -4455,7 +4682,7 @@ function openItemDetail(key, id){
     '</div></div>';
   host.innerHTML=h; host.hidden=false;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
-  host.onclick=function(e){ if(e.target===host) closeSheet(); };
+  bindSheetBackdrop(host);
   $('dEdit').onclick=function(){ closeSheet(); openForm(key, id); };
   $('dDel').onclick=function(){
     closeSheet();
@@ -4483,7 +4710,7 @@ function openLocManager(){
     '<button class="btn primary" type="button" id="locAdd">新增地点</button></div></div>';
   host.hidden=false;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
-  host.onclick=function(e){ if(e.target===host) closeSheet(); };
+  bindSheetBackdrop(host);
   function draw(){
     var list=$('locList'); if (!list) return;
     var rows=store.loc.rows;
@@ -4528,15 +4755,22 @@ function askConfirm(msg, onYes, opts){
   var yesLabel = opts.yesLabel || '删除';
   var yesColor = opts.yesColor || 'var(--red)';
   var title = opts.title || '要继续吗';
-  var host=$('sheetHost');
-  host.innerHTML='<div class="sheet"><div class="sheet-head"><div><p>确认</p><h2>'+esc(title)+'</h2></div>'+
+  /* v58：改为独立覆盖层，不再复用 sheetHost。
+     之前与表单共用容器：addRow 弹确认窗后，saveBtn 的 doSave 紧接着 closeSheet()，
+     会把刚弹出的确认窗一并关掉——这正是「音乐/书籍录入点什么都没发生」的根因。 */
+  var ov=document.createElement('div');
+  ov.className='backdrop'; ov.style.zIndex=300;
+  ov.innerHTML='<div class="sheet"><div class="sheet-head"><div><p>确认</p><h2>'+esc(title)+'</h2></div>'+
     '<button class="x" type="button" data-x="1">×</button></div>'+
     '<p style="font-size:13.5px;line-height:1.8;color:var(--muted);white-space:pre-line">'+esc(msg)+'</p>'+
     '<div class="sheet-actions"><button class="btn ghost" type="button" data-x="1">再想想</button>'+
     '<button class="btn primary" type="button" id="yesBtn" style="background:'+yesColor+'">'+esc(yesLabel)+'</button></div></div>';
-  host.hidden=false;
-  host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
-  $('yesBtn').onclick=function(){ closeSheet(); onYes(); };
+  document.body.appendChild(ov);
+  function done(){ if (ov && ov.parentNode) ov.parentNode.removeChild(ov); }
+  ov.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=done; });
+  ov.onclick=function(e){ if(e.target===ov) done(); };
+  var yb=ov.querySelector('#yesBtn');
+  if (yb) yb.onclick=function(){ done(); onYes(); };
 }
 
 /* ============ 外观 ============ */
@@ -4594,6 +4828,22 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape' && !$('she
 
 function __boot(){
  try {
+  /* file:// 协议（用户直接双击 index.html）下，Chrome 允许在用户手势触发时调用
+     showDirectoryPicker（已在「题目管理器完美版.html」中验证可行：同样用该 API + IndexedDB 持久化句柄）。
+     因此这里不再禁用 FSA，而是像其它模式一样尝试恢复 / 选择本地目录、直接写盘；
+     同时不进 gh 模式（file:// 下 fetch 跨域会卡「读取中」）。 */
+  if (location.protocol === 'file:'){
+    if (_FSA_SUPPORT){
+      restoreFsaHandle().then(function(h){
+        if (h){ _fsaHandle = h; MODE = 'localfile'; afterBoot(); }
+        else { MODE = 'local'; afterBoot(); promptPickFsaDir(); }
+      }).catch(function(){ MODE = 'local'; afterBoot(); });
+    } else {
+      MODE = 'local'; afterBoot();
+      toast('当前浏览器不支持选择本地目录（需 Chrome / Edge 桌面版）。数据临时存浏览器 localStorage，建议用本地服务器（localhost）打开以使用完整功能。', null, null, 8000);
+    }
+    return;
+  }
   if (_FSA_SUPPORT){
     restoreFsaHandle().then(function(h){
       if (h){ _fsaHandle = h; MODE = 'localfile'; afterBoot(); }
@@ -5785,6 +6035,20 @@ function _museumCase(cat, side, depth, cnt){
          '<div class="mcase-nameplate">'+esc(cat)+' <em>'+cnt+'</em></div>'+
          '</div>';
 }
+/* 展柜内部单件卡片（藏品馆第 3 层） */
+function museumItemCard(r){
+  var t=r['名称']||'未命名';
+  var u=coverImg(r);
+  var no=String(r['编号']||'');
+  var thumb = u
+    ? '<div class="thumb"><img src="'+u.replace(/["'()\\]/g,'')+'" alt="" onerror="this.className=\'err\';this.parentNode.classList.add(\'noimg\')"><b class="img-fallback">'+esc(String(t).slice(0,1))+'</b></div>'
+    : '<div class="thumb"><b>'+esc(String(t).slice(0,1))+'</b></div>';
+  return '<div class="item-card glass-card" data-act="item" data-key="collection" data-id="'+esc(r._id)+'">'+
+    thumb+
+    '<div class="ttl">'+esc(t)+'</div>'+
+    (no?'<div class="no">'+esc(no)+'</div>':'')+
+    '</div>';
+}
 function _avCase(cat, side, depth, cnt){
   var cover = CAT_BG[cat] || '';
   return '<div class="mcase-persp '+side+' d'+depth+'" data-act="avzone" data-v="'+esc(cat)+'"'+
@@ -6033,11 +6297,11 @@ function renderAVHall(){
       hc += byCat[cat].map(function(r){
         var t=r['名称']||'未命名';
         var u=coverImg(r);
-        return '<div class="item-card glass-card" data-act="item" data-key="av" data-id="'+esc(r._id)+'">'+
-          (u
-            ? '<div class="thumb" style="background-image:url(\''+u.replace(/["'()\\]/g,'')+'\')"></div>'
-            : '<div class="thumb"><b>'+esc(String(t).slice(0,1))+'</b></div>'
-          )+
+        var thumb = u
+          ? '<div class="thumb"><img src="'+u.replace(/["'()\\]/g,'')+'" alt="" onerror="this.className=\'err\';this.parentNode.classList.add(\'noimg\')"><b class="img-fallback">'+esc(String(t).slice(0,1))+'</b></div>'
+          : '<div class="thumb"><b>'+esc(String(t).slice(0,1))+'</b></div>';
+        return '<div class="item-card glass-card av-card" data-act="item" data-key="av" data-id="'+esc(r._id)+'">'+
+          thumb+
           '<div class="ttl">'+esc(t)+'</div></div>';
       }).join('');
       hc += '</div></div>';
@@ -6116,11 +6380,11 @@ function renderAVHall(){
   h3+='<div class="mcasewall">'+arr.map(function(r){
     var t=r['名称']||'未命名';
     var u=coverImg(r);
-    return '<div class="item-card glass-card" data-act="item" data-key="av" data-id="'+esc(r._id)+'">'+
-      (u
-        ? '<div class="thumb" style="background-image:url(\''+u.replace(/["'()\\]/g,'')+'\')"></div>'
-        : '<div class="thumb"><b>'+esc(String(t).slice(0,1))+'</b></div>'
-      )+
+    var thumb = u
+      ? '<div class="thumb"><img src="'+u.replace(/["'()\\]/g,'')+'" alt="" onerror="this.className=\'err\';this.parentNode.classList.add(\'noimg\')"><b class="img-fallback">'+esc(String(t).slice(0,1))+'</b></div>'
+      : '<div class="thumb"><b>'+esc(String(t).slice(0,1))+'</b></div>';
+    return '<div class="item-card glass-card av-card" data-act="item" data-key="av" data-id="'+esc(r._id)+'">'+
+      thumb+
       '<div class="ttl">'+esc(t)+'</div>'+
       '</div>';
   }).join('')+'</div></div>';
@@ -6265,7 +6529,6 @@ function renderStudyRoom(){
     '<div class="st-head">'+
       '<h1>'+ (tab==='home' ? '文 渊 斋' : ('文 渊 斋 <span class="st-sep">·</span> <span class="st-sub">'+esc(tab)+'</span>')) +'</h1>'+
       '<p>'+ (tab==='home' ? 'L I B R A R Y · S T U D Y · R E A D' : 'S H E L F · '+esc(tab).toUpperCase()+' · C O L L E C T I O N') +'</p>'+
-      (tab === 'home' ? '<div class="study-acts"><button class="r-btn" data-act="studyadd">＋ 学习计划</button></div>' : '')+
     '</div>'+
     breadcrumb+
     main+
@@ -6360,10 +6623,11 @@ function renderFoodTwoCol(){
   '</div>';
 }
 
-var FOOD_MAP=null, FOOD_MARKERS=[];
+var FOOD_MAP=null, FOOD_MARKERS=[], FOOD_PICK_MARKER=null;
 function stopFoodMap(){
-  if(FOOD_MAP){ try{ FOOD_MAP.destroy(); }catch(e){} FOOD_MAP=null; }
-  FOOD_MARKERS=[];
+  /* v58：同 stopChinaMap——延迟销毁，避免在删除/重渲染的事件回调里同步 destroy 引发 AMap 内部 NaN 报错 */
+  if(FOOD_MAP){ var m=FOOD_MAP; FOOD_MAP=null; setTimeout(function(){ try{ m.destroy(); }catch(e){} }, 0); }
+  FOOD_MARKERS=[]; FOOD_PICK_MARKER=null;
 }
 function initFoodMap(){
   stopFoodMap();
@@ -6392,24 +6656,62 @@ function initFoodMap(){
           FOOD_MARKERS.push(mk);
         });
         if(FOOD_MARKERS.length) map.add(FOOD_MARKERS);
+        /* v58：点选光标独立于数据标记，重绘后保持在原位，直到选了新点 */
+        if (FOOD_PICK_MARKER) map.add(FOOD_PICK_MARKER);
+      }
+      /* v58：点选光标——单击地图空白处先固定一个光标再打开表单，解决「不知道点到哪」 */
+      function dropPickMarker(g){
+        try{
+          if (FOOD_PICK_MARKER){ FOOD_PICK_MARKER.setPosition([g.lon, g.lat]); }
+          else {
+            FOOD_PICK_MARKER=new AMap.Marker({
+              position:[g.lon,g.lat], anchor:'bottom-center', zIndex:200,
+              content:'<div style="transform:translateY(-4px)"><div style="width:18px;height:18px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#c2410c;border:2.5px solid #fff;box-shadow:0 3px 8px rgba(0,0,0,.4)"><div style="position:relative;left:4px;top:4px;width:6px;height:6px;border-radius:50%;background:#fff"></div></div></div>'
+            });
+            map.add(FOOD_PICK_MARKER);
+          }
+        }catch(e){}
       }
       renderFoodMarkers();
       map.on('click', function(e){
         if(!e||!e.lnglat) return;
         var w=gcj02ToWgs84(e.lnglat.lat, e.lnglat.lng);
-        openForm('food', null, {prefill:{纬度:Math.round(w.lat*100000)/100000, 经度:Math.round(w.lon*100000)/100000}});
+        var lat=Math.round(w.lat*100000)/100000, lon=Math.round(w.lon*100000)/100000;
+        dropPickMarker({lon:e.lnglat.lng, lat:e.lnglat.lat});
+        openForm('food', null, {prefill:{纬度:lat, 经度:lon}});
       });
       if(tip) tip.textContent='点标记看详情 · 点地图空白处添加新美食';
     }catch(e){ if(tip) tip.textContent='地图初始化失败：'+((e&&e.message)||e); }
   });
 }
+/* 馐馔坊 · 星级榜：按星级倒序展示所有餐厅 */
+function renderFoodStars(){
+  var s=store.food, rows=s.rows.slice().filter(function(r){ return num(r['星级'])>0; });
+  rows.sort(function(a,b){ return num(b['星级'])-num(a['星级']); });
+  var h='<div class="strip">'+stripHTML('food')+'</div>'+
+    '<section class="panel"><div class="panel-head"><div><h2>星级榜</h2>'+
+    '<div class="hint">按星级从高到低排，只看打过星的餐厅</div></div>'+
+    '<button class="btn ghost sm" type="button" data-act="foodlist">返回地图</button></div>';
+  if (!rows.length){ h += emptyHTML('还没有打过星的美食','回地图点「编辑」给餐厅打星后再来看。'); return h+'</section>'; }
+  h += '<div class="star-list">'+rows.map(function(r, idx){
+    var u=coverImg(r);
+    return '<div class="star-row" data-act="edit" data-key="food" data-id="'+esc(r._id)+'">'+
+      '<span class="star-rank">'+(idx+1)+'</span>'+
+      (u?'<span class="star-thumb" style="background-image:url(\''+u.replace(/["'()\\]/g,'')+'\')"></span>':'<span class="star-thumb ph"><b>'+esc(String(r['名称']||'').slice(0,1))+'</b></span>')+
+      '<span class="star-info"><b>'+esc(r['名称']||'未命名')+'</b>'+
+        '<i>'+esc(r['类型']||'')+(r['城市']?' · '+esc(r['城市']):'')+'</i></span>'+
+      '<span class="star-score">'+stars(r['星级'])+'<em>'+num(r['星级'])+'.0</em></span>'+
+      '</div>';
+  }).join('')+'</div></section>';
+  return h;
+}
 function showFoodPin(id){
   var r=(store.food.rows.filter(function(x){return String(x._id)===String(id);})[0]); if(!r) return;
   var u=coverImg(r);
   var rowsHtml='';
-  function row(k,v){ if(v||v===0) rowsHtml+='<div class="rc-row"><b>'+k+'</b><span>'+esc(String(v))+'</span></div>'; }
+  function row(k,v,cls){ if(v||v===0) rowsHtml+='<div class="rc-row"><b>'+k+'</b><span'+(cls?' class="'+cls+'"':'')+'>'+esc(String(v))+'</span></div>'; }
   row('类型', r['类型']); row('城市', r['城市']);
-  row('星级', stars(r['星级'])); row('人均', num(r['人均'])?'¥'+num(r['人均']):'');
+  row('星级', stars(r['星级']), 'star'); row('人均', num(r['人均'])?'¥'+num(r['人均']):'');
   row('打卡', dstr(r['打卡日期'])); row('想再去', r['想再去']?'是':'');
   var html =
     '<h2>'+esc(r['名称']||'未命名')+

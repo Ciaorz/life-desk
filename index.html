@@ -126,20 +126,38 @@
 <script defer src="three.min.js"></script>
 <script defer src="app.js"></script>
 
-<!-- ===== Service Worker（绝不会再导致白屏：网络优先+逐文件容错） ===== -->
+<!-- ===== Service Worker =====
+  规则（v58 优化：开发期零缓存干扰，发布期保留离线/秒开）：
+    • 仅在 https:// （如 ciaorz.github.io，含手机端）注册 SW，享受离线/秒开；
+    • http://localhost 调试、file:// 双击、以及地址带 ?nosw 时，不注册并清掉已存在的 SW，
+      保证调试期间永远拉最新文件、绝不返回旧缓存。
+-->
 <script>
-if ('serviceWorker' in navigator) {
+(function(){
+  if (!('serviceWorker' in navigator)) return;
+  // ★ 总开关：调试期设为 false（全环境不启用 SW，避免任何缓存干扰）；
+  //   等调试完、准备用手机端时改成 true 即可——线上 https 自动启用，享受离线/PWA。
+  var SW_ENABLED = false;
+  var forceOff = /[?&]nosw\b/.test(location.search);
+  // 是否启用 SW：总开关开启 + 必须是 https + 未加 ?nosw（localhost / file:// / ?nosw 一律关闭）
+  var shouldEnable = SW_ENABLED && (location.protocol === 'https:') && !forceOff;
+
+  function unregisterAll(done){
+    navigator.serviceWorker.getRegistrations().then(function(regs){
+      Promise.all(regs.map(function(r){ return r.unregister().catch(function(){}); }))
+        .then(function(){ if (done) done(); }).catch(function(){ if (done) done(); });
+    }).catch(function(){ if (done) done(); });
+  }
+
   window.addEventListener('load', function () {
-    // 用相对路径，匹配当前页面所在目录；本地 file:// 也会跳过
-    if (location.protocol === 'http:' || location.protocol === 'https:') {
+    if (shouldEnable) {
       navigator.serviceWorker.register('sw.js').then(function (reg) {
-        // v50：新版本装好后自动刷新，避免一直停在旧缓存里看不到更新
+        // 新版本装好后自动刷新，避免一直停在旧缓存里看不到更新
         var _reloaded = false;
         reg.addEventListener('updatefound', function () {
           var nw = reg.installing;
           if (!nw) return;
           nw.addEventListener('statechange', function () {
-            // 已存在旧 SW 控制时，新 SW 安装完成 → 自动刷新拉取新版
             if (nw.state === 'installed' && navigator.serviceWorker.controller && !_reloaded) {
               _reloaded = true;
               window.location.reload();
@@ -149,9 +167,12 @@ if ('serviceWorker' in navigator) {
       }).catch(function(e){
         if (window.__fatalShow) window.__fatalShow('[SW] 注册失败（不影响页面打开）：' + (e && e.message ? e.message : e));
       });
+    } else {
+      // 调试/离线场景：清掉任何已安装的 SW，避免旧缓存继续作祟
+      unregisterAll();
     }
   });
-}
+})();
 </script>
 
 </body>

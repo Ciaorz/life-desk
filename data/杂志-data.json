@@ -1,0 +1,17 @@
+{
+  "schema": 2,
+  "cat": "杂志",
+  "module": "collection",
+  "rows": [
+    {
+      "_id": "l_mtmztwsxyxfcq",
+      "名称": "测试",
+      "年份": null,
+      "卷期号": null,
+      "本期专题": null,
+      "存放位置": null,
+      "照片": null,
+      "大类": "杂志"
+    }
+  ]
+}

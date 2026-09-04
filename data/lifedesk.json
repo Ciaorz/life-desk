@@ -1,6 +1,16 @@
 {
   "schema": 2,
   "shards": {
+    "ip": {
+      "file": "ip-data.json",
+      "module": "ip",
+      "coverDir": "ip-封面"
+    },
+    "series": {
+      "file": "series-data.json",
+      "module": "series",
+      "coverDir": "系列-封面"
+    },
     "去过的地方": {
       "file": "去过的地方-data.json",
       "module": "travel",
@@ -10,6 +20,51 @@
       "file": "想去的地方-data.json",
       "module": "travel",
       "coverDir": "想去的地方-封面"
+    },
+    "电影": {
+      "file": "电影-data.json",
+      "module": "av",
+      "coverDir": "电影-封面"
+    },
+    "留声机": {
+      "file": "留声机-data.json",
+      "module": "av",
+      "coverDir": "留声机-封面"
+    },
+    "书籍": {
+      "file": "书籍-data.json",
+      "module": "collection",
+      "coverDir": "书籍-封面"
+    },
+    "杂志": {
+      "file": "杂志-data.json",
+      "module": "collection",
+      "coverDir": "杂志-封面"
+    },
+    "餐厅": {
+      "file": "餐厅-data.json",
+      "module": "food",
+      "coverDir": "餐厅-封面"
+    },
+    "美食": {
+      "file": "美食-data.json",
+      "module": "food",
+      "coverDir": "美食-封面"
+    },
+    "菜谱": {
+      "file": "菜谱-data.json",
+      "module": "recipe",
+      "coverDir": "菜谱-封面"
+    },
+    "徽章": {
+      "file": "徽章-data.json",
+      "module": "collection",
+      "coverDir": "徽章-封面"
+    },
+    "想法": {
+      "file": "想法-data.json",
+      "module": "idea",
+      "coverDir": "想法-封面"
     }
   },
   "__main": {
@@ -19,18 +74,7 @@
     "study": [],
     "food": [],
     "idea": [],
-    "ip": [
-      {
-        "_id": "l_mtldc9je5j6la",
-        "IP名称": "宝可梦",
-        "IP图像": [
-          {
-            "imageUrl": "https://i2.kknews.cc/nBruJ2BTApPZEHPcRxpNwnSF2QOysL6YMw/0.jpg"
-          }
-        ],
-        "简介": null
-      }
-    ],
+    "ip": [],
     "series": [],
     "loc": [],
     "checkin": [
@@ -44,7 +88,7 @@
         "纬度": 31.07722,
         "经度": 109.87425
       }
-    ]
-  },
-  "imgSeq": 4
+    ],
+    "recipe": []
+  }
 }

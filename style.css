@@ -793,6 +793,24 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .museum-crumb:hover { background: rgba(26, 17, 9, 0.92); transform: translateX(-2px); }
 .museum-crumb .r-back { background: none; border: none; color: inherit; font: inherit; letter-spacing: inherit; padding: 0; margin: 0; cursor: pointer; }
 .museum-crumb .arrow { margin-right: 8px; font-family: var(--serif); font-size: 16px; color: #f0d9a8; }
+/* v58：crumb 内的标题与计数 —— 提亮、拉开间距、区分层次（之前 h2/span 无样式，衬线字挤在一起且在深背景上发灰看不清） */
+.museum-crumb h2 {
+  margin: 0 0 0 12px;
+  font-family: var(--serif); font-weight: 650;
+  font-size: 15px; line-height: 1; letter-spacing: 3px;
+  color: #ffedc8;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+}
+.museum-crumb h2 em { font-style: normal; color: #ffd98a; }
+.museum-crumb > span {
+  margin-left: 12px; padding-left: 12px;
+  border-left: 1px solid rgba(255, 226, 170, 0.35);
+  font-family: var(--sans); font-size: 12px; line-height: 1;
+  letter-spacing: 1px;
+  color: rgba(255, 246, 226, 0.95);
+  text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+  white-space: nowrap;
+}
 
 /* --- 玻璃卡片工具类（三屏共享） ---------------------------------------------- */
 .glass-card {
@@ -1077,7 +1095,11 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .item-card .thumb {
   width: 100%; aspect-ratio: 1/1;
   border-radius: 10px;
-  background: linear-gradient(135deg, #efe5d2, #d4c4a5);
+  background-color: #e8dcc4;
+  background-image: linear-gradient(135deg, #efe5d2, #d4c4a5);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   display: flex; align-items: center; justify-content: center;
   font-family: var(--serif);
   font-size: 32px;
@@ -1086,6 +1108,12 @@ input.search:focus{border-color:var(--accent);background:#fff}
   overflow: hidden;
 }
 .item-card .thumb img { width: 100%; height: 100%; object-fit: cover; }
+/* 影音厅卡片用电影海报比例 2:3，而非默认正方形 */
+.av-card .thumb { aspect-ratio: 2/3; }
+/* 封面图加载失败时，显示占位文字（用 img 标签时生效） */
+.item-card .thumb img.err { display: none; }
+.item-card .thumb .img-fallback { display: none; }
+.item-card .thumb img.err + .img-fallback { display: flex; }
 .item-card .ttl {
   font-family: var(--serif);
   font-size: 14px;
@@ -1097,21 +1125,23 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .classic-group { margin-bottom: 8px; }
 .classic-cat {
   font-family: var(--serif);
-  font-size: 16px;
-  letter-spacing: 2px;
-  color: var(--gold-soft, #e8c98a);
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 3px;
+  color: #ffe9bd;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.9), 0 0 14px rgba(0,0,0,0.55);
   padding: 22px 36px 0;
   margin: 0;
   display: flex; align-items: baseline; gap: 10px;
 }
 .classic-cat em {
-  font-style: normal;
-  font-size: 12px;
-  letter-spacing: 0;
-  opacity: .6;
-  background: rgba(0,0,0,.18);
-  border-radius: 999px;
-  padding: 2px 10px;
+  font-style: normal; font-family: var(--sans);
+  font-size: 12px; letter-spacing: 1px;
+  color: #ffd98a;
+  padding: 2px 9px; border-radius: 999px;
+  background: rgba(20, 12, 5, 0.55);
+  border: 1px solid rgba(255, 217, 138, 0.35);
+  text-shadow: none;
 }
 
 /* --- 文渊斋：3D 立体书 + 阳光书房布局 ------------------------------------------- */
@@ -1430,10 +1460,14 @@ input.search:focus{border-color:var(--accent);background:#fff}
   display: flex; align-items: center; justify-content: space-between;
 }
 .r-card h2 .x {
-  cursor: pointer; font-family: var(--serif); font-size: 26px;
-  color: var(--ink-faint); transition: color .2s;
+  cursor: pointer; font-family: var(--sans); font-size: 15px; line-height: 1;
+  color: var(--ink-faint); transition: color .2s, background .2s;
+  flex: none;
+  width: 30px; height: 30px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(96, 78, 54, 0.08);
 }
-.r-card h2 .x:hover { color: var(--ink); }
+.r-card h2 .x:hover { color: var(--ink); background: rgba(96, 78, 54, 0.16); }
 .r-card .row { display: flex; gap: 10px; margin: 8px 0; align-items: center; }
 .r-card label { font-family: var(--sans); font-size: 13px; color: var(--ink-soft); width: 72px; }
 .r-card input, .r-card select, .r-card textarea {
@@ -1450,6 +1484,69 @@ input.search:focus{border-color:var(--accent);background:#fff}
   display: flex; gap: 10px; justify-content: flex-end;
   margin-top: 16px;
 }
+
+/* --- v58：美食展示卡（馐馔坊 showFoodPin）----------------------------------------
+   之前 .recipe-detail / .rc-* 完全无样式：星级与按钮挤在一起、字段名和值黏成一团。 */
+.recipe-detail { margin-top: 4px; }
+.recipe-detail .rc-head { display: flex; gap: 16px; align-items: flex-start; }
+.recipe-detail .rc-big {
+  width: 108px; height: 108px; flex: none;
+  border-radius: 14px;
+  background-size: cover; background-position: center;
+  background-color: rgba(176,136,80,.14);
+  box-shadow: inset 0 0 0 1px rgba(104,87,68,.14), 0 4px 12px rgba(60,42,20,.12);
+}
+.recipe-detail .rc-tag {
+  display: inline-block;
+  padding: 4px 12px; border-radius: 999px;
+  background: rgba(176,136,80,.14);
+  color: #7a5a2e; font-family: var(--sans);
+  font-size: 12px; letter-spacing: 1.5px;
+}
+.recipe-detail .rc-rows { margin-top: 12px; }
+.recipe-detail .rc-row {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(176,136,80,.22);
+}
+.recipe-detail .rc-row:last-child { border-bottom: none; }
+.recipe-detail .rc-row b {
+  flex: none; width: 52px;
+  font-family: var(--sans); font-weight: 600;
+  font-size: 12px; letter-spacing: 2px;
+  color: var(--ink-faint);
+}
+.recipe-detail .rc-row span {
+  font-family: var(--sans); font-size: 13.5px;
+  color: var(--ink); letter-spacing: .5px;
+}
+.recipe-detail .rc-text {
+  margin-top: 14px; padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(176,136,80,.08);
+  font-family: var(--sans); font-size: 13px; line-height: 1.8;
+  color: var(--ink-soft);
+}
+.recipe-detail .r-actions { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+.recipe-detail .r-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 38px; padding: 0 18px;
+  border: none; border-radius: 999px; cursor: pointer;
+  font-family: var(--sans); font-size: 13px; letter-spacing: 1px;
+  transition: transform .18s, box-shadow .18s, background .18s;
+}
+.recipe-detail .r-btn.primary {
+  background: linear-gradient(150deg, #b08850, #8a6435);
+  color: #fff8ea; box-shadow: 0 4px 12px rgba(122,90,46,.35);
+}
+.recipe-detail .r-btn.primary:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(122,90,46,.45); }
+.recipe-detail .r-btn.ghost {
+  background: rgba(176,136,80,.1); color: #7a5a2e;
+  border: 1px solid rgba(176,136,80,.35);
+}
+.recipe-detail .r-btn.ghost:hover { background: rgba(176,136,80,.18); }
+/* 星级行微调：星星大一点、和值对齐 */
+.recipe-detail .rc-row span.star { letter-spacing: 3px; font-size: 14px; color: #d99a2b; }
 .r-btn {
   font-family: var(--sans); font-size: 13px; letter-spacing: 1px;
   padding: 9px 18px;
@@ -1648,6 +1745,21 @@ input.search{margin-bottom:12px}
 .mk-badge{position:absolute;top:-7px;right:-9px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;
   background:#ff7043;color:#fff;font-size:10px;line-height:16px;text-align:center;font-weight:700;
   box-shadow:0 2px 5px rgba(0,0,0,.35);border:1.5px solid #fff;pointer-events:none}
+
+/* 馐馔坊 · 星级榜 */
+.star-list{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.star-row{display:flex;align-items:center;gap:14px;padding:12px 14px;background:#fff;border-radius:14px;
+  box-shadow:0 2px 10px rgba(15,23,42,.06);border:1px solid var(--line);cursor:pointer;transition:transform .15s,box-shadow .15s}
+.star-row:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(15,23,42,.1)}
+.star-rank{width:28px;text-align:center;font-family:var(--serif);font-size:18px;font-weight:700;color:var(--gold)}
+.star-thumb{width:52px;height:52px;border-radius:10px;background-size:cover;background-position:center;
+  background-color:#f0ebe3;display:flex;align-items:center;justify-content:center}
+.star-thumb.ph b{font-size:20px;color:#8a7e6e}
+.star-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.star-info b{font-size:15px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.star-info i{font-size:12px;color:var(--muted);font-style:normal}
+.star-score{display:flex;align-items:center;gap:6px;color:var(--gold);font-size:15px;letter-spacing:1px}
+.star-score em{font-size:13px;color:var(--muted);font-style:normal}
 
 /* 打卡点卡片（与想去/去过同款 .trip 风格，点一下即编辑） */
 .trip.ck{cursor:pointer}

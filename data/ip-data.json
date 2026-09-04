@@ -1,0 +1,17 @@
+{
+  "schema": 2,
+  "cat": "ip",
+  "module": "ip",
+  "rows": [
+    {
+      "_id": "l_mtldc9je5j6la",
+      "IP名称": "宝可梦",
+      "IP图像": [
+        {
+          "imageUrl": "data/images/ip-封面/ip-0001.jpg"
+        }
+      ],
+      "简介": null
+    }
+  ]
+}
