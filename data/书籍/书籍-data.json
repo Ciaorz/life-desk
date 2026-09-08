@@ -1,0 +1,46 @@
+{
+  "schema": 2,
+  "cat": "书籍",
+  "module": "collection",
+  "rows": [
+    {
+      "_id": "l_mtp91urf5z6b4",
+      "名称": "中国古代文化常识辞典",
+      "作者": "商务印书馆辞书研究中心",
+      "出版社": "商务印书馆",
+      "出版年": "2024",
+      "版次": null,
+      "ISBN": "9787100239806",
+      "存放位置": null,
+      "册数": 1,
+      "价格": 0,
+      "标签分类": null,
+      "照片": [
+        {
+          "imageUrl": "https://img3.doubanio.com/view/subject/l/public/s34902277.jpg",
+          "viewport": {
+            "s": 1.1,
+            "x": 0,
+            "y": 0
+          }
+        }
+      ],
+      "大类": "书籍"
+    },
+    {
+      "_id": "l_mtmztgxjuy2pz",
+      "名称": "测试",
+      "作者": null,
+      "出版社": null,
+      "出版年": null,
+      "版次": null,
+      "ISBN": null,
+      "存放位置": null,
+      "册数": 1,
+      "价格": 0,
+      "标签分类": null,
+      "照片": null,
+      "大类": "书籍"
+    }
+  ]
+}
