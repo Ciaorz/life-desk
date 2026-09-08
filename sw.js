@@ -11,7 +11,7 @@
  *      绝不让一个资源 404 把整个页面卡死。
  * ============================================================ */
 
-const CACHE = 'lifedesk-v60-2026-09-08';
+const CACHE = 'lifedesk-v61-2026-09-08';
 
 // 只缓存已知存在的、必须的子资源（白名单）。绝不强制 addAll 整个列表
 // （之前 v5 因为引用了 4 个 404 文件导致整个 install 失败、SW 永远装不上）
@@ -66,7 +66,7 @@ self.addEventListener('fetch', (event) => {
   // 导航请求（HTML）：网络优先 → 离线时给上次缓存的 index.html
   if (req.mode === 'navigate' || (req.headers.get('accept') || '').includes('text/html')) {
     event.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'no-store' })
         .then((resp) => {
           // 网络正常：把新 HTML 顺手塞进缓存
           if (resp && resp.status === 200) {
@@ -86,7 +86,7 @@ self.addEventListener('fetch', (event) => {
   // 子资源：网络优先，成功则写回缓存（下次离线兜底）；失败才回退缓存。
   // v59：从「缓存优先」改为「网络优先」，避免部署新版后手机端仍拿到旧 app.js/style.css。
   event.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-store' })
       .then((resp) => {
         if (resp && resp.status === 200 && resp.type === 'basic') {
           const clone = resp.clone();
