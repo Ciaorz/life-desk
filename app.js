@@ -788,12 +788,12 @@ async function storageSaveV2(snapshot){
   await saveEntityModule('ip', snapshot.ip || []);
   await saveEntityModule('series', snapshot.series || []);
   /* v??：把 dirShard 实体文件清单写进主索引，供 GitHub Pages 静态直读（无法列目录）时按清单逐个拉取。
-     放在写实体之后，因为 saveEntityModule 会给每条记录挂上新的 _file。 */
+     直接扫描磁盘真实目录，避免依赖内存快照里的 _file 字段（存储快照已扁平成 {模块:[记录]}，本身没有 .rows）。 */
   if (idx && idx.shards && idx.shards.ip && idx.shards.ip.dirShard){
     var _efMap = {};
-    (snapshot.ip && snapshot.ip.rows || []).forEach(function(r){ if (r && r._file) _efMap[r._file] = 1; });
-    (snapshot.series && snapshot.series.rows || []).forEach(function(r){ if (r && r._file) _efMap[r._file] = 1; });
-    idx.entityFiles = Object.keys(_efMap);
+    (await entityExistingFiles('ip')).forEach(function(p){ _efMap[p] = 1; });
+    (await entityExistingFiles('series')).forEach(function(p){ _efMap[p] = 1; });
+    idx.entityFiles = Object.keys(_efMap).sort();
   }
   var oki = await fsWriteIndex(idx);
   await writeReadme();          /* 顺带刷新说明文件里的类目清单与封面编号 */
@@ -1692,12 +1692,18 @@ async function collectPushFiles(){
     if (!obj) continue;
     files.push({ path: dir + '/' + (sh.file || shardFileName(cats[i])), text: JSON.stringify(obj, null, 2) });
   }
-  /* 目录分片（ip/series）实体文件：按主索引 entityFiles 清单逐个纳入上传 */
-  var ef = (idx.entityFiles || []);
-  for (var ei = 0; ei < ef.length; ei++){
+  /* 目录分片（ip/series）实体文件：直接扫描真实目录纳入上传，不再依赖可能过期的 entityFiles 清单 */
+  var efList = (idx.entityFiles || []).slice();
+  try { efList = efList.concat(await entityExistingFiles('ip')); } catch(e){}
+  try { efList = efList.concat(await entityExistingFiles('series')); } catch(e){}
+  var _efSeen = {};
+  for (var ei = 0; ei < efList.length; ei++){
+    var _efp = efList[ei];
+    if (!_efp || _efSeen[_efp]) continue;
+    _efSeen[_efp] = 1;
     try {
-      var efObj = await fsReadJSON(ef[ei]);
-      if (efObj) files.push({ path: dir + '/' + ef[ei], text: JSON.stringify(efObj, null, 2) });
+      var efObj = await fsReadJSON(_efp);
+      if (efObj) files.push({ path: dir + '/' + _efp, text: JSON.stringify(efObj, null, 2) });
     } catch(e){}
   }
   /* 图片 */
