@@ -357,5 +357,10 @@
       }
     }
   },
-  "entityFiles": []
+  "entityFiles": [
+    "ip/宝可梦-data.json",
+    "ip/罗小黑-data.json",
+    "series/30周年151金属徽章-data.json",
+    "series/30周年冰箱贴-data.json"
+  ]
 }
