@@ -1595,10 +1595,11 @@ async function fetchJSONRel(url){
 }
 async function ghStaticLoadV2(){
   try {
-    var dir = String(GH.path || '').replace(/[\\/][^\\/]*$/, '');   /* data/lifedesk.json -> data */
-    if (!dir) dir = 'data';
-    if (dir.charAt(0) !== '/' && dir.indexOf('://') < 0) dir = './' + dir;
-    if (dir.charAt(dir.length - 1) !== '/') dir += '/';
+    /* 用绝对地址拼目录，避免页面无尾斜杠 / 基址异常时相对路径解析错位（会 404 → 回退到 api.github.com 触发 422） */
+    var _base = String(location.href.split('#')[0]);
+    if (_base.charAt(_base.length - 1) !== '/') _base += '/';
+    var _rel = String(GH.path || 'data/lifedesk.json').replace(/[\\/][^\\/]*$/, '') || 'data';
+    var dir = new URL(_rel + '/', _base).href;   /* 例：https://ciaorz.github.io/life-desk/data/ */
     var idx = await fetchJSONRel(dir + 'lifedesk.json');
     if (!idx || idx.schema !== SCHEMA_V2) return null;             /* 不是分片格式 → 走原 API 逻辑 */
     idx = normalizeIndex(idx);   /* gh 静态直读也做一次结构自愈（修正书籍等分片路径、补齐分组标记），只读、不写盘 */
@@ -3659,7 +3660,7 @@ var ui = {
   travel:{ status:'', q:'', mapTab:'earth', ckNew:false, ckEditId:false },
   /* v67：bookTag = 书架顶部标签卡（'' 全部 / 五个分类名 / '__none' 未分类）；bookSub = 分类下的小分类 */
   study:{ field:'', q:'', tab:'home', cat:'', magName:'', magMode:'all', magOrder:'desc', magYear:'', bookTag:'', bookSub:'', classic:false, ccat:'' },
-  notes:{ id:null, edit:false, fontSize:'normal' },   /* v59：拾纪记事本子视图状态 */
+  notes:{ id:null, edit:false, fontSize:'normal', collapsed:true },   /* v59：拾纪记事本子视图状态；collapsed=手机端列表默认收起 */
   food:{ type:'', q:'', view:'list' },
   recipe:{ type:'', q:'' },
   idea:{ cat:'', star:false, q:'' },
@@ -3766,35 +3767,27 @@ function fetchAll(key, cb){
         if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
         return;
       }
-      ghGetAll(function(all, sha, err){
+      /* 静态直读失败：优先用本地缓存兜底（之前成功加载过会落盘），避免直接回退到 api.github.com 触发 422 / 限流 */
       var cache = localCacheGet();
-      if (all === null && err){
-        /* GitHub 读取失败（网络/401）：用本地缓存兜底全量，避免强刷后数据全失 */
-        _ghCache = cache || {};
+      if (cache && Object.keys(cache).length){
+        _ghCache = cache;
         cb(_ghCache[key] || []);
         if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
         return;
       }
-      _ghCache = all || {};
-      if (all && !err){
-        /* 与本地缓存按 id 合并：防止「保存进行中强刷、GitHub 尚未落盘」导致的新增丢失。
-           GitHub 为权威（同 id 以 GitHub 为准），本地有而 GitHub 缺失的 id 补回。 */
-        var cache = localCacheGet();
-        if (cache){
-          Object.keys(cache).forEach(function(ck){
-            var crows = (cache[ck] || []).filter(function(r){ return r && r._id; });
-            if (!crows.length) return;
-            var base = (_ghCache[ck] || []).slice();
-            var has = {}; base.forEach(function(r){ if (r && r._id) has[String(r._id)] = true; });
-            crows.forEach(function(r){ if (!has[String(r._id)]) base.push(r); });
-            _ghCache[ck] = base;
-          });
-        }
-        localCacheSetFrom(_ghCache); /* 合并结果写回本地缓存，保持最新 */
+      /* 实在都没有（首次访问且静态拉取失败）：最后再试一次 API；失败静默兜底，不再把 422 当阻塞错误 */
+      try {
+        ghGetAll(function(all, sha, err){
+          _ghCache = (all && Object.keys(all).length) ? all : (localCacheGet() || {});
+          localCacheSetFrom(_ghCache);
+          cb(_ghCache[key] || []);
+          if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
+        });
+      } catch(e){
+        _ghCache = {};
+        cb([]);
+        if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
       }
-      cb(_ghCache[key] || []);
-      if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
-    });
     })();
     return;
   }
@@ -6615,7 +6608,7 @@ function render(){
     act += '<button class="btn ghost sm" type="button" data-act="reload" data-key="'+key+'">重新拉取</button>';
     /* v69：六大页面统一「页面管理」入口 */
     if (['collection','av','travel','food','study','idea'].indexOf(key)>=0){
-      act += '<button class="btn ghost sm" type="button" data-act="pagemgmt" data-mk="'+key+'">⚙ 页面管理</button>';
+      act += '<button class="btn ghost sm" type="button" data-act="pagemgmt" data-mk="'+key+'">⚙<span class="pm-label"> 页面管理</span></button>';
     }
   }
   $('mActions').innerHTML = act;
@@ -7474,6 +7467,7 @@ document.addEventListener('click', function(ev){
   }
   /* v59：拾纪 */
   if (act==='noteselect'){ ui.notes.id = node.getAttribute('data-id'); ui.notes.edit = false; render(); return; }
+  if (act==='notescollapse'){ ui.notes.collapsed = !ui.notes.collapsed; render(); return; }
   if (act==='noteadd'){
     var nid = 'note_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
     var today = new Date().toISOString().slice(0,10);
@@ -11300,7 +11294,7 @@ function renderCollectionMuseum(){
     var leftCats  = CATS.slice(0,3);   /* 手办 / 周边 / 杯盏 */
     var rightCats = CATS.slice(3,6);   /* 毛绒 / 卡牌 / 着物 */
     var h='<div class="museum">'+
-      '<div class="wm-mask"></div>'+
+      ''+
       '<div class="mh">'+
         '<h1>藏 品 馆</h1>'+
         '<p>G A L L E R Y</p>'+
@@ -11333,7 +11327,7 @@ function renderCollectionMuseum(){
     items.forEach(function(r){ var k=r['小类']||'未分类'; (subs[k]=subs[k]||[]).push(r); });
     var subNames=Object.keys(subs);
     var h2='<div class="museum">'+
-      '<div class="wm-mask"></div>'+
+      ''+
       '<div class="museum-crumb"><button class="r-back" data-act="mback">← 返回展厅</button>'+
         '<h2>'+esc(cat)+'</h2><span>'+items.length+' 件 · '+subNames.length+' 个展柜</span></div>'+
       '<div class="museum-grid">';
@@ -11362,7 +11356,7 @@ function renderCollectionMuseum(){
   var sub=f.sub;
   var all=sortByNum(s.rows.filter(function(r){ return r['大类']===cat && (r['小类']||'未分类')===sub; }), f.numOrder);
   var h3='<div class="museum">'+
-    '<div class="wm-mask"></div>'+
+    ''+
     '<div class="museum-crumb"><button class="r-back" data-act="mback">← 返回 '+esc(cat)+' 展厅</button>'+
       '<h2>'+esc(cat)+' · '+esc(sub)+'</h2><span>'+all.length+' 件</span></div>'+
     numOrderSeg(f.numOrder,'collnum','序号', f.yearView, 'collyear');
@@ -11465,7 +11459,7 @@ function renderAVHall(){
   /* v58：星级榜——所有影音按星级降序（支持半星） */
   if (f.stars){
     var srows=byQ(s.rows.slice()).sort(function(a,b){ return num(b['星级'])-num(a['星级']); });
-    var hs='<div class="avhall"><div class="wm-mask"></div>'+
+    var hs='<div class="avhall">'+
       '<div class="museum-crumb"><button class="r-back" data-act="avstarsback">← 返回大厅</button>'+
       '<h2>星级榜</h2><span>'+srows.length+' 部</span></div>';
     if (!srows.length){ hs += emptyHTML('还没有影音','点右上角「添加赏戏 / 留音」。')+'</div>'; return hs; }
@@ -11488,7 +11482,7 @@ function renderAVHall(){
     var items = byQ(s.rows.slice()).sort(function(a,b){
       return dstr(b['完成日期']||b['购入日期']).localeCompare(dstr(a['完成日期']||a['购入日期']));
     });
-    var hc = '<div class="avhall"><div class="wm-mask"></div>'+
+    var hc = '<div class="avhall">'+
       '<div class="museum-crumb"><button class="r-back" data-act="avback">← 返回大厅</button>'+
         '<h2>经典列表</h2><span>'+items.length+' 部</span></div>'+
       '<div style="position:relative;z-index:2;padding:6px 30px 0"><input class="search" id="q_av" autocomplete="off" placeholder="搜名称 / 导演 / 演员 / 简介 / 短评" value="'+esc(f.q)+'"></div>';
@@ -11523,7 +11517,7 @@ function renderAVHall(){
     var leftCats  = AV_CATS.slice(0,1);   /* 赏戏 */
     var rightCats = AV_CATS.slice(1,2);   /* 留音 */
     var h='<div class="avhall">'+
-      '<div class="wm-mask"></div>'+
+      ''+
       '<div class="mh">'+
         '<h1>影 音 厅</h1>'+
         '<p>O P E R A   H O U S E · A U D I O   &   V I S U A L</p>'+
@@ -11551,7 +11545,7 @@ function renderAVHall(){
     items.forEach(function(r){ var k=r['小类']||'未分类'; (subs[k]=subs[k]||[]).push(r); });
     var subNames=Object.keys(subs);
     var h2='<div class="avhall">'+
-      '<div class="wm-mask"></div>'+
+      ''+
       '<div class="museum-crumb"><button class="r-back" data-act="avback">← 返回大厅</button>'+
         '<h2>'+esc(cat)+'</h2><span>'+items.length+' 部 · '+subNames.length+' 个展柜</span></div>'+
       '<div style="display:flex;justify-content:center;position:relative;z-index:2;margin-top:14px;width:100%"><input class="search" id="q_av" autocomplete="off" placeholder="搜名称 / 导演 / 演员 / 简介 / 短评" value="'+esc(f.q)+'" style="width:min(360px,80vw)"></div>'+
@@ -11582,7 +11576,7 @@ function renderAVHall(){
   var arr=sortByYear(byQ(s.rows.filter(function(r){ return r['大类']===cat && (r['小类']||'未分类')===sub; })), f.numOrder);
   var crumbTitle = (sub===cat) ? esc(cat) : esc(cat)+' · '+esc(sub);
   var h3='<div class="avhall">'+
-    '<div class="wm-mask"></div>'+
+    ''+
     '<div class="museum-crumb"><button class="r-back" data-act="avback">← 返回 '+esc(cat)+' 大厅</button>'+
       '<h2>'+crumbTitle+'</h2><span>'+arr.length+' 部</span></div>'+
     numOrderSeg(f.numOrder,'avnum','年份', f.yearView, 'avyear')+
@@ -11773,7 +11767,7 @@ function renderStudyClassic(){
   var cats = ['书籍','杂志','学习计划'];
   function rowsOf(cat){ return cat==='学习计划' ? plans : books.filter(function(r){ return r['大类']===cat; }); }
   var h = '<div class="studyroom studyclassic">'+
-    '<div class="wm-mask"></div>'+
+    ''+
     '<div class="st-head">'+
       '<h1>文 渊 斋 · 经典列表</h1>'+
       '<p>L I B R A R Y · C L A S S I C</p>'+
@@ -11994,7 +11988,7 @@ function renderStudyRoom(){
      带上 studyroom-notes 会把拾纪的深色底 + 渐变蒙版套到这些页面上。
      拾纪页的 studyroom-notes 只在 renderNotes() 里加。 */
   return '<div class="studyroom">'+
-    '<div class="wm-mask"></div>'+
+    ''+
     '<div class="st-head">'+
       '<h1>'+ (tab==='home' ? '文 渊 斋' : ('文 渊 斋 <span class="st-sep">·</span> <span class="st-sub">'+esc(studyTabLabel(tab))+'</span>')) +'</h1>'+
       '<p>'+ (tab==='home' ? 'L I B R A R Y · S T U D Y · R E A D' : 'S H E L F · '+esc(tab).toUpperCase()+' · C O L L E C T I O N') +'</p>'+
@@ -12048,7 +12042,7 @@ function renderNotes(){
 
   /* 拾纪页：额外带 .studyroom-notes（深色延伸背景 + 渐变蒙版只作用于此页） */
   return '<div class="studyroom studyroom-notes">' +
-    '<div class="wm-mask"></div>' +
+    '' +
     '<div class="st-head">' +
       '<h1>文 渊 斋 <span class="st-sep">·</span> <span class="st-sub">拾纪</span></h1>' +
       '<p>N O T E S · J O U R N A L · M E M O</p>' +
@@ -12063,7 +12057,8 @@ function renderNotes(){
         '<span>' + notes.length + ' 条</span>' +
         '<button class="crumb-add r-btn" data-act="noteadd">＋ 新建拾纪</button>' +
       '</header>' +
-      '<div class="notes-layout">' +
+      '<div class="notes-layout'+(ui.notes.collapsed?' collapsed':'')+'">' +
+        '<button class="notes-toggle" type="button" data-act="notescollapse" aria-label="展开或收起拾纪列表"></button>' +
         '<div class="notes-list">' + listHtml + '</div>' +
         '<div class="notes-right">' +
           toolbarHtml +   // 工具栏在上方
@@ -13091,7 +13086,7 @@ function renderFoodTwoCol(){
       '<span style="margin-left:auto;color:var(--gold)">'+esc(r['名称']||'')+'</span></div>';
   }).join('');
   return '<div class="foodtwo">'+
-    '<div class="wm-mask"></div>'+
+    ''+
     '<div class="ft-head">'+
       '<h1>馐 馔 坊</h1>'+
       '<p>T A S T E · F L A V O R · L O C A L</p>'+

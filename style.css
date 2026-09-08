@@ -1760,6 +1760,8 @@ input.search:focus{border-color:var(--accent);background:#fff}
   z-index: 11;
 }
 /* v60：工具栏里的「当前拾纪名字」——点击原地改名 */
+/* 折叠三角按钮：桌面端隐藏，仅手机端显示（见 ≤600px 媒体查询） */
+.notes-toggle { display: none; }
 .notes-toolbar .notes-tb-gap { flex: 1 1 auto; min-width: 8px; }
 .notes-toolbar .notes-title {
   font-family: var(--serif);
@@ -2639,22 +2641,7 @@ input.search{margin-bottom:12px}
   /* --- 影音厅：展柜在 600px 以下不再用透视上移（960px 查询已统一处理） --- */
   /* .avhall .museum-side { transform: translateY(-180px) scale(.82); } */
 
-/* 拾纪：小屏适配 */
-  .studyroom.studyroom-notes .notes-layout {
-    flex-direction: column;
-    min-height: auto;
-  }
-  .studyroom.studyroom-notes .notes-list {
-    flex: 0 0 auto;
-    max-height: 180px;
-    width: 100%;
-  }
-  .studyroom.studyroom-notes .notes-right {
-    max-height: none;
-  }
-  .studyroom.studyroom-notes .note-paper {
-    min-height: 400px;
-  }
+  /* 拾纪本手机端规则已统一移至 ≤960px 媒体查询（见下方「拾纪：手机端」块） */
 }
 
 /* --- 右下角「数据」折叠按钮：点「数据」向上展开 导入/导出 ---
@@ -2855,8 +2842,40 @@ input.search{margin-bottom:12px}
     border-radius: 0 !important;
     margin: 0 !important;
   }
-  /* 顶栏(标签栏 + 标题栏)给不透明纸色底，盖住整页背景上沿，背景不越过工具栏 */
-  .topbar, .tabbar { background: var(--paper); }
+  /* 顶栏：毛玻璃圆角遮罩，盖住背景图上沿 */
+  .topbar{
+    background: rgba(255, 252, 247, 0.72);
+    backdrop-filter: blur(18px) saturate(180%);
+    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    border-radius: 16px;
+    margin: 8px 10px 0;
+    padding: 14px 16px 12px;
+  }
+  /* 顶部模块导航栏：毛玻璃圆角衬底 */
+  .tabbar{
+    background: rgba(255, 252, 247, 0.72);
+    backdrop-filter: blur(18px) saturate(180%);
+    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    border-radius: 16px;
+    margin: 0 10px;
+  }
+
+  /* 行动条：所有按钮（含「添加」）统一为 sm 紧凑风格，与「重新拉取/页面管理」一致 */
+  .top-actions .btn{
+    min-height: 32px;
+    padding: 0 11px;
+    font-size: 11.5px;
+    border-radius: 10px;
+  }
+  /* 「添加」按钮改成与「重新拉取/页面管理」完全同款的 ghost 描边风格（灰边浅底） */
+  .top-actions .btn.primary{
+    background: rgba(255, 252, 247, 0.82);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    box-shadow: none;
+  }
+  /* 手机端：页面管理按钮只留齿轮，隐藏「页面管理」四字 */
+  .pm-label{ display: none; }
 
   /* --- 2b. 经典列表(影音厅 / 文渊斋)：侧边留白收窄，避免贴边且不被裁 --- */
   .avclassic-list, .studyclassic { padding-left: 14px; padding-right: 14px; }
@@ -2879,14 +2898,85 @@ input.search{margin-bottom:12px}
   .mh h1, .st-head h1, .ft-head h1 { font-size: 30px; letter-spacing: 4px; }
   .mh p, .st-head p, .ft-head p { font-size: 10px; letter-spacing: 2px; }
 
-  /* --- 5. 文渊斋四入口卡：nowrap 会在窄屏横向溢出，改成可换行 --- */
-  .bookcase-rail{ flex-wrap: wrap; gap: 14px; }
-  .sr-side-card{ flex: 0 0 calc(50% - 7px); max-width: none; height: 210px; }
+  /* --- 5. 文渊斋四入口卡：4 个瘦高卡片横排 --- */
+  .bookcase-rail{ flex-wrap: nowrap; gap: 8px; padding: 0 4px; }
+  .sr-side-card{
+    flex: 1 1 0;
+    max-width: none;
+    height: 220px;
+    border-radius: 14px;
+  }
+  .sr-side-title{
+    font-size: 20px;
+    letter-spacing: 6px;
+  }
 
   /* --- 6. 工具栏按钮多、窄屏排不开 --- */
-  .notes-toolbar{ flex-wrap: wrap; }
-  .notes-toolbar .notes-tb-gap{ flex: 1 1 auto; }
-  .notes-toolbar .notes-title{ max-width: 100%; flex: 1 1 140px; }
+  /* --- 6b. 拾纪本：手机端整体规则 --- */
+  .studyroom.studyroom-notes .notes-layout {
+    flex-direction: column;
+    height: auto !important;       /* 抵消桌面 calc(100vh-420px)，否则电子纸被裁切 */
+    position: relative;
+  }
+  .studyroom.studyroom-notes .notes-right {
+    max-height: none;
+    overflow: visible;             /* 电子纸不再被裁剪 */
+  }
+  .studyroom.studyroom-notes .note-paper {
+    min-height: 56vh;
+  }
+  /* 列表收为左缘可隐藏抽屉 + 小三角切换（默认收起，露出电子纸） */
+  .studyroom.studyroom-notes .notes-toggle {
+    display: flex; align-items: center; justify-content: center;
+    position: absolute; left: 0; top: 6px;
+    z-index: 13;
+    width: 24px; height: 42px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(111, 89, 67, 0.22);
+    border-left: none;
+    border-radius: 0 12px 12px 0;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+    cursor: pointer;
+    font-size: 13px; color: #5b4427;
+  }
+  .studyroom.studyroom-notes .notes-toggle::after { content: '▸'; }                                  /* 收起：指向右（点开） */
+  .studyroom.studyroom-notes .notes-layout:not(.collapsed) .notes-toggle::after { content: '◂'; }    /* 展开：指向左（收起） */
+  .studyroom.studyroom-notes .notes-list {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 76%; max-width: 260px;
+    z-index: 12;
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    max-height: none;
+    border-radius: 0 16px 16px 0;
+    box-shadow: 4px 0 22px rgba(0, 0, 0, 0.28);
+    padding-top: 56px;              /* 避开顶部三角 */
+  }
+  .studyroom.studyroom-notes .notes-layout.collapsed .notes-list { transform: translateX(-100%); }
+  .studyroom.studyroom-notes .notes-layout:not(.collapsed) .notes-list { transform: translateX(0); }
+  /* 工具栏：一行、按钮与字号缩小、可横向滚动 */
+  .studyroom.studyroom-notes .notes-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 6px;
+    padding: 6px 8px;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .studyroom.studyroom-notes .notes-toolbar::-webkit-scrollbar { display: none; }
+  .studyroom.studyroom-notes .notes-toolbar .notes-tb-gap { flex: 0 0 auto; }
+  .studyroom.studyroom-notes .notes-toolbar .r-btn.sm {
+    flex: 0 0 auto;
+    padding: 5px 10px;
+    font-size: 11px;
+    min-height: 28px;
+  }
+  .studyroom.studyroom-notes .notes-toolbar .notes-title {
+    font-size: 12px;
+    flex: 0 0 auto;
+    max-width: 120px;
+  }
 
   /* --- 7. 触控目标：苹果建议 44px，至少也要 40 --- */
   .tabbar button{ min-height: 40px; padding: 0 16px; }
@@ -2952,6 +3042,45 @@ input.search{margin-bottom:12px}
     margin: 0;
   }
   .avhall .museum-side{ transform: none !important; }
+
+  /* 影音厅大厅：只有赏戏/留音 2 个展柜，让它们并排（而非各占一行堆叠） */
+  .avhall .museum-floor{
+    display: flex;
+    gap: 12px;
+    padding: 8px 14px 40px;
+  }
+  .avhall .museum-side{
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .avhall .mcase-persp{
+    width: 100% !important;
+    max-width: 220px;
+    margin: 0 auto;
+  }
+
+  /* 藏品馆：6 个展柜分两排（左排手办/周边/杯盏，右排毛绒/卡牌/着物），收窄使舒适并排 */
+  .museum .museum-floor{
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .museum .museum-side{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  .museum .mcase-persp{
+    max-height: 180px;
+  }
+  .museum .mcase{
+    min-height: 100px;
+    padding: 10px 8px;
+  }
+  .museum .mcase h3{ font-size: 14px; }
+  .museum .mcase .meta{ font-size: 11px; }
 }
 
 @media (max-width:560px){
@@ -2959,7 +3088,8 @@ input.search{margin-bottom:12px}
   .mh h1, .st-head h1, .ft-head h1 { font-size: 24px; letter-spacing: 2px; }
   .mh p, .st-head p, .ft-head p { font-size: 9px; letter-spacing: 1px; }
   .mh, .st-head, .ft-head { padding: 24px 12px 20px; }
-  .sr-side-card{ flex: 0 0 100%; height: 160px; }
+  .sr-side-card{ height: 180px; border-radius: 12px; }
+  .sr-side-title{ font-size: 17px; letter-spacing: 4px; }
   /* 超窄屏：每个 side 内 3 个展柜改 2 列，卡片更大更好点 */
   .museum-side{ grid-template-columns: repeat(2, 1fr); }
   .searchwrap{ min-width: 0; width: 100%; }
