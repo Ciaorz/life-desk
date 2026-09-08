@@ -381,26 +381,62 @@ function shardFileName(cat){ return safeFileName(cat) + '-data.json'; }
 /* 每个类目的封面图片文件夹：images/{类目}-封面/ */
 function coverDirName(cat){ return safeFileName(cat) + '-封面'; }
 function coverDirPath(cat){ return DATA_PREFIX + '/' + IMG_DIR + '/' + coverDirName(cat) + '/'; }
+function pad2(n){ n = String(n); return n.length < 2 ? '0' + n : n; }
+/* v78：封面分文件夹存储规则（解决 GitHub 单目录超 1000 文件被截断的问题）
+   - 有「系列」：归入 series/{小类}-封面-NN（每 100 张一个文件夹，NN 从 01 起）
+   - 无「系列」：前 100 张在 {小类}-封面/，超出部分进 {小类}-封面/{小类}-NN/
+   返回的是相对 data/images/ 的「路径分段」数组。 */
+function coverIsSeries(row){ return !!(row && String(row['系列'] || '').trim()); }
+function coverBaseParts(cat, row){
+  var np = coverDirName(cat);                       /* 冰箱贴-封面 */
+  if (coverIsSeries(row)) return { base: ['series'], prefix: np, cat: cat, isSeries: true, entity: false };
+  return { base: [np], prefix: np, cat: cat, isSeries: false, entity: false };
+}
+/* 给定基础信息，返回一个「当前还能放封面」的子文件夹分段（不足 100 张的优先，满了就开下一个） */
+async function pickCoverFolder(info){
+  if (info.entity) return info.base;
+  var base = info.base, prefix = info.prefix, cat = info.cat, isSeries = info.isSeries;
+  if (isSeries){
+    var dirs = await fsListDirs(base);
+    var re = new RegExp('^' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-(\\d+)$');
+    var maxNN = 0;
+    dirs.forEach(function(d){ var m = re.exec(d); if (m){ var v = parseInt(m[1], 10); if (v > maxNN) maxNN = v; } });
+    var target = base.concat([prefix + '-' + pad2(maxNN || 1)]);
+    if (maxNN){
+      var cnt = (await fsListFiles(target)).length;
+      if (cnt >= 100) target = base.concat([prefix + '-' + pad2(maxNN + 1)]);
+    }
+    return target;
+  } else {
+    var cnt0 = (await fsListFiles(base)).length;
+    if (cnt0 < 100) return base;
+    var sub = await fsListDirs(base);
+    var re2 = new RegExp('^' + cat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-(\\d+)$');
+    var maxN2 = 0;
+    sub.forEach(function(d){ var m = re2.exec(d); if (m){ var v = parseInt(m[1], 10); if (v > maxN2) maxN2 = v; } });
+    var tgt2 = maxN2 ? base.concat([cat + '-' + pad2(maxN2)]) : base.concat([cat + '-01']);
+    if (maxN2){
+      var c2 = (await fsListFiles(tgt2)).length;
+      if (c2 >= 100) tgt2 = base.concat([cat + '-' + pad2(maxN2 + 1)]);
+    }
+    return tgt2;
+  }
+}
 
 /* ============================================================
    v68：每实体 IP / 系列 存储（一个实体一个 data.json + 同名图片文件夹）
    ------------------------------------------------------------
-   - IP：         data/ip/{IP名}-data.json           图片 data/images/ip/{IP名}-封面/
-   - 系列(未归类)：data/series/{系列名}-data.json      图片 data/images/series/{系列名}-封面/
-   - 系列(归属IP)：data/ip/{IP名}/{系列名}-data.json   图片 data/images/ip/{IP名}/{系列名}-封面/
-   这样「宝可梦」IP 旗下「30周年151金属徽章」系列就嵌在 宝可梦 文件夹里，
-   以后加新 IP / 新系列都按此规则自动建文件与文件夹。 */
+   - IP：    data/ip/{IP名}-data.json            图片 data/images/ip/{IP名}-封面/
+   - 系列：  data/series/{系列名}-data.json      图片 data/images/series/{系列名}-封面/
+   （系列不再嵌套进 IP 文件夹；「所属IP」字段仅作归类 / 展示用，不影响文件位置。
+     每个系列都是 data/series/ 下的独立文件，便于单独操作、改名、迁移。） */
 function ipCoverDir(ipName){ return 'ip/' + safeFileName(ipName) + '-封面'; }
 function seriesCoverDir(seriesName, ipName){
-  ipName = String(ipName || '').trim();
-  if (ipName) return 'ip/' + safeFileName(ipName) + '/' + safeFileName(seriesName) + '-封面';
-  return 'series/' + safeFileName(seriesName) + '-封面';
+  return 'series/' + safeFileName(seriesName) + '-封面';   /* v68fix：系列封面固定落在 data/images/series/，不再随所属IP 嵌套 */
 }
 function ipDataRel(ipName){ return 'ip/' + safeFileName(ipName) + '-data.json'; }
 function seriesDataRel(seriesName, ipName){
-  ipName = String(ipName || '').trim();
-  if (ipName) return 'ip/' + safeFileName(ipName) + '/' + safeFileName(seriesName) + '-data.json';
-  return 'series/' + safeFileName(seriesName) + '-data.json';
+  return 'series/' + safeFileName(seriesName) + '-data.json';   /* v68fix：系列 data.json 固定落在 data/series/，不再随所属IP 嵌套 */
 }
 /* 由 data 文件路径反推它的图片封面文件夹名（'ip/宝可梦-data.json' → 'ip/宝可梦-封面'） */
 function coverDirFromDataRel(rel){ return String(rel || '').replace(/-data\.json$/, '-封面'); }
@@ -610,7 +646,7 @@ function normalizeIndex(idx){
   [
     { cat:'赏戏',    module:'av',        file:'赏戏-data.json',    coverDir:'赏戏-封面' },
     { cat:'留音',    module:'av',        file:'留音-data.json',    coverDir:'留音-封面' },
-    { cat:'书籍',    module:'collection', file:'书籍-data.json',    coverDir:'书籍-封面' },
+    { cat:'书籍',    module:'collection', file:'书籍/书籍-data.json', coverDir:'书籍-封面' },
     { cat:'杂志',    module:'collection', file:'杂志-data.json',    coverDir:'杂志-封面' },
     { cat:'美食',    module:'food',       file:'美食-data.json',    coverDir:'美食-封面' },
     { cat:'菜谱',    module:'recipe',     file:'菜谱-data.json',    coverDir:'菜谱-封面' },
@@ -629,7 +665,13 @@ function normalizeIndex(idx){
     if (String(s.file).indexOf('书籍/') !== 0) s.file = '书籍/' + shardFileName(t);
   });
   /* 书籍 / 系列 / ip 的分组标记（迁移前也先打上，迁移负责把文件真正挪进文件夹） */
-  if (idx.shards['书籍'] && !idx.shards['书籍'].group) idx.shards['书籍'].group = '书籍';
+  /* 书籍主分片：v67 迁移后文件实际在 data/书籍/书籍-data.json，修正索引指向，避免读不到（本地/gh 自愈） */
+  if (idx.shards['书籍']){
+    var _bs = idx.shards['书籍'];
+    if (!_bs.group) _bs.group = '书籍';
+    if (!_bs.module) _bs.module = 'collection';
+    if (String(_bs.file).indexOf('书籍/') !== 0) _bs.file = '书籍/' + shardFileName('书籍');
+  }
   if (idx.shards['ip'] && !idx.shards['ip'].group) idx.shards['ip'].group = 'ip';
   if (idx.shards['series'] && !idx.shards['series'].group) idx.shards['series'].group = 'series';
   /* v75：把持久化的用户自定义大类 / 小类合并进运行时 CATS / SUBS，让它们出现在全站筛选、表单与页面管理里 */
@@ -742,11 +784,19 @@ async function storageSaveV2(snapshot){
       if (!okw) okAll = false;
     }
   }
-  var oki = await fsWriteIndex(idx);
-  await writeReadme();          /* 顺带刷新说明文件里的类目清单与封面编号 */
   /* v68：逐实体写 IP / 系列（每个实体一个文件；改名 / 删除会自动挪文件与图片文件夹、更新引用） */
   await saveEntityModule('ip', snapshot.ip || []);
   await saveEntityModule('series', snapshot.series || []);
+  /* v??：把 dirShard 实体文件清单写进主索引，供 GitHub Pages 静态直读（无法列目录）时按清单逐个拉取。
+     放在写实体之后，因为 saveEntityModule 会给每条记录挂上新的 _file。 */
+  if (idx && idx.shards && idx.shards.ip && idx.shards.ip.dirShard){
+    var _efMap = {};
+    (snapshot.ip && snapshot.ip.rows || []).forEach(function(r){ if (r && r._file) _efMap[r._file] = 1; });
+    (snapshot.series && snapshot.series.rows || []).forEach(function(r){ if (r && r._file) _efMap[r._file] = 1; });
+    idx.entityFiles = Object.keys(_efMap);
+  }
+  var oki = await fsWriteIndex(idx);
+  await writeReadme();          /* 顺带刷新说明文件里的类目清单与封面编号 */
   return okAll && oki;
 }
 /* 读主索引 + 全部分片，合并成扁平快照 {模块:[记录]} */
@@ -1181,9 +1231,9 @@ async function downloadCoverToLib(fk, done){
   var res = null;
   if (v.indexOf('data:image/') === 0){
     var by = dataUrlToBytes(v);
-    res = by ? await ingestImageToLib(cat, { bytes: by, ext: (v.indexOf('image/png') >= 0 ? 'png' : 'jpg'), baseName: bn, coverDir: entCover, namePrefix: entPrefix }) : null;
+    res = by ? await ingestImageToLib(cat, { bytes: by, ext: (v.indexOf('image/png') >= 0 ? 'png' : 'jpg'), baseName: bn, coverDir: entCover, namePrefix: entPrefix, row: editing.vals }) : null;
   } else {
-    res = await ingestImageToLib(cat, { src: v, baseName: bn, coverDir: entCover, namePrefix: entPrefix });
+    res = await ingestImageToLib(cat, { src: v, baseName: bn, coverDir: entCover, namePrefix: entPrefix, row: editing.vals });
   }
   if (!res){ toast('这张图下不下来（多半是对方防盗链），请点「上传」选本地图片'); return; }
   editing.vals[fk] = res.rel;
@@ -1197,7 +1247,7 @@ async function downloadCoverToLib(fk, done){
   var tip = document.querySelector('[data-img-dltip="' + fk + '"]');
   if (tip) tip.textContent = '已存到本地：' + res.rel.replace('data/images/', '') + '（不会再重复存第二份）';
   toast(res.reused ? '图库里已经有这张了，已直接引用，没有重复占空间'
-                   : '封面已存进 data/images/' + (entCover || coverDirName(cat)) + '/');
+                   : '封面已存进 ' + res.rel.replace('data/images/', '').replace(/\/[^\/]+$/, ''));
   if (done) done();
 }
 /* v67：批量——把某个模块里所有「还是外链」的封面一次性存进本地图库 */
@@ -1223,7 +1273,7 @@ async function downloadAllRemoteCovers(key, rows, onProgress, onDone){
     var t = targets[i];
     if (onProgress) onProgress(i + 1, targets.length);
     var cat = shardCatOf(key, t.row) || (t.row['大类'] || key);
-    var dopt = { src: t.url, baseName: rowDisplayName(t.row) };
+    var dopt = { src: t.url, baseName: rowDisplayName(t.row), row: t.row };
     if (key === 'ip' || key === 'series'){
       dopt.coverDir = entityCoverDir(key, t.row);
       dopt.namePrefix = key === 'ip' ? String(t.row['IP名称'] || '') : String(t.row['系列名称'] || '');
@@ -1271,20 +1321,26 @@ async function ingestImageToLib(cat, opt){
   /* —— 查重：同一张图只存第一次，后面全部引用第一次那份 —— */
   var hit = imgIndexHit(src, hash);
   if (hit){ return { rel: hit, reused: true }; }
-  var dirName = opt.coverDir || coverDirName(cat);
-  var okDir = await _fsaGetDir([IMG_DIR, dirName], true);
-  if (!okDir){ toast('创建图片文件夹失败：' + dirName); return null; }
-  var seq = await scanMaxImageSeqFor(dirName);
+  var parts;
+  if (opt.coverDir){
+    parts = splitRelPath(opt.coverDir);            /* 实体(IP/系列)封面：维持原单文件夹行为 */
+  } else {
+    var _cinfo = coverBaseParts(cat, opt.row);
+    parts = await pickCoverFolder(_cinfo);
+  }
+  var okDir = await _fsaGetDir([IMG_DIR].concat(parts), true);
+  if (!okDir){ toast('创建图片文件夹失败：' + parts.join('/')); return null; }
+  var seq = await scanMaxImageSeqFor(parts);
   var bn = safeFileName(opt.baseName || cat);
   var rel = '', ok = false;
   var pn = safeFileName(opt.namePrefix || cat);
   for (var t = 0; t < 60; t++){
     seq++;
     var name = pn + '-' + (bn ? bn + '-' : '') + pad4(seq) + '.' + ext;
-    var relTry = DATA_PREFIX + '/' + IMG_DIR + '/' + dirName + '/' + name;
+    var relTry = DATA_PREFIX + '/' + IMG_DIR + '/' + parts.join('/') + '/' + name;
     var dup = await fsGetFileHandleAt(relToFsParts(relTry).join('/'), false);
     if (dup) continue;                 /* 极端情况：同名已存在，跳号 */
-    ok = await _fsaWriteBinary([IMG_DIR, dirName], name, bytes);
+    ok = await _fsaWriteBinary([IMG_DIR].concat(parts), name, bytes);
     if (ok){ rel = relTry; break; }
     seq--; break;
   }
@@ -1296,9 +1352,10 @@ async function ingestImageToLib(cat, opt){
 }
 /* 扫描某个类目封面文件夹内已有的最大编号（按项目独立编号） */
 async function scanMaxImageSeqFor(dirName){
+  var parts = Array.isArray(dirName) ? dirName : String(dirName || '').split('/').filter(Boolean);
   var max = 0;
   try {
-    var dir = await _fsaGetDir([IMG_DIR, dirName], false);
+    var dir = await _fsaGetDir([IMG_DIR].concat(parts), false);
     if (dir){
       /* File System Access API 的迭代器。
          文件名形如「去过的地方-0001.jpg」，数字在中间（前缀是中文+连字符），
@@ -1335,9 +1392,11 @@ function rowDisplayName(r){
    避免 ip-封面 第一张变成 ip-0005 这种跨目录跳号。 */
 async function externalizeImages(cat, rows, startSeq, opts){
   if (!_fsaHandle || !rows || !rows.length) return startSeq;
-  var dirName = (opts && opts.coverDir) || coverDirName(cat);
+  var cinfo;
+  if (opts && opts.coverDir){ cinfo = { base: splitRelPath(opts.coverDir), prefix: '', cat: cat, isSeries: false, entity: true }; }
+  else { cinfo = coverBaseParts(cat, (rows && rows[0]) || null); }
   var prefix = (opts && opts.namePrefix) ? safeFileName(opts.namePrefix) : safeFileName(cat);
-  var seq = (typeof startSeq === 'number' && isFinite(startSeq)) ? startSeq : await scanMaxImageSeqFor(dirName);
+  var lastSeq = 0;
   await loadImgIndex();
   var _idxDirty = false;
   for (var i = 0; i < rows.length; i++){
@@ -1375,28 +1434,30 @@ async function externalizeImages(cat, rows, startSeq, opts){
           it.imageUrl = hit;
           continue;
         }
+        /* 每张图独立选择「当前还能放封面」的子文件夹（series / 非 series 规则） */
+        var parts = cinfo.entity ? cinfo.base : await pickCoverFolder(cinfo);
+        var seq = await scanMaxImageSeqFor(parts);
         seq++;
         var dn = rowDisplayName(r);
         /* 例：留声机-测试音乐-0001.jpg（条目名为空时退化为 留声机-0001.jpg） */
         var name = prefix + "-" + (dn ? dn + "-" : "") + pad4(seq) + "." + ext;
-        var rel = DATA_PREFIX + '/' + IMG_DIR + '/' + dirName + '/' + name;
+        var rel = DATA_PREFIX + '/' + IMG_DIR + '/' + parts.join('/') + '/' + name;
         /* 极端情况：同名文件已在（比如手工改过名），跳号再来 */
         var dupH = await fsGetFileHandleAt(relToFsParts(rel).join('/'), false);
-        if (dupH){ seq++; name = prefix + "-" + (dn ? dn + "-" : "") + pad4(seq) + "." + ext; rel = DATA_PREFIX + '/' + IMG_DIR + '/' + dirName + '/' + name; }
-        var ok = await _fsaWriteBinary([IMG_DIR, dirName], name, bytes);
+        if (dupH){ seq++; name = prefix + "-" + (dn ? dn + "-" : "") + pad4(seq) + "." + ext; rel = DATA_PREFIX + '/' + IMG_DIR + '/' + parts.join('/') + '/' + name; }
+        var ok = await _fsaWriteBinary([IMG_DIR].concat(parts), name, bytes);
         if (ok){
           _imgUrlCache[rel] = u;      /* 立刻可用：先用原图顶上，避免闪空白 */
           it.imageUrl = rel;          /* JSON 里只留相对路径 */
           imgIndexPut(rel, hsh, u, bytes.length, ext);
           _idxDirty = true;
-        } else {
-          seq--;                      /* 写失败：回退编号，下次复用 */
+          lastSeq = seq;
         }
       }
     }
   }
   if (_idxDirty) await saveImgIndex();
-  return seq;
+  return lastSeq;
 }
 /* 加载后：把相对路径解析成 blob URL 以便显示 */
 async function readRelPathAsBlobUrl(rel){
@@ -1540,16 +1601,28 @@ async function ghStaticLoadV2(){
     if (dir.charAt(dir.length - 1) !== '/') dir += '/';
     var idx = await fetchJSONRel(dir + 'lifedesk.json');
     if (!idx || idx.schema !== SCHEMA_V2) return null;             /* 不是分片格式 → 走原 API 逻辑 */
+    idx = normalizeIndex(idx);   /* gh 静态直读也做一次结构自愈（修正书籍等分片路径、补齐分组标记），只读、不写盘 */
     var out = {};
     Object.keys(idx.__main || {}).forEach(function(mk){ out[mk] = (idx.__main[mk] || []).slice(); });
     var cats = Object.keys(idx.shards || {});
     for (var i = 0; i < cats.length; i++){
       var sh = idx.shards[cats[i]] || {};
+      if (sh.dirShard) continue;          /* ip/series 是目录分片，没有单一 file，改走下方 entityFiles 清单 */
       var obj = await fetchJSONRel(dir + (sh.file || shardFileName(cats[i])));
       if (!obj) continue;
       var mk = sh.module || obj.module; if (!mk) continue;
       if (!out[mk]) out[mk] = [];
       out[mk] = out[mk].concat(obj.rows || []);
+    }
+    /* 目录分片（ip / series）：每个实体一个文件，静态托管又不能列目录，
+       因此按主索引里的 entityFiles 清单逐个拉取这些文件并合并进对应模块。 */
+    var ef = idx.entityFiles || [];
+    for (var ei = 0; ei < ef.length; ei++){
+      var eo = await fetchJSONRel(dir + ef[ei]);
+      if (!eo || !eo.rows) continue;
+      var emk = eo.module; if (!emk) continue;
+      if (!out[emk]) out[emk] = [];
+      out[emk] = out[emk].concat(eo.rows || []);
     }
     /* 图片相对路径在静态站点上可直接用，记录一下来源目录便于解析 */
     _staticImgBase = dir;
@@ -1614,9 +1687,18 @@ async function collectPushFiles(){
   var cats = Object.keys(idx.shards || {});
   for (var i = 0; i < cats.length; i++){
     var sh = idx.shards[cats[i]] || {};
+    if (sh.dirShard) continue;            /* ip/series 目录分片走下方 entityFiles 清单 */
     var obj = await fsReadJSON(sh.file || shardFileName(cats[i]));
     if (!obj) continue;
     files.push({ path: dir + '/' + (sh.file || shardFileName(cats[i])), text: JSON.stringify(obj, null, 2) });
+  }
+  /* 目录分片（ip/series）实体文件：按主索引 entityFiles 清单逐个纳入上传 */
+  var ef = (idx.entityFiles || []);
+  for (var ei = 0; ei < ef.length; ei++){
+    try {
+      var efObj = await fsReadJSON(ef[ei]);
+      if (efObj) files.push({ path: dir + '/' + ef[ei], text: JSON.stringify(efObj, null, 2) });
+    } catch(e){}
   }
   /* 图片 */
   try {
