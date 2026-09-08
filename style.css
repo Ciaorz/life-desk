@@ -867,16 +867,6 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .avhall .museum-side.left  { transform: translate(100px, -280px); }
 .avhall .museum-side.right { transform: translate(-100px, -280px); }
 
-/* 蒙右下角「AI生成」水印：用一块更深的玻璃块在最右下方托住，避免与原图水印打架 */
-.museum .wm-mask, .foodtwo .wm-mask, .avhall .wm-mask {
-  position: absolute; right: 0; bottom: 0;
-  width: 220px; height: 80px;
-  background: linear-gradient(135deg, transparent 0%, rgba(20,12,6,0.55) 50%);
-  z-index: -1;
-  pointer-events: none;
-}
-/* 文渊斋背景不需要这块遮罩：用户要求右下角干净 */
-.studyroom .wm-mask { display: none; }
 
 /* --- 顶部抬头（统一外观：博物馆/文渊斋/厨房的标题区都同一形态）------------------ */
 .mh, .st-head, .ft-head {
@@ -2934,10 +2924,33 @@ input.search{margin-bottom:12px}
   .foodtwo .foodmap{ min-height: 280px; }
   .foodtwo .ft-pin-list{ max-height: none !important; }
 
-  /* 藏品馆/影音厅：展柜区在手机上不透视堆叠，改为普通流式 */
-  .museum-floor{ position: static; transform: none; }
-  .museum-side{ position: static; transform: none; width: 100% !important; }
-  .mcase-persp{ position: static; transform: none !important; width: 100% !important; max-width: none; }
+  /* 藏品馆/影音厅：展柜区在手机上不透视堆叠，改为普通流式网格
+     关键：必须一并清掉 floor 的固定高度 / overflow:hidden / perspective，
+     以及 side 的 height:100%——否则静态展柜仍被塞进 70vh 盒子里被裁切 */
+  .museum-floor{
+    position: static !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    perspective: none !important;
+    padding: 8px 14px 40px;
+  }
+  .museum-side{
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    /* 每个 side 内的 3 个展柜排成一行自适应网格（不再绝对定位互叠） */
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .mcase-persp{
+    position: static !important;
+    transform: none !important;
+    width: auto !important;
+    max-width: none;
+    margin: 0;
+  }
   .avhall .museum-side{ transform: none !important; }
 }
 
@@ -2947,6 +2960,8 @@ input.search{margin-bottom:12px}
   .mh p, .st-head p, .ft-head p { font-size: 9px; letter-spacing: 1px; }
   .mh, .st-head, .ft-head { padding: 24px 12px 20px; }
   .sr-side-card{ flex: 0 0 100%; height: 160px; }
+  /* 超窄屏：每个 side 内 3 个展柜改 2 列，卡片更大更好点 */
+  .museum-side{ grid-template-columns: repeat(2, 1fr); }
   .searchwrap{ min-width: 0; width: 100%; }
   .buygrid{ grid-template-columns: 1fr; }
   .npdlg-row{ gap: 5px; }
