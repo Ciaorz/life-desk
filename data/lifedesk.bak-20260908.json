@@ -1,0 +1,235 @@
+{
+  "schema": 2,
+  "shards": {
+    "ip": {
+      "module": "ip",
+      "dirShard": true,
+      "dir": "ip",
+      "coverDir": "ip",
+      "group": "ip"
+    },
+    "series": {
+      "module": "series",
+      "dirShard": true,
+      "dir": "series",
+      "coverDir": "系列",
+      "group": "series"
+    },
+    "去过的地方": {
+      "file": "去过的地方-data.json",
+      "module": "travel",
+      "coverDir": "去过的地方-封面"
+    },
+    "想去的地方": {
+      "file": "想去的地方-data.json",
+      "module": "travel",
+      "coverDir": "想去的地方-封面"
+    },
+    "书籍": {
+      "file": "书籍-data.json",
+      "module": "collection",
+      "coverDir": "书籍-封面",
+      "group": "书籍"
+    },
+    "杂志": {
+      "file": "杂志-data.json",
+      "module": "collection",
+      "coverDir": "杂志-封面"
+    },
+    "餐厅": {
+      "file": "餐厅-data.json",
+      "module": "food",
+      "coverDir": "餐厅-封面"
+    },
+    "美食": {
+      "file": "美食-data.json",
+      "module": "food",
+      "coverDir": "美食-封面"
+    },
+    "菜谱": {
+      "file": "菜谱-data.json",
+      "module": "recipe",
+      "coverDir": "菜谱-封面"
+    },
+    "徽章": {
+      "file": "徽章-data.json",
+      "module": "collection",
+      "coverDir": "徽章-封面"
+    },
+    "想法": {
+      "file": "想法-data.json",
+      "module": "idea",
+      "coverDir": "想法-封面"
+    },
+    "学习计划": {
+      "file": "学习计划-data.json",
+      "module": "study",
+      "coverDir": "学习计划-封面"
+    },
+    "拾纪": {
+      "file": "拾纪-data.json",
+      "module": "notes",
+      "coverDir": "拾纪-封面"
+    },
+    "语言": {
+      "file": "语言-data.json",
+      "module": "study",
+      "coverDir": "语言-封面"
+    },
+    "自然科技": {
+      "file": "书籍/自然科技-data.json",
+      "module": "collection",
+      "coverDir": "自然科技-封面",
+      "group": "书籍",
+      "kind": "booktag"
+    },
+    "工具语言": {
+      "file": "书籍/工具语言-data.json",
+      "module": "collection",
+      "coverDir": "工具语言-封面",
+      "group": "书籍",
+      "kind": "booktag"
+    },
+    "艺术视觉": {
+      "file": "书籍/艺术视觉-data.json",
+      "module": "collection",
+      "coverDir": "艺术视觉-封面",
+      "group": "书籍",
+      "kind": "booktag"
+    },
+    "人文历史": {
+      "file": "书籍/人文历史-data.json",
+      "module": "collection",
+      "coverDir": "人文历史-封面",
+      "group": "书籍",
+      "kind": "booktag"
+    },
+    "兴趣收藏": {
+      "file": "书籍/兴趣收藏-data.json",
+      "module": "collection",
+      "coverDir": "兴趣收藏-封面",
+      "group": "书籍",
+      "kind": "booktag"
+    },
+    "赏戏": {
+      "file": "赏戏-data.json",
+      "module": "av",
+      "coverDir": "赏戏-封面"
+    },
+    "留音": {
+      "file": "留音-data.json",
+      "module": "av",
+      "coverDir": "留音-封面"
+    }
+  },
+  "__main": {
+    "collection": [],
+    "travel": [],
+    "av": [],
+    "study": [],
+    "food": [],
+    "idea": [],
+    "ip": [],
+    "series": [],
+    "loc": [],
+    "checkin": [
+      {
+        "_id": "ck_mtl7jsyhtmmts",
+        "地点名字": "三峡龙脊",
+        "所属地点": "巫山",
+        "省": "重庆",
+        "国家": "中国",
+        "地区": "巫峡",
+        "心级": 2.5,
+        "日期": "2026-09-03",
+        "封面图片": "https://drmetastar.com/wp-content/uploads/2025/11/rilcher_20251129_0008.jpg",
+        "内容": "",
+        "纬度": 31.07722,
+        "经度": 109.87425
+      }
+    ],
+    "recipe": []
+  },
+  "layoutVersion": 3,
+  "customFields": {
+    "collection": [
+      {
+        "k": "属性",
+        "t": "select",
+        "o": [
+          "水",
+          "火",
+          "草",
+          "电",
+          "飞行",
+          "龙",
+          "一般",
+          "钢",
+          "格斗",
+          "地面"
+        ],
+        "ph": "",
+        "multi": false,
+        "after": "编号",
+        "scope": {
+          "type": "series",
+          "value": "30周年冰箱贴",
+          "ip": "宝可梦"
+        }
+      }
+    ],
+    "av": [],
+    "travel": [],
+    "food": [],
+    "study": [],
+    "idea": []
+  },
+  "userCats": [
+    "周边"
+  ],
+  "userSubs": {
+    "周边": [
+      "冰箱贴"
+    ]
+  },
+  "fieldLayout": {
+    "av": {
+      "名称": {
+        "w": 2
+      },
+      "流派": {
+        "hide": 1
+      },
+      "简介": {
+        "hide": 1
+      },
+      "完成日期": {
+        "hide": 1
+      }
+    },
+    "av::赏戏": {
+      "名称": {
+        "w": 2
+      },
+      "导演": {
+        "w": 2
+      },
+      "演员": {
+        "w": 2
+      },
+      "简介": {
+        "w": 2,
+        "hide": 1
+      },
+      "短评": {
+        "hide": 1
+      },
+      "完成日期": {
+        "hide": 1
+      },
+      "片源": {
+        "hide": 1
+      }
+    }
+  }
+}

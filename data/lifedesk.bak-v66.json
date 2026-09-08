@@ -1,0 +1,113 @@
+{
+  "schema": 2,
+  "shards": {
+    "ip": {
+      "file": "ip-data.json",
+      "module": "ip",
+      "coverDir": "ip-封面"
+    },
+    "series": {
+      "file": "series-data.json",
+      "module": "series",
+      "coverDir": "系列-封面"
+    },
+    "去过的地方": {
+      "file": "去过的地方-data.json",
+      "module": "travel",
+      "coverDir": "去过的地方-封面"
+    },
+    "想去的地方": {
+      "file": "想去的地方-data.json",
+      "module": "travel",
+      "coverDir": "想去的地方-封面"
+    },
+    "电影": {
+      "file": "电影-data.json",
+      "module": "av",
+      "coverDir": "电影-封面"
+    },
+    "留声机": {
+      "file": "留声机-data.json",
+      "module": "av",
+      "coverDir": "留声机-封面"
+    },
+    "书籍": {
+      "file": "书籍-data.json",
+      "module": "collection",
+      "coverDir": "书籍-封面"
+    },
+    "杂志": {
+      "file": "杂志-data.json",
+      "module": "collection",
+      "coverDir": "杂志-封面"
+    },
+    "餐厅": {
+      "file": "餐厅-data.json",
+      "module": "food",
+      "coverDir": "餐厅-封面"
+    },
+    "美食": {
+      "file": "美食-data.json",
+      "module": "food",
+      "coverDir": "美食-封面"
+    },
+    "菜谱": {
+      "file": "菜谱-data.json",
+      "module": "recipe",
+      "coverDir": "菜谱-封面"
+    },
+    "徽章": {
+      "file": "徽章-data.json",
+      "module": "collection",
+      "coverDir": "徽章-封面"
+    },
+    "想法": {
+      "file": "想法-data.json",
+      "module": "idea",
+      "coverDir": "想法-封面"
+    },
+    "学习计划": {
+      "file": "学习计划-data.json",
+      "module": "study",
+      "coverDir": "学习计划-封面"
+    },
+    "拾纪": {
+      "file": "拾纪-data.json",
+      "module": "notes",
+      "coverDir": "拾纪-封面"
+    },
+    "语言": {
+      "file": "语言-data.json",
+      "module": "study",
+      "coverDir": "语言-封面"
+    }
+  },
+  "__main": {
+    "collection": [],
+    "travel": [],
+    "av": [],
+    "study": [],
+    "food": [],
+    "idea": [],
+    "ip": [],
+    "series": [],
+    "loc": [],
+    "checkin": [
+      {
+        "_id": "ck_mtl7jsyhtmmts",
+        "地点名字": "三峡龙脊",
+        "所属地点": "巫山",
+        "省": "重庆",
+        "国家": "中国",
+        "地区": "巫峡",
+        "心级": 2.5,
+        "日期": "2026-09-03",
+        "封面图片": "https://drmetastar.com/wp-content/uploads/2025/11/rilcher_20251129_0008.jpg",
+        "内容": "",
+        "纬度": 31.07722,
+        "经度": 109.87425
+      }
+    ],
+    "recipe": []
+  }
+}
