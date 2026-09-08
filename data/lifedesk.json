@@ -26,7 +26,7 @@
       "coverDir": "想去的地方-封面"
     },
     "书籍": {
-      "file": "书籍-data.json",
+      "file": "书籍/书籍-data.json",
       "module": "collection",
       "coverDir": "书籍-封面",
       "group": "书籍"
@@ -356,5 +356,6 @@
         "hide": 1
       }
     }
-  }
+  },
+  "entityFiles": []
 }

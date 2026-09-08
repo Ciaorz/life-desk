@@ -25,7 +25,7 @@
 | series | `` | `images/系列/` | 0 |
 | 去过的地方 | `去过的地方-data.json` | `images/去过的地方-封面/` | 2 |
 | 想去的地方 | `想去的地方-data.json` | `images/想去的地方-封面/` | 1 |
-| 书籍 | `书籍-data.json` | `images/书籍-封面/` | 0 |
+| 书籍 | `书籍/书籍-data.json` | `images/书籍-封面/` | 2 |
 | 杂志 | `杂志-data.json` | `images/杂志-封面/` | 2 |
 | 餐厅 | `餐厅-data.json` | `images/餐厅-封面/` | 2 |
 | 美食 | `美食-data.json` | `images/美食-封面/` | 1 |
