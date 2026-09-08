@@ -1,21 +1,6 @@
 {
   "collection": [
     {
-      "_id": "l_mtmztgxjuy2pz",
-      "名称": "测试",
-      "作者": null,
-      "出版社": null,
-      "出版年": null,
-      "版次": null,
-      "ISBN": null,
-      "存放位置": null,
-      "册数": 1,
-      "价格": 0,
-      "标签分类": null,
-      "照片": null,
-      "大类": "书籍"
-    },
-    {
       "_id": "l_mtn7bxut565bk",
       "名称": "博物",
       "年份": "2025",
