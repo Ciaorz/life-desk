@@ -1,0 +1,24 @@
+{
+  "schema": 2,
+  "cat": "series",
+  "module": "series",
+  "rows": [
+    {
+      "_id": "l_mtpf8icpk28oe",
+      "系列名称": "30周年冰箱贴",
+      "所属IP": "宝可梦",
+      "目标数量": 1025,
+      "系列封面": [
+        {
+          "imageUrl": "data/images/series/30周年冰箱贴-封面/30周年冰箱贴-30周年冰箱贴-0001.jpg",
+          "viewport": {
+            "s": 1,
+            "x": 0,
+            "y": 0
+          }
+        }
+      ],
+      "说明": null
+    }
+  ]
+}
