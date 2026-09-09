@@ -1,52 +1,22 @@
 {
   "collection": [
     {
-      "_id": "l_mttnm4k5ne1tn",
-      "名称": "上海水鸟观察入门指南",
-      "作者": null,
-      "出版社": "华东理工大学出版社",
-      "IP": null,
-      "系列": null,
-      "出版年": "2026",
+      "_id": "l_mtp91urf5z6b4",
+      "名称": "中国古代文化常识辞典",
+      "作者": "商务印书馆辞书研究中心",
+      "出版社": "商务印书馆",
+      "出版年": "2024",
       "版次": null,
-      "ISBN": "9787562881780",
+      "ISBN": "9787100239806",
       "存放位置": null,
       "册数": 1,
       "价格": 0,
-      "标签分类": "自然科技",
-      "小分类": "观鸟",
+      "标签分类": null,
       "照片": [
         {
-          "imageUrl": "https://img9.doubanio.com/view/subject/l/public/s35602006.jpg",
+          "imageUrl": "https://img3.doubanio.com/view/subject/l/public/s34902277.jpg",
           "viewport": {
-            "s": 1,
-            "x": -2.3333333333333335,
-            "y": 36
-          }
-        }
-      ],
-      "大类": "书籍"
-    },
-    {
-      "_id": "l_mttne09jeezah",
-      "名称": "词根溯源解码 300词根速记10000英语单词 告别死记硬背，从词源入手理解单词的由来与演变；掌握一个词根，串联一组单词，让词汇记忆更有规律",
-      "作者": "钱磊",
-      "出版社": "中国宇航出版社",
-      "IP": null,
-      "系列": null,
-      "出版年": null,
-      "版次": null,
-      "ISBN": "9787515928609",
-      "存放位置": null,
-      "册数": 1,
-      "价格": 0,
-      "标签分类": "工具语言",
-      "小分类": "英语",
-      "照片": [
-        {
-          "imageUrl": "https://img9.doubanio.com/view/subject/l/public/s35610404.jpg",
-          "viewport": {
-            "s": 1.2000000000000002,
+            "s": 1.1,
             "x": 0,
             "y": 0
           }
@@ -73,6 +43,31 @@
       "存放位置": null,
       "照片": null,
       "大类": "杂志"
+    },
+    {
+      "_id": "l_mtpbg5je5ghp7",
+      "名称": "中国古代文化常识辞典",
+      "作者": "商务印书馆辞书研究中心",
+      "出版社": "商务印书馆",
+      "出版年": "2024",
+      "版次": null,
+      "ISBN": "9787100239806",
+      "存放位置": null,
+      "册数": 1,
+      "价格": 0,
+      "标签分类": "工具语言",
+      "小分类": null,
+      "照片": [
+        {
+          "imageUrl": "data/images/工具语言-封面/工具语言-中国古代文化常识辞典-0001.jpg",
+          "viewport": {
+            "s": 1,
+            "x": 0,
+            "y": 0
+          }
+        }
+      ],
+      "大类": "书籍"
     },
     {
       "_id": "l_mtpvgzaa93k2y",
@@ -39207,31 +39202,6 @@
       "图鉴组": "幻之宝可梦",
       "地区": "",
       "世代组": "第九世代"
-    },
-    {
-      "_id": "l_mtpbg5je5ghp7",
-      "名称": "中国古代文化常识辞典",
-      "作者": "商务印书馆辞书研究中心",
-      "出版社": "商务印书馆",
-      "出版年": "2024",
-      "版次": null,
-      "ISBN": "9787100239806",
-      "存放位置": null,
-      "册数": 1,
-      "价格": 0,
-      "标签分类": "工具语言",
-      "小分类": null,
-      "照片": [
-        {
-          "imageUrl": "data/images/工具语言-封面/工具语言-中国古代文化常识辞典-0001.jpg",
-          "viewport": {
-            "s": 1,
-            "x": 0,
-            "y": 0
-          }
-        }
-      ],
-      "大类": "书籍"
     }
   ],
   "travel": [
@@ -39624,281 +39594,5 @@
       "菜谱": null,
       "_module": "recipe"
     }
-  ],
-  "schema": 2,
-  "shards": {
-    "ip": {
-      "module": "ip",
-      "dirShard": true,
-      "dir": "ip",
-      "coverDir": "ip",
-      "group": "ip"
-    },
-    "series": {
-      "module": "series",
-      "dirShard": true,
-      "dir": "series",
-      "coverDir": "系列",
-      "group": "series"
-    },
-    "赏戏": {
-      "file": "赏戏-data.json",
-      "module": "av",
-      "coverDir": "赏戏-封面"
-    },
-    "留音": {
-      "file": "留音-data.json",
-      "module": "av",
-      "coverDir": "留音-封面"
-    },
-    "书籍": {
-      "file": "书籍/书籍-data.json",
-      "module": "collection",
-      "coverDir": "书籍-封面",
-      "group": "书籍"
-    },
-    "杂志": {
-      "file": "杂志-data.json",
-      "module": "collection",
-      "coverDir": "杂志-封面"
-    },
-    "美食": {
-      "file": "美食-data.json",
-      "module": "food",
-      "coverDir": "美食-封面"
-    },
-    "菜谱": {
-      "file": "菜谱-data.json",
-      "module": "recipe",
-      "coverDir": "菜谱-封面"
-    },
-    "学习计划": {
-      "file": "学习计划-data.json",
-      "module": "study",
-      "coverDir": "学习计划-封面"
-    },
-    "自然科技": {
-      "file": "书籍/自然科技-data.json",
-      "module": "collection",
-      "coverDir": "自然科技-封面",
-      "group": "书籍",
-      "kind": "booktag"
-    },
-    "工具语言": {
-      "file": "书籍/工具语言-data.json",
-      "module": "collection",
-      "coverDir": "工具语言-封面",
-      "group": "书籍",
-      "kind": "booktag"
-    },
-    "艺术视觉": {
-      "file": "书籍/艺术视觉-data.json",
-      "module": "collection",
-      "coverDir": "艺术视觉-封面",
-      "group": "书籍",
-      "kind": "booktag"
-    },
-    "人文历史": {
-      "file": "书籍/人文历史-data.json",
-      "module": "collection",
-      "coverDir": "人文历史-封面",
-      "group": "书籍",
-      "kind": "booktag"
-    },
-    "兴趣收藏": {
-      "file": "书籍/兴趣收藏-data.json",
-      "module": "collection",
-      "coverDir": "兴趣收藏-封面",
-      "group": "书籍",
-      "kind": "booktag"
-    },
-    "英语": {
-      "file": "书籍/英语-data.json",
-      "module": "collection",
-      "coverDir": "英语-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "工具语言"
-    },
-    "德语": {
-      "file": "书籍/德语-data.json",
-      "module": "collection",
-      "coverDir": "德语-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "工具语言"
-    },
-    "法语": {
-      "file": "书籍/法语-data.json",
-      "module": "collection",
-      "coverDir": "法语-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "工具语言"
-    },
-    "语言学": {
-      "file": "书籍/语言学-data.json",
-      "module": "collection",
-      "coverDir": "语言学-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "工具语言"
-    },
-    "哲学": {
-      "file": "书籍/哲学-data.json",
-      "module": "collection",
-      "coverDir": "哲学-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "人文历史"
-    },
-    "文学": {
-      "file": "书籍/文学-data.json",
-      "module": "collection",
-      "coverDir": "文学-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "人文历史"
-    },
-    "历史": {
-      "file": "书籍/历史-data.json",
-      "module": "collection",
-      "coverDir": "历史-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "人文历史"
-    },
-    "汉语/古文": {
-      "file": "书籍/汉语_古文-data.json",
-      "module": "collection",
-      "coverDir": "汉语_古文-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "工具语言"
-    },
-    "辞书辞典": {
-      "file": "书籍/辞书辞典-data.json",
-      "module": "collection",
-      "coverDir": "辞书辞典-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "工具语言"
-    },
-    "观鸟": {
-      "file": "书籍/观鸟-data.json",
-      "module": "collection",
-      "coverDir": "观鸟-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "自然科技"
-    },
-    "自然图鉴": {
-      "file": "书籍/自然图鉴-data.json",
-      "module": "collection",
-      "coverDir": "自然图鉴-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "自然科技"
-    },
-    "植物": {
-      "file": "书籍/植物-data.json",
-      "module": "collection",
-      "coverDir": "植物-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "自然科技"
-    },
-    "生物学": {
-      "file": "书籍/生物学-data.json",
-      "module": "collection",
-      "coverDir": "生物学-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "自然科技"
-    },
-    "生物杂谈": {
-      "file": "书籍/生物杂谈-data.json",
-      "module": "collection",
-      "coverDir": "生物杂谈-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "自然科技"
-    },
-    "物理天文": {
-      "file": "书籍/物理天文-data.json",
-      "module": "collection",
-      "coverDir": "物理天文-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "自然科技"
-    },
-    "地理风景": {
-      "file": "书籍/地理风景-data.json",
-      "module": "collection",
-      "coverDir": "地理风景-封面",
-      "group": "书籍",
-      "kind": "booksub",
-      "parent": "自然科技"
-    },
-    "徽章": {
-      "file": "徽章-data.json",
-      "module": "collection",
-      "coverDir": "徽章-封面"
-    },
-    "冰箱贴": {
-      "file": "冰箱贴-data.json",
-      "module": "collection",
-      "coverDir": "冰箱贴-封面"
-    },
-    "去过的地方": {
-      "file": "去过的地方-data.json",
-      "module": "travel",
-      "coverDir": "去过的地方-封面"
-    },
-    "想去的地方": {
-      "file": "想去的地方-data.json",
-      "module": "travel",
-      "coverDir": "想去的地方-封面"
-    },
-    "想法": {
-      "file": "想法-data.json",
-      "module": "idea",
-      "coverDir": "想法-封面"
-    }
-  },
-  "__main": {
-    "collection": [],
-    "travel": [],
-    "av": [],
-    "study": [],
-    "food": [],
-    "idea": [],
-    "ip": [],
-    "series": [],
-    "loc": [],
-    "checkin": [
-      {
-        "_id": "ck_mtl7jsyhtmmts",
-        "地点名字": "三峡龙脊",
-        "所属地点": "巫山",
-        "省": "重庆",
-        "国家": "中国",
-        "地区": "巫峡",
-        "心级": 2.5,
-        "日期": "2026-09-03",
-        "封面图片": "https://drmetastar.com/wp-content/uploads/2025/11/rilcher_20251129_0008.jpg",
-        "内容": "",
-        "纬度": 31.07722,
-        "经度": 109.87425
-      }
-    ],
-    "recipe": []
-  },
-  "entityFiles": [
-    "ip/宝可梦-data.json",
-    "ip/罗小黑-data.json",
-    "series/30周年151金属徽章-data.json",
-    "series/30周年冰箱贴-data.json"
-  ],
-  "layoutVersion": 3
+  ]
 }
