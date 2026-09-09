@@ -2850,7 +2850,8 @@ var BOOK_FIELDS = [
   {k:'系列', t:'dyn', src:'series'},
   {k:'出版年', t:'text', ph:'如 2023'},
   {k:'版次', t:'text', ph:'如 第3版 / 2023-05'},
-  {k:'ISBN', t:'isbn', ph:'13 位 ISBN（扫码或粘贴后点「搜书」）'},
+  /* v77：整行宽——下方要放扫码取景框和书名搜索结果，半栏太挤 */
+  {k:'ISBN', t:'isbn', ph:'13 位 ISBN（扫码或粘贴后点「搜书」）', full:1},
   {k:'存放位置', t:'dyn', src:'loc'},
   {k:'册数', t:'number', min:1, def:1, ph:'1'},
   {k:'价格', t:'currency', ph:'0.00'},
@@ -7002,6 +7003,26 @@ document.addEventListener('click', function(ev){
   }
   if (act==='scanisbn'){ openBookScanner(); return; }
   if (act==='isbnlookup'){ doIsbnLookup(); return; }
+  /* v77：ISBN 输入框下方的扫码 / 照片识别 / 书名搜索模块 */
+  if (act==='isbnlivecam'){
+    var _tl = node.closest('[data-isbn-tools]');
+    if (!_tl) return;
+    if (_isbnLiveScanner) stopInlineIsbnScan('已停止扫码');
+    else startInlineIsbnScan(_tl);
+    return;
+  }
+  if (act==='isbnlivestop'){ stopInlineIsbnScan('已停止扫码'); return; }
+  if (act==='isbnphoto'){
+    var _t2 = node.closest('[data-isbn-tools]');
+    var _fi = _t2 && _t2.querySelector('.isbn-photo-input');
+    if (_fi) _fi.click();
+    return;
+  }
+  if (act==='isbnsearchtitle'){
+    var _t3 = node.closest('[data-isbn-tools]');
+    if (_t3) doTitleSearch(_t3);
+    return;
+  }
   /* v67：把外链封面真正下载到 data/images（图库索引查重，同一张只存一次） */
   if (act==='dlcover'){ downloadCoverToLib(node.getAttribute('data-k')); return; }
   /* v75fix：封面框右上角「✕」——清掉当前这张图（值、输入框、预览、缩放栏一起复位） */
@@ -8764,7 +8785,6 @@ function openForm(key, id, opts){
     '<p>'+esc(eyebrowName)+'</p><h2>'+(id?'编辑':'添加')+' · '+esc(titleName)+'</h2></div>'+
     '<button class="x" type="button" data-x="1" aria-label="关闭">×</button></div>'+
     '<div class="fgrid">'+activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('')+'</div>'+
-    (key==='collection' && editing.vals['大类']==='书籍' ? '<div class="scanbar"><button type="button" class="btn primary sm" data-act="scanisbn">📷 扫码录入（ISBN / 二维码）</button><span class="imgnote">手机扫书背条码自动填表；电脑上把 ISBN 粘进上面的框，点「搜书」也一样</span></div>' : '')+
     '<div class="sheet-actions">'+
     (id?'<button class="btn ghost" type="button" id="delBtn" style="margin-right:auto;color:var(--red)">删除</button>':'')+
     '<button class="btn ghost" type="button" data-x="1">取消</button>'+
@@ -8856,11 +8876,28 @@ function fieldHTML(f, v){
     body='<input data-f="'+f.k+'" type="'+type+'" value="'+esc(v)+'" placeholder="'+esc(f.ph||'')+'" autocomplete="off"'+
       (f.min!=null?' min="'+f.min+'"':'')+(f.max!=null?' max="'+f.max+'"':'')+'>';
   } else if (f.t==='isbn'){
-    /* v65：ISBN 输入框旁边挂一个「搜书」按钮。
-       手机扫码、电脑复制粘贴都走这里——点一下就按 ISBN 联网查书并回填整张表。 */
+    /* v77：ISBN 输入 + 正下方的「扫码 / 照片识别 / 书名搜索」模块。
+       扫码或照片识别出的号码直接填进上面的 ISBN 框；条码扫不到时可用书名搜索。 */
     body='<div class="isbn-wrap">'+
       '<input data-f="'+f.k+'" type="text" inputmode="numeric" value="'+esc(v)+'" placeholder="'+esc(f.ph||'')+'" autocomplete="off">'+
       '<button type="button" class="btn ghost sm isbn-go" data-act="isbnlookup" title="按 ISBN 联网查书">搜书</button>'+
+    '</div>'+
+    '<div class="isbn-tools" data-isbn-tools="1">'+
+      '<div class="isbn-tool-row">'+
+        '<button type="button" class="btn ghost sm" data-act="isbnlivecam">📷 扫码</button>'+
+        '<button type="button" class="btn ghost sm" data-act="isbnphoto">🖼 照片识别</button>'+
+      '</div>'+
+      '<div class="isbn-live" hidden>'+
+        '<div class="isbn-reader"></div>'+
+        '<div class="isbn-live-msg">准备中…</div>'+
+        '<button type="button" class="btn ghost sm" data-act="isbnlivestop">停止扫码</button>'+
+      '</div>'+
+      '<div class="isbn-tsearch">'+
+        '<input type="text" class="search isbn-title-q" placeholder="扫不到条码？直接输书名搜" autocomplete="off">'+
+        '<button type="button" class="btn ghost sm" data-act="isbnsearchtitle">搜书名</button>'+
+      '</div>'+
+      '<div class="isbn-results"></div>'+
+      '<input type="file" class="isbn-photo-input" accept="image/*" capture="environment" hidden>'+
     '</div>';
   } else if (f.t==='year-date'){
     /* v62：年 / 月 / 日 三段下拉。左边选年，右边补月日；月日都可以空着，
@@ -9395,6 +9432,209 @@ function openBookScanner(){
     if(cancel) cancel.onclick=rCloseOverlay;
   }
 }
+
+/* ============ v77：ISBN 输入框下方的「扫码 / 照片识别 / 书名搜索」模块 ============
+   与旧的 openBookScanner（全屏浮层）不同：本模块嵌在表单里 ISBN 输入框正下方，
+   摄像头画面直接显示在表单内，用户能亲眼看到正在扫，识别到的号码自动填进 ISBN 框。 */
+var _isbnLiveScanner=null, _isbnLiveTools=null;
+var ISBN_QRCODE_SRC='https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
+/* 取与某个扫码模块配套的 ISBN 输入框（模块与 .isbn-wrap 是同一个字段容器里的兄弟） */
+function isbnInputOfTools(tools){
+  if (!tools) return null;
+  var box = tools.parentElement;
+  return box ? box.querySelector('[data-f="ISBN"]') : null;
+}
+function stopInlineIsbnScan(msg){
+  var t=_isbnLiveTools;
+  var sc=_isbnLiveScanner;          /* 先抓局部引用：stop() 是异步的，全局量马上就会被清掉 */
+  _isbnLiveScanner=null;
+  if (sc){
+    var clearIt=function(){ try{ sc.clear(); }catch(e){} };
+    try{ sc.stop().then(clearIt).catch(clearIt); }
+    catch(e){ clearIt(); }
+  }
+  if (t){
+    var live=t.querySelector('.isbn-live'); if(live) live.hidden=true;
+    var rd=t.querySelector('.isbn-reader'); if(rd) rd.innerHTML='';   /* 兜底：清掉残留的 video */
+    var btn=t.querySelector('[data-act="isbnlivecam"]');
+    if(btn){ btn.classList.remove('on'); btn.textContent='📷 扫码'; }
+  }
+  _isbnLiveTools=null;
+  if (msg) toast(msg);
+}
+function startInlineIsbnScan(tools){
+  var live=tools.querySelector('.isbn-live');
+  var msgEl=tools.querySelector('.isbn-live-msg');
+  var btn=tools.querySelector('[data-act="isbnlivecam"]');
+  if (_isbnLiveScanner) stopInlineIsbnScan();
+  if (!live) return;
+  live.hidden=false;
+  if (msgEl) msgEl.textContent='正在启动摄像头…';
+  if (btn){ btn.textContent='停止扫码'; btn.classList.add('on'); }
+  _isbnLiveTools=tools;
+  loadScript(ISBN_QRCODE_SRC).then(function(){
+    if (_isbnLiveTools!==tools) return;                 /* 加载期间已被取消 */
+    var reader=tools.querySelector('.isbn-reader');
+    if (!reader) return;
+    if (typeof Html5Qrcode==='undefined'){ if(msgEl) msgEl.textContent='扫码库加载失败（需联网），请改用「照片识别」或书名搜索'; return; }
+    if (!reader.id) reader.id='isbnReader_'+Date.now();
+    if (reader.innerHTML) reader.innerHTML='';        /* 兜底：清掉上一次残留的 video */
+    if (msgEl) msgEl.textContent='对准书背的 ISBN 条码 / 二维码…';
+    try{ _isbnLiveScanner=new Html5Qrcode(reader.id); }
+    catch(e){ if(msgEl) msgEl.textContent='无法初始化扫码器：'+((e&&e.message)||e); return; }
+    _isbnLiveScanner.start(
+      { facingMode:'environment' },
+      {
+        fps:10,
+        aspectRatio:1.4,
+        /* 取景框按实际画面自适应，避免在小画面设备上因固定尺寸报错 */
+        qrbox: function(vw, vh){
+          return {
+            width:  Math.max(120, Math.min(300, Math.floor(vw*0.85))),
+            height: Math.max(80,  Math.min(190, Math.floor(vh*0.55)))
+          };
+        }
+      },
+      function(text){ onInlineIsbnDetected(tools, text); },
+      function(){ /* 每帧没识别到，忽略 */ }
+    ).catch(function(e){
+      if (msgEl) msgEl.textContent='无法打开摄像头：'+((e&&e.message)||e)+'（需 HTTPS 与相机权限）';
+      if (btn){ btn.classList.remove('on'); btn.textContent='📷 扫码'; }
+    });
+  }).catch(function(){
+    if (msgEl) msgEl.textContent='扫码库加载失败（需联网），请改用「照片识别」或书名搜索';
+  });
+}
+/* 识别到内容：归一化成 ISBN → 填进 ISBN 框 → 停止扫码 → 自动查书填表 */
+function onInlineIsbnDetected(tools, raw){
+  var msgEl=tools.querySelector('.isbn-live-msg');
+  var isbn=normIsbn(raw);
+  if(!isbn && /^https?:\/\//i.test(raw)){
+    var m=raw.match(/isbn[=_]?(\d{13}|\d{10})/i) || raw.match(/(\d{13})/);
+    if(m) isbn=normIsbn(m[1]);
+  }
+  if(!isbn){
+    if(msgEl) msgEl.textContent='识别到「'+String(raw||'').slice(0,24)+'」，不是 ISBN，继续对准条码…';
+    return;
+  }
+  var inp=isbnInputOfTools(tools);
+  if (inp){
+    inp.value=isbn;
+    inp.dispatchEvent(new Event('input',{bubbles:true}));
+    inp.dispatchEvent(new Event('change',{bubbles:true}));
+  }
+  if (msgEl) msgEl.textContent='✔ 识别到 ISBN：'+isbn+'（已填入上方输入框）';
+  stopInlineIsbnScan('识别到 ISBN '+isbn+'，已填入并正在查书');
+  setTimeout(function(){ fillBookFromISBN(isbn); }, 260);
+}
+/* 照片识别：禁了实时摄像头的环境（如微信内置浏览器）用拍照 decode */
+function decodeBookPhotoInline(tools, file){
+  var live=tools.querySelector('.isbn-live');
+  var msgEl=tools.querySelector('.isbn-live-msg');
+  if (live) live.hidden=false;
+  if (msgEl) msgEl.textContent='正在识别照片中的条码…';
+  loadScript(ISBN_QRCODE_SRC).then(function(){
+    if (!tools.isConnected) return;
+    if (typeof Html5Qrcode==='undefined'){ if(msgEl) msgEl.textContent='识别库加载失败（需联网）'; return; }
+    var holder=document.createElement('div');
+    holder.id='isbnPhotoReader_'+Date.now();
+    holder.style.cssText='position:fixed;left:-9999px;top:0;width:2px;height:2px;overflow:hidden';
+    document.body.appendChild(holder);
+    var sc=null;
+    try{ sc=new Html5Qrcode(holder.id); }
+    catch(e){ if(msgEl) msgEl.textContent='识别库初始化失败，请直接用书名搜索'; holder.remove(); return; }
+    sc.scanFile(file, false).then(function(text){
+      try{ sc.clear(); }catch(e){}
+      holder.remove();
+      onInlineIsbnDetected(tools, text);
+    }).catch(function(){
+      try{ sc.clear(); }catch(e){}
+      holder.remove();
+      if (msgEl) msgEl.textContent='没在照片里认出条码，换张清晰照片，或直接输书名搜';
+    });
+  }).catch(function(){
+    if (msgEl) msgEl.textContent='识别库加载失败（需联网），请直接用书名搜索';
+  });
+}
+/* ---------- v77：按书名搜索（ISBN 扫不到时的兜底）---------- */
+function lookupBookByTitle(q, cb){
+  var url='https://openlibrary.org/search.json?q='+encodeURIComponent(q)+
+          '&fields=title,author_name,first_publish_year,publisher,isbn,cover_i&limit=15';
+  _olJSON(url).then(function(d){
+    var docs=(d && d.docs) || [];
+    var list=[];
+    docs.forEach(function(doc){
+      var t=String(doc.title||'').trim();
+      if (!t) return;
+      var isbn='';
+      if (doc.isbn && doc.isbn.length){
+        for (var i=0;i<doc.isbn.length;i++){ var n=normIsbn(doc.isbn[i]); if (n){ isbn=n; break; } }
+      }
+      list.push({
+        名称: t,
+        作者: (doc.author_name||[]).slice(0,3).join(' / '),
+        出版社: (doc.publisher && doc.publisher[0]) || '',
+        出版年: doc.first_publish_year ? String(doc.first_publish_year) : '',
+        ISBN: isbn,
+        封面: doc.cover_i ? ('https://covers.openlibrary.org/b/id/'+doc.cover_i+'-L.jpg') : ''
+      });
+    });
+    cb(list.slice(0,12));
+  }).catch(function(){ cb([]); });
+}
+function doTitleSearch(tools){
+  var qEl=tools.querySelector('.isbn-title-q');
+  var resEl=tools.querySelector('.isbn-results');
+  var btn=tools.querySelector('[data-act="isbnsearchtitle"]');
+  var q=String((qEl && qEl.value)||'').trim();
+  if (!q){ if (qEl) qEl.focus(); toast('先输入书名（或作者名）'); return; }
+  if (resEl) resEl.innerHTML='<div class="imgnote">正在搜索「'+esc(q)+'」…</div>';
+  if (btn){ btn.disabled=true; btn.textContent='搜…'; }
+  lookupBookByTitle(q, function(list){
+    if (btn){ btn.disabled=false; btn.textContent='搜书名'; }
+    if (!resEl) return;
+    if (!list.length){
+      resEl.innerHTML='<div class="imgnote">没搜到「'+esc(q)+'」，换个关键词或试试作者名</div>';
+      return;
+    }
+    var h='<div class="imgnote">搜到 '+list.length+' 条，点一条填入表单：</div><div class="bkres">';
+    list.forEach(function(b,i){
+      var meta=[b['作者'],b['出版社'],b['出版年']].filter(Boolean).join(' · ');
+      h+='<button type="button" class="bkres-item" data-bk="'+i+'">'+
+        (b['封面']
+          ? '<span class="bkres-cov" style="background-image:url(\''+String(b['封面']).replace(/["'()\\]/g,'')+'\')"></span>'
+          : '<span class="bkres-cov ph"></span>')+
+        '<span class="bkres-txt"><b>'+esc(b['名称'])+'</b>'+
+        (meta?'<i>'+esc(meta)+'</i>':'')+
+        '</span></button>';
+    });
+    h+='</div>';
+    resEl.innerHTML=h;
+    Array.prototype.forEach.call(resEl.querySelectorAll('.bkres-item'), function(el){
+      el.onclick=function(){
+        var b=list[parseInt(el.getAttribute('data-bk'),10)||0];
+        if (!b) return;
+        var inp=isbnInputOfTools(tools);
+        if (inp && b['ISBN']){
+          inp.value=b['ISBN'];
+          inp.dispatchEvent(new Event('input',{bubbles:true}));
+          inp.dispatchEvent(new Event('change',{bubbles:true}));
+        }
+        fillBookInPlace(b);
+        toast('已填入：'+b['名称']);
+      };
+    });
+  });
+}
+/* 「照片识别」的文件选择：委托到 document，表单每次重绘都不用重新绑定 */
+document.addEventListener('change', function(e){
+  var t=e.target;
+  if (!t || !t.classList || !t.classList.contains('isbn-photo-input')) return;
+  var tools = t.closest('[data-isbn-tools]');
+  var f = t.files && t.files[0];
+  if (tools && f) decodeBookPhotoInline(tools, f);
+  t.value='';
+});
 
 /* ---------- 藏品详情：点开看购入信息和存放位置 ----------
    v62：购入时间 / 价格 / 存放位置 / 购入渠道 单击原地编辑；
