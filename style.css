@@ -2851,13 +2851,16 @@ input.search{margin-bottom:12px}
     margin: 8px 10px 0;
     padding: 14px 16px 12px;
   }
-  /* 顶部模块导航栏：毛玻璃圆角衬底 */
+  /* 顶部模块导航栏：毛玻璃衬底，背景条撑满屏幕宽度
+     （.main 在手机端有左右 16px 内边距，用负外边距把背景条拉到屏幕两边；
+       再用 padding 把按钮推回来，避免贴着屏幕边缘） */
   .tabbar{
     background: rgba(255, 252, 247, 0.72);
     backdrop-filter: blur(18px) saturate(180%);
     -webkit-backdrop-filter: blur(18px) saturate(180%);
-    border-radius: 16px;
-    margin: 0 10px;
+    margin: 0 -16px;
+    padding: 12px 16px 10px;
+    border-radius: 0;
   }
 
   /* 行动条：所有按钮（含「添加」）统一为 sm 紧凑风格，与「重新拉取/页面管理」一致 */

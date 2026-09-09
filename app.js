@@ -1211,12 +1211,64 @@ function currentShardCat(){
 }
 /* v67：表单里「⬇ 存进本地图库」按钮 —— 把外链 / base64 封面真正落盘到 data/images，
    同一张图只会存一次（图库索引按外链 + 内容哈希查重）。 */
+/* v78：线上（GitHub Pages）模式拿不到本地目录句柄，但只要仓库 Token 在，
+   就能把封面图片经 GitHub Contents API 直接传进仓库，再把相对路径回填给字段。 */
+async function ghUploadCover(fk, url, done){
+  var safe = String(rowDisplayName(editing.vals) || 'cover')
+    .replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '-').slice(0, 40) || 'cover';
+  var ext = 'jpg', blob = null;
+  toast('正在把封面上传到仓库…');
+  try{
+    if (url.indexOf('data:image/') === 0){
+      var by = dataUrlToBytes(url);
+      if (!by) throw new Error('bad data url');
+      ext = (url.indexOf('image/png') >= 0 ? 'png' : (url.indexOf('image/webp') >= 0 ? 'webp' : 'jpg'));
+      blob = new Blob([by], { type: 'image/' + ext });
+    } else {
+      var r = await fetch(url, { mode: 'cors' });
+      if (!r || !r.ok) throw new Error('http ' + (r && r.status));
+      blob = await r.blob();
+      var mt = String(blob.type || '').toLowerCase();
+      if (mt.indexOf('png') >= 0) ext = 'png';
+      else if (mt.indexOf('webp') >= 0) ext = 'webp';
+      else if (mt.indexOf('gif') >= 0) ext = 'gif';
+      else ext = 'jpg';
+    }
+  }catch(e){
+    toast('这张图下不下来（多半是对方防盗链），请点「上传」选本地图片');
+    return;
+  }
+  if (blob.size > 4 * 1024 * 1024){
+    toast('这张图有 ' + Math.round(blob.size / 1048576) + 'MB，太大了，仓库上传容易失败');
+    return;
+  }
+  var cat = currentShardCat() || '其他';
+  var rel = 'data/images/' + cat + '-封面/' + safe + '-' + Date.now().toString(36) + '.' + ext;
+  var ok = false;
+  try{ ok = await ghPutFile(rel, blob); }catch(e){ ok = false; }
+  if (!ok){ toast('上传仓库失败，请检查 Token 是否有 repo 权限'); return; }
+  editing.vals[fk] = rel;
+  var inp = document.querySelector('[data-f="' + fk + '"]');
+  if (inp) inp.value = rel;
+  var prev = document.querySelector('[data-img-prev="' + fk + '"]');
+  if (prev){
+    var u = resolveImgUrl(rel);
+    if (u) prev.style.backgroundImage = "url('" + u.replace(/["'()\\]/g, '') + "')";
+  }
+  var tip = document.querySelector('[data-img-dltip="' + fk + '"]');
+  if (tip) tip.textContent = '已上传到仓库：' + rel.replace('data/images/', '') + '（Pages 生效约需 1 分钟）';
+  toast('封面已传进仓库，点保存后生效');
+  if (done) done();
+}
 async function downloadCoverToLib(fk, done){
   if (!editing){ return; }
   var v = String(editing.vals[fk] || '').trim();
   if (!v){ toast('先粘贴一个图片链接，或点「上传」选本地图片'); return; }
   if (!imgIsRemote(v)){ toast('这张已经是本地图片了'); return; }
   if (!_fsaHandle){
+    /* v78：线上模式（GitHub Pages）没有本地目录句柄，但有仓库 Token —— 直接传进仓库。
+       本地 file:// 模式既没句柄也没 Token，才提示去连目录。 */
+    if (MODE === 'gh' && GH && GH.token){ await ghUploadCover(fk, v, done); return; }
     toast('还没连接本地数据目录，存不进去', '选择目录', function(){ pickFsaDirAndConnect(); });
     return;
   }
@@ -8754,12 +8806,27 @@ function openForm(key, id, opts){
   /* 如果上次没写完就关了，把那条草稿恢复回来。
      v59：collection/av 的草稿按 大类 隔离，避免书籍/杂志/博物馆之间（或电影/留声机之间）的草稿互相覆盖 */
   var draftKey = 'lifedesk_draft_' + key + (id ? '_' + id : '');
-  if ((key==='collection' || key==='av') && seed['大类']) draftKey += '_' + seed['大类'];
+  /* v59：collection/av 的草稿按 大类 隔离，避免书籍/杂志/博物馆之间（或电影/留声机之间）的草稿互相覆盖
+     v78fix：原来只在 seed['大类'] 有值（即带 prefill 的入口，如「+ 书籍」）时才加后缀，
+             于是「藏品馆 → 添加」这种没有 prefill 的入口用的是不带后缀的 key，
+             会读到 v59 之前遗留的「大类=书籍」旧草稿，把大类覆盖成书籍 →
+             点「添加藏品」却打开书籍表单（ISBN / 扫码那一套）。
+             改为：新建时一律按「本次实际大类」隔离，没有 prefill 就用字段默认值。 */
+  if ((key==='collection' || key==='av') && !id){
+    var _dcat = seed['大类'] || editing.vals['大类'] || '';
+    if (_dcat) draftKey += '_' + _dcat;
+  }
   try {
     var raw = localStorage.getItem(draftKey);
     if (raw){
       var d = JSON.parse(raw);
-      Object.keys(d).forEach(function(k){ if (k in editing.vals) editing.vals[k] = d[k]; });
+      Object.keys(d).forEach(function(k){
+        /* v78fix：再兜一道 —— 新建且没有明确大类预填时，不让草稿改写「大类」，
+           否则残留的旧草稿仍能把「藏品馆 → 添加」拐去书籍表单。 */
+        if (k==='大类' && (key==='collection'||key==='av') && !id
+            && !(opts && opts.prefill && opts.prefill['大类']!=null)) return;
+        if (k in editing.vals) editing.vals[k] = d[k];
+      });
     }
     /* 若本次打开带有明确 大类 预填，确保草稿不会把大类覆盖错（如博物馆草稿覆盖书籍入口） */
     if (opts && opts.prefill && opts.prefill['大类']!=null){
@@ -9479,19 +9546,24 @@ function startInlineIsbnScan(tools){
     if (typeof Html5Qrcode==='undefined'){ if(msgEl) msgEl.textContent='扫码库加载失败（需联网），请改用「照片识别」或书名搜索'; return; }
     if (!reader.id) reader.id='isbnReader_'+Date.now();
     if (reader.innerHTML) reader.innerHTML='';        /* 兜底：清掉上一次残留的 video */
-    if (msgEl) msgEl.textContent='对准书背的 ISBN 条码 / 二维码…';
+    if (msgEl) msgEl.textContent='对准书背的 ISBN 条码，保持手机稳定，1–2 秒即可识别…';
     try{ _isbnLiveScanner=new Html5Qrcode(reader.id); }
     catch(e){ if(msgEl) msgEl.textContent='无法初始化扫码器：'+((e&&e.message)||e); return; }
     _isbnLiveScanner.start(
-      { facingMode:'environment' },
+      /* 限制分辨率：画面像素越少，单帧解码越快（EAN-13 条码在 720p 下完全够用） */
+      { facingMode:'environment', width:{ideal:1280}, height:{ideal:720} },
       {
-        fps:10,
-        aspectRatio:1.4,
-        /* 取景框按实际画面自适应，避免在小画面设备上因固定尺寸报错 */
+        fps: 15,
+        aspectRatio: 1.4,
+        /* 关键提速：设备带原生 BarcodeDetector（Android Chrome 有）时交给它解码，
+           比内置的 ZXing 纯 JS 解码快一个数量级；不支持的机型自动回落到 ZXing。 */
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        /* 取景框按实际画面自适应，避免在小画面设备上因固定尺寸报错；
+           框小一点 → 需要分析的像素少 → 识别更快 */
         qrbox: function(vw, vh){
           return {
-            width:  Math.max(120, Math.min(300, Math.floor(vw*0.85))),
-            height: Math.max(80,  Math.min(190, Math.floor(vh*0.55)))
+            width:  Math.max(150, Math.min(300, Math.floor(vw*0.8))),
+            height: Math.max(80,  Math.min(170, Math.floor(vh*0.45)))
           };
         }
       },
@@ -9524,6 +9596,7 @@ function onInlineIsbnDetected(tools, raw){
     inp.dispatchEvent(new Event('change',{bubbles:true}));
   }
   if (msgEl) msgEl.textContent='✔ 识别到 ISBN：'+isbn+'（已填入上方输入框）';
+  try{ if (navigator.vibrate) navigator.vibrate(60); }catch(e){}   /* 识别成功震一下，手机上有明确反馈 */
   stopInlineIsbnScan('识别到 ISBN '+isbn+'，已填入并正在查书');
   setTimeout(function(){ fillBookFromISBN(isbn); }, 260);
 }
