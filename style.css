@@ -2923,21 +2923,20 @@ input.search{margin-bottom:12px}
     gap: 8px 10px;
     margin: 14px 0 0 14px;
   }
-  .crumb-row .museum-crumb { margin: 0; }
-  .crumb-row .numseg { margin: 0 0 0 auto; }   /* 推到面包屑右侧；放不下整组换到下一行并靠右 */
-
-  /* 面包屑 / 序号排序组 / 缩放条：变小变扁、字号统一、间距紧凑 */
-  .crumb-row .museum-crumb {
-    padding: 6px 12px;
-    font-size: 12px;
+  /* 所有面包屑（含同页出现的第二个）字号统一、再小一号、间距紧凑 */
+  .museum-crumb {
+    padding: 5px 11px;
+    font-size: 11px;
     letter-spacing: .5px;
+    margin: 12px 0 8px 12px;
   }
-  .crumb-row .museum-crumb h2 {
-    font-size: 13px; letter-spacing: 2px; margin-left: 8px;
-  }
-  .crumb-row .numseg { gap: 5px; }
-  .crumb-row .numseg button {
-    padding: 6px 10px; font-size: 11.5px; letter-spacing: .5px;
+  .museum-crumb h2 { font-size: 12px; letter-spacing: 1.5px; margin-left: 7px; }
+  .crumb-row .museum-crumb { margin: 0; }        /* 行内的由 crumb-row 统一控制间距 */
+
+  /* 序号升降序 / 按年份：跟随面包屑尺寸一起变小，并推到面包屑右侧 */
+  .numseg { gap: 4px; margin: 0 0 0 auto; }
+  .numseg button {
+    padding: 5px 9px; font-size: 11px; letter-spacing: .5px;
     border-radius: 999px;
   }
 
@@ -2957,6 +2956,18 @@ input.search{margin-bottom:12px}
   }
   .cardzoombar .zm { font-size: 13px; }
   .cardzoombar input[type=range] { width: 90px; }
+
+  /* 藏品馆 / 影音厅：::after 带出的黑色蒙版背景框改圆角，并撑满屏幕宽度。
+     （.main 在手机端有左右 16px 内边距，用负外边距把整块拉到屏幕两边） */
+  .museum, .avhall { margin-left: -16px; margin-right: -16px; }
+  .museum::after, .avhall::after { border-radius: 18px; }
+
+  /* item 详情 sheet：元素自动重排（响应式布局 / 流式换行） */
+  .sheet-head { flex-wrap: wrap; gap: 8px 10px; }
+  .sheet-head h2 { font-size: 17px; }
+  .sheet-nav { flex-wrap: wrap; }
+  .sheet-actions { flex-wrap: wrap; }
+  .sheet-actions .btn { flex: 1 1 auto; min-width: 96px; }
 
   /* item-card 内容全部居中对齐 */
   .mcasewall .item-card { align-items: center; text-align: center; }

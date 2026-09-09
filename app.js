@@ -11369,7 +11369,7 @@ function renderCollectionMuseum(){
   if (f.seriesWall){
     var sw=sortByNum(all.filter(function(r){ return String(r['系列']||'').trim()===String(f.seriesWall); }), f.numOrder);
     var spg=pageSlice(sw,'collL3');
-    h3+='<div class="museum-crumb" style="margin-top:10px"><button class="r-back" data-act="serback">‹ 返回全部'+esc(sub)+'</button>'+
+    h3+='<div class="museum-crumb" style="margin-top:10px"><button class="r-back" data-act="serback">‹ <span class="back-txt">返回</span>全部'+esc(sub)+'</button>'+
         '<h2>'+esc(f.seriesWall)+'</h2><span>'+sw.length+' 件</span></div>'+
         '<div class="mcasewall">'+spg.rows.map(museumItemCard).join('')+'</div>'+
         pageBar('collL3', spg.page, spg.total)+'</div>';
@@ -11547,7 +11547,7 @@ function renderAVHall(){
     var subNames=Object.keys(subs);
     var h2='<div class="avhall">'+
       ''+
-      '<div class="museum-crumb"><button class="r-back" data-act="avback">← 返回大厅</button>'+
+      '<div class="museum-crumb"><button class="r-back" data-act="avback">← <span class="back-txt">返回大厅</span></button>'+
         '<h2>'+esc(cat)+'</h2><span>'+items.length+' 部 · '+subNames.length+' 个展柜</span></div>'+
       '<div style="display:flex;justify-content:center;position:relative;z-index:2;margin-top:14px;width:100%"><input class="search" id="q_av" autocomplete="off" placeholder="搜名称 / 导演 / 演员 / 简介 / 短评" value="'+esc(f.q)+'" style="width:min(360px,80vw)"></div>'+
       '<div class="museum-grid">';
