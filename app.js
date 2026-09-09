@@ -7059,7 +7059,7 @@ document.addEventListener('click', function(ev){
   if (act==='isbnlivecam'){
     var _tl = node.closest('[data-isbn-tools]');
     if (!_tl) return;
-    if (_isbnLiveScanner) stopInlineIsbnScan('已停止扫码');
+    if (_isbnLiveScanner || _isbnLiveStop) stopInlineIsbnScan('已停止扫码');
     else startInlineIsbnScan(_tl);
     return;
   }
@@ -9503,8 +9503,24 @@ function openBookScanner(){
 /* ============ v77：ISBN 输入框下方的「扫码 / 照片识别 / 书名搜索」模块 ============
    与旧的 openBookScanner（全屏浮层）不同：本模块嵌在表单里 ISBN 输入框正下方，
    摄像头画面直接显示在表单内，用户能亲眼看到正在扫，识别到的号码自动填进 ISBN 框。 */
-var _isbnLiveScanner=null, _isbnLiveTools=null;
+var _isbnLiveScanner=null, _isbnLiveTools=null, _isbnLiveStop=null;
 var ISBN_QRCODE_SRC='https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
+/* v79：iOS Safari 不提供原生 BarcodeDetector，html5-qrcode 只能跑 ZXing 纯 JS，非常慢。
+   这个 polyfill 用 WebAssembly 版 ZXing 实现了同一套 BarcodeDetector API，iOS 上同样可用，
+   解码速度比纯 JS 快数倍。加载失败会静默降级回 html5-qrcode，不影响功能。 */
+var ISBN_BD_POLYFILL='https://cdn.jsdelivr.net/npm/@sec-ant/barcode-detector@1/+esm';
+/* 取到可用的 BarcodeDetector：优先系统原生（Android Chrome），否则加载 wasm polyfill（iOS） */
+async function ensureBarcodeDetector(){
+  if (typeof window.BarcodeDetector === 'function') return window.BarcodeDetector;
+  try{
+    var mod = await import(ISBN_BD_POLYFILL);
+    /* 兼容不同打包形态：命名导出 / 默认导出 / 个别版本自动挂到 window */
+    var BD = (mod && (mod.BarcodeDetector || (mod.default && (mod.default.BarcodeDetector || mod.default)))) || null;
+    if (BD && typeof BD === 'function'){ window.BarcodeDetector = BD; return BD; }
+    if (typeof window.BarcodeDetector === 'function') return window.BarcodeDetector;
+  }catch(e){}
+  return null;
+}
 /* 取与某个扫码模块配套的 ISBN 输入框（模块与 .isbn-wrap 是同一个字段容器里的兄弟） */
 function isbnInputOfTools(tools){
   if (!tools) return null;
@@ -9515,6 +9531,9 @@ function stopInlineIsbnScan(msg){
   var t=_isbnLiveTools;
   var sc=_isbnLiveScanner;          /* 先抓局部引用：stop() 是异步的，全局量马上就会被清掉 */
   _isbnLiveScanner=null;
+  /* v79：快速通道（原生 / wasm 解码）用的是自己起的定时器 + 媒体流，单独收尾 */
+  if (_isbnLiveStop){ try{ _isbnLiveStop(); }catch(e){} }
+  _isbnLiveStop=null;
   if (sc){
     var clearIt=function(){ try{ sc.clear(); }catch(e){} };
     try{ sc.stop().then(clearIt).catch(clearIt); }
@@ -9529,16 +9548,69 @@ function stopInlineIsbnScan(msg){
   _isbnLiveTools=null;
   if (msg) toast(msg);
 }
-function startInlineIsbnScan(tools){
-  var live=tools.querySelector('.isbn-live');
+/* v79：快速通道 —— 用 BarcodeDecoder（系统原生 或 wasm polyfill）自己抽帧解码。
+   比 html5-qrcode 内置的 ZXing 纯 JS 快得多，iOS 上尤其明显。
+   返回 true = 已接管；false = 用不了，交给 html5-qrcode 兜底。 */
+async function startFastIsbnScan(tools){
+  var reader=tools.querySelector('.isbn-reader');
+  var msgEl=tools.querySelector('.isbn-live-msg');
+  if (!reader) return false;
+  var BD = await ensureBarcodeDetector();
+  if (!BD) return false;
+  if (_isbnLiveTools!==tools) return true;              /* 加载期间已被取消 */
+  var vid=document.createElement('video');
+  vid.setAttribute('playsinline',''); vid.setAttribute('muted','');
+  vid.muted=true; vid.autoplay=true;
+  vid.style.cssText='width:100%;height:auto;display:block;background:#000';
+  reader.innerHTML=''; reader.appendChild(vid);
+  var stream=null;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:'environment', width:{ideal:1280}, height:{ideal:720} }
+    });
+  }catch(e){ return false; }
+  if (_isbnLiveTools!==tools){                          /* 取流期间被取消 */
+    try{ stream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+    return true;
+  }
+  vid.srcObject=stream;
+  try{ await vid.play(); }catch(e){}
+  var det=null;
+  try{ det=new BD({ formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code'] }); }
+  catch(e){ try{ det=new BD(); }catch(e2){ det=null; } }
+  if (!det){
+    try{ stream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+    return false;
+  }
+  if (msgEl) msgEl.textContent='对准书背的 ISBN 条码，保持手机稳定…（快速识别）';
+  var cv=document.createElement('canvas');
+  var ctx=cv.getContext('2d', { willReadFrequently:true });
+  var stopped=false;
+  var timer=setInterval(function(){
+    if (stopped || !vid.videoWidth || vid.readyState<2) return;
+    /* 只取画面中间那条横带送解码：ISBN 条码是横向的，像素少一半，解码更快 */
+    var vw=vid.videoWidth, vh=vid.videoHeight;
+    var sh=Math.max(60, Math.floor(vh*0.5)), sy=Math.floor((vh-sh)/2);
+    cv.width=vw; cv.height=sh;
+    ctx.drawImage(vid, 0, sy, vw, sh, 0, 0, vw, sh);
+    det.detect(cv).then(function(res){
+      if (stopped) return;
+      if (res && res.length){
+        stopped=true; clearInterval(timer);
+        onInlineIsbnDetected(tools, res[0].rawValue);
+      }
+    }).catch(function(){});
+  }, 110);
+  _isbnLiveStop=function(){
+    stopped=true; clearInterval(timer);
+    try{ stream.getTracks().forEach(function(t){ t.stop(); }); }catch(e){}
+  };
+  return true;
+}
+/* 兜底通道：html5-qrcode（ZXing 纯 JS，慢，但兼容性最好） */
+function startHtml5IsbnScan(tools){
   var msgEl=tools.querySelector('.isbn-live-msg');
   var btn=tools.querySelector('[data-act="isbnlivecam"]');
-  if (_isbnLiveScanner) stopInlineIsbnScan();
-  if (!live) return;
-  live.hidden=false;
-  if (msgEl) msgEl.textContent='正在启动摄像头…';
-  if (btn){ btn.textContent='停止扫码'; btn.classList.add('on'); }
-  _isbnLiveTools=tools;
   loadScript(ISBN_QRCODE_SRC).then(function(){
     if (_isbnLiveTools!==tools) return;                 /* 加载期间已被取消 */
     var reader=tools.querySelector('.isbn-reader');
@@ -9575,6 +9647,23 @@ function startInlineIsbnScan(tools){
     });
   }).catch(function(){
     if (msgEl) msgEl.textContent='扫码库加载失败（需联网），请改用「照片识别」或书名搜索';
+  });
+}
+/* v79：入口分发 —— 先尝试「快速通道」（系统原生 BarcodeDetector，或 iOS 上的 wasm polyfill），
+   成功接管就走这条（速度最快）；若设备不支持 / 加载失败，自动回落到 html5-qrcode（慢但兼容性最好）。 */
+function startInlineIsbnScan(tools){
+  if (_isbnLiveScanner || _isbnLiveStop) stopInlineIsbnScan();   /* 先清掉上一次残留，避免叠摄像头 */
+  _isbnLiveTools=tools;
+  var live=tools.querySelector('.isbn-live');
+  if (live) live.hidden=false;
+  var msgEl=tools.querySelector('.isbn-live-msg');
+  if (msgEl) msgEl.textContent='正在启动摄像头…';
+  startFastIsbnScan(tools).then(function(used){
+    if (_isbnLiveTools!==tools) return;        /* 期间已被取消 */
+    if (used) return;                          /* 快速通道已接管（含自身收尾逻辑） */
+    startHtml5IsbnScan(tools);                 /* 落到 html5-qrcode 兜底 */
+  }).catch(function(){
+    if (_isbnLiveTools===tools) startHtml5IsbnScan(tools);
   });
 }
 /* 识别到内容：归一化成 ISBN → 填进 ISBN 框 → 停止扫码 → 自动查书填表 */
