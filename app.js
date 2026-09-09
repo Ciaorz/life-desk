@@ -9205,6 +9205,11 @@ function parseDoubanMarkdown(txt){
     if (any) out.封面=String(any[0]).replace(/\/s\/public\//,'/l/public/');
   }
   if (!out.名称) return null;
+  /* v80：豆瓣/代理返回错误页（被限流、书不存在、网络异常）时，标题常是「出现了一个问题」
+     「页面不存在」之类，若当书名填进表单会污染书名。错误页几乎没有任何书目元数据，
+     据此 + 标题哨兵词双重拒绝。 */
+  if (/出现了一个问题|出现问题|页面不存在|访问被拒绝|请求过于频繁|无法访问|网络异常|Not Found|Error|Bad Gateway|Gateway Timeout|502|503|429/i.test(out.名称)) return null;
+  if (!(out.作者 || out.出版社 || out.出版年 || out.ISBN || out.豆瓣评分)) return null;
   out._src='豆瓣';
   return out;
 }
@@ -9231,6 +9236,9 @@ function parseDoubanHTML(html){
   }
   var rat=doc.querySelector('[property="v:average"]');
   if (rat) out.豆瓣评分=String(rat.textContent||'').trim();
+  /* v80：错误页（限流/不存在）标题会是「出现了一个问题」等，且无任何书目元数据，直接拒绝 */
+  if (/出现了一个问题|出现问题|页面不存在|访问被拒绝|请求过于频繁|无法访问|网络异常|Not Found|Error|Bad Gateway|Gateway Timeout/i.test(out.名称)) return null;
+  if (!(out.作者 || out.出版社 || out.出版年 || out.ISBN)) return null;
   return out;
 }
 function lookupDouban(isbn, cb){
@@ -9251,17 +9259,63 @@ function lookupDouban(isbn, cb){
     })
     .catch(function(){ clearTimeout(timer); cb(null); });
 }
+/* v80：带超时的 fetch —— 国内直连 Open Library 经常慢/卡住，加 9s 超时让兜底链尽快推进 */
+function _fetchTimeout(url, ms){
+  var ctrl=null, id=null;
+  var opts={ cache:'no-store' };
+  if (typeof AbortController==='function'){
+    ctrl=new AbortController();
+    opts.signal=ctrl.signal;
+    id=setTimeout(function(){ try{ ctrl.abort(); }catch(e){} }, ms||9000);
+  }
+  return fetch(url, opts).then(function(r){ if(id) clearTimeout(id); return r; })
+                          .catch(function(e){ if(id) clearTimeout(id); throw e; });
+}
 function _olJSON(url){
-  return fetch(url, { cache:'no-store' }).then(function(r){ return (r && r.ok) ? r.json() : null; });
+  return _fetchTimeout(url, 9000)
+    .then(function(r){ return (r && r.ok) ? r.json() : null; })
+    .catch(function(){ return null; });
+}
+/* v80：书籍查询结果本地缓存（localStorage），重复查同一本书/同一书名秒回，避免每次都走慢网络 */
+var BOOK_CACHE_KEY='lifedesk_bookcache_v1';
+function bookCacheGet(key){
+  try{
+    var raw=localStorage.getItem(BOOK_CACHE_KEY); if(!raw) return null;
+    var m=JSON.parse(raw); var v=m[key];
+    if(!v) return null;
+    if (v._exp && v._exp < Date.now()) return null;
+    return v;
+  }catch(e){ return null; }
+}
+function bookCacheSet(key, val){
+  try{
+    var raw=localStorage.getItem(BOOK_CACHE_KEY);
+    var m=raw?JSON.parse(raw):{};
+    val._exp=Date.now()+1000*60*60*24*30;   /* 缓存 30 天 */
+    m[key]=val;
+    var ks=Object.keys(m);
+    if (ks.length>400){ delete m[ks[0]]; }     /* 控制体积：最多 ~400 条 */
+    localStorage.setItem(BOOK_CACHE_KEY, JSON.stringify(m));
+  }catch(e){}
 }
 function lookupBookByISBN(isbn, cb){
+  isbn=normIsbn(String(isbn||''));
+  if (!isbn){ cb(null); return; }
+  /* 缓存优先：同一本书第二次查直接秒回（扫码/书名搜索都受益） */
+  var ckey='isbn:'+isbn;
+  var cached=bookCacheGet(ckey);
+  if (cached){ cb(cached); return; }
+
   var out={ ISBN:isbn, _src:'' };
   var edURL='https://openlibrary.org/isbn/'+encodeURIComponent(isbn)+'.json';
   var bkURL='https://openlibrary.org/api/books?bibkeys=ISBN:'+encodeURIComponent(isbn)+'&format=json&jscmd=data';
-  Promise.all([
-    _olJSON(edURL).catch(function(){ return null; }),
-    _olJSON(bkURL).catch(function(){ return null; })
-  ]).then(function(pair){
+  var settled=false, olDone=false, dbDone=false;
+  function done(book){
+    if (settled) return; settled=true;
+    if (book && book['名称']) bookCacheSet(ckey, book);   /* 命中即缓存，下次秒回 */
+    cb(book);
+  }
+  function mergeOL(pair){
     var ed=pair[0], bk=pair[1] && pair[1]['ISBN:'+isbn];
     var title='', pub='', year='', cover='', authors=[];
     if (ed && ed.title){
@@ -9280,29 +9334,53 @@ function lookupBookByISBN(isbn, cb){
     if (title){
       out._src='Open Library';
       out.名称=title; out.作者=authors.join(' / '); out.出版社=pub; out.出版年=year; out.封面=cover;
-      cb(out); return;
+      return true;
     }
-    /* ① ② 都不中 → 问豆瓣（中文书基本都能查到，但要走代理，可能要十几秒） */
-    lookupDouban(isbn, function(db){
-      if (db && db['名称']){ cb(db); return; }
-      /* 最后才是 Open Library 搜索 → Google Books */
-      _olJSON('https://openlibrary.org/search.json?q=isbn:'+encodeURIComponent(isbn)+'&fields=title,author_name,publish_date,publisher,cover_i')
-        .catch(function(){ return null; })
-        .then(function(d){
-          var doc=d && d.docs && d.docs[0];
-          if (doc && (doc.title || (doc.author_name && doc.author_name.length))){
-            var y3=''; if (doc.publish_date){ var m3=String(doc.publish_date[0]||'').match(/\d{4}/); if(m3) y3=m3[0]; }
-            var c3=doc.cover_i ? ('https://covers.openlibrary.org/b/id/'+doc.cover_i+'-L.jpg') : '';
-            out._src='Open Library 搜索';
-            out.名称=String(doc.title||'').trim();
-            out.作者=(doc.author_name||[]).join(' / ');
-            out.出版社=(doc.publisher&&doc.publisher[0])||'';
-            out.出版年=y3; out.封面=c3;
-            cb(out); return;
-          }
-          lookupGB(isbn, cb);      /* 兜底：Google Books（国内基本不可达，且常 429） */
-        });
-    });
+    return false;
+  }
+  /* ①② 与豆瓣都未命中，才走最后的 Open Library 搜索 → Google Books（避免 GB 先返回 null 把还在飞的豆瓣结果挤掉） */
+  function maybeFallback(){
+    if (settled || !olDone || !dbDone) return;
+    _olJSON('https://openlibrary.org/search.json?q=isbn:'+encodeURIComponent(isbn)+'&fields=title,author_name,publish_date,publisher,cover_i')
+      .catch(function(){ return null; })
+      .then(function(d){
+        if (settled) return;
+        var doc=d && d.docs && d.docs[0];
+        if (doc && (doc.title || (doc.author_name && doc.author_name.length))){
+          var y3=''; if (doc.publish_date){ var m3=String(doc.publish_date[0]||'').match(/\d{4}/); if(m3) y3=m3[0]; }
+          var c3=doc.cover_i ? ('https://covers.openlibrary.org/b/id/'+doc.cover_i+'-L.jpg') : '';
+          out._src='Open Library 搜索';
+          out.名称=String(doc.title||'').trim();
+          out.作者=(doc.author_name||[]).join(' / ');
+          out.出版社=(doc.publisher&&doc.publisher[0])||'';
+          out.出版年=y3; out.封面=c3;
+          done(out); return;
+        }
+        lookupGB(isbn, done);      /* 兜底：Google Books（国内基本不可达，且常 429） */
+      });
+  }
+
+  /* v80：豆瓣与 Open Library ①② 并行启动 —— 中文书 Open Library 常查不到，
+     原来要等 OL ①② 都回来才去问豆瓣（代理首访 13–20s），整体被拉长。
+     现在豆瓣同时跑：OL 命中就秒回；OL 不中时豆瓣已在飞，不再额外排队。 */
+  lookupDouban(isbn, function(db){
+    dbDone=true;
+    if (db && db['名称']) done(db);     /* 豆瓣命中直接返回（错误页已被解析器拒绝，不会到这里） */
+    else maybeFallback();
+  });
+  /* v81：京东（中文书封面最全），与豆瓣并行；只有前面的源都没命中时才采用，避免慢通道盖掉快结果 */
+  lookupJDByISBN(isbn, function(jd){
+    if (jd && jd['名称'] && !settled) done(jd);
+  });
+
+  Promise.all([
+    _olJSON(edURL).catch(function(){ return null; }),
+    _olJSON(bkURL).catch(function(){ return null; })
+  ]).then(function(pair){
+    olDone=true;
+    if (settled) return;
+    if (mergeOL(pair)){ done(out); return; }   /* Open Library ①② 命中 */
+    maybeFallback();
   });
 }
 function mapOL(doc, isbn){
@@ -9317,12 +9395,67 @@ function mapOL(doc, isbn){
 }
 function lookupGB(isbn, cb){
   var url='https://www.googleapis.com/books/v1/volumes?q=isbn:'+encodeURIComponent(isbn);
-  fetch(url).then(function(r){ return r.ok?r.json():null; }).then(function(d){
+  _fetchTimeout(url, 9000).then(function(r){ return r.ok?r.json():null; }).catch(function(){ return null; }).then(function(d){
     var v=d&&d.items&&d.items[0]&&d.items[0].volumeInfo;
     if(!v||!v.title){ cb(null); return; }
     var pd=v.publishedDate||'', yr=(pd.match(/\d{4}/)||[''])[0];
     cb({ 名称:v.title, 作者:(v.authors||[]).join(' / '), 出版社:v.publisher||'', 出版年:yr, ISBN:isbn });
   }).catch(function(){ cb(null); });
+}
+/* v81：京东源（中文书封面最全、元数据也较全）。
+   京东 search/商品页是 JS 渲染 + 反爬验证墙，纯文本代理(r.jina.ai)拿不到商品页。
+   只有把「同步设置」里的代理指向「能执行 JS 的渲染代理」(见 proxy-worker.js 的渲染模式) 才能拿到页面；
+   代理不是 JS 渲染型时，下面函数会安静返回 null/[]，不拖慢主流程。 */
+function _jdText(target){
+  var px=bookProxy(); if(!px) return Promise.resolve(null);
+  var url=(px.charAt(px.length-1)==='/')?(px+target):(px+encodeURIComponent(target));
+  return _fetchTimeout(url, 12000).then(function(r){ return (r&&r.ok)?r.text():null; }).catch(function(){ return null; });
+}
+function _cleanJD(s){ return String(s||'').replace(/\s+/g,' ').replace(/【.*?】|（.*?）|\(.*?\)/g,'').replace(/^(京东|JD|自营|旗舰店)\s*/,'').trim(); }
+function _jdParseProduct(html){
+  if(!html) return null;
+  try{
+    var doc=new DOMParser().parseFromString(html,'text/html');
+    var img=doc.querySelector('meta[property="og:image"]'); img=img?String(img.getAttribute('content')||'').trim():'';
+    var ti=doc.querySelector('meta[property="og:title"]'); ti=ti?String(ti.getAttribute('content')||'').trim():'';
+    if(!img && !ti) return null;
+    var out={ 名称:_cleanJD(ti), 封面:img, _src:'京东' };
+    var body=doc.body?doc.body.textContent:''; var m;
+    if((m=/作者[:：]\s*([^\n;{]+)/.exec(body))) out.作者=_cleanJD(m[1]);
+    if((m=/出版社[:：]\s*([^\n;{]+)/.exec(body))) out.出版社=_cleanJD(m[1]);
+    if((m=/出版[年时间日期][:：]\s*(\d{4})/.exec(body))) out.出版年=m[1];
+    return out;
+  }catch(e){ return null; }
+}
+function _jdSkus(html, n){
+  var set=[], re=/item\.jd\.com\/(\d+)\.html/g, mm;
+  while((mm=re.exec(html||'')) && set.length<(n||4)){ if(set.indexOf(mm[1])<0) set.push(mm[1]); }
+  return set;
+}
+function lookupJDByISBN(isbn, cb){
+  _jdText('https://search.jd.com/Search?keyword='+encodeURIComponent(isbn)+'&enc=utf-8')
+    .then(function(h){
+      var skus=_jdSkus(h,1);
+      if(!skus.length){ cb(null); return; }
+      return _jdText('https://item.jd.com/'+skus[0]+'.html');
+    })
+    .then(function(ph){ cb(_jdParseProduct(ph)); })
+    .catch(function(){ cb(null); });
+}
+function lookupJDByTitle(q, cb){
+  _jdText('https://search.jd.com/Search?keyword='+encodeURIComponent(q)+'&enc=utf-8')
+    .then(function(h){
+      var skus=_jdSkus(h,4);
+      if(!skus.length){ cb([]); return; }
+      var list=[], got=0;
+      skus.forEach(function(s){
+        _jdText('https://item.jd.com/'+s+'.html')
+          .then(function(ph){ var b=_jdParseProduct(ph); if(b) list.push(b); })
+          .catch(function(){})
+          .then(function(){ if(++got===skus.length){ cb(list.slice(0,6)); } });
+      });
+    })
+    .catch(function(){ cb([]); });
 }
 /* v65：把查到的书直接填进「当前这张表」，不重开表单——
    用户可能已经填了一半（存放位置、价格、标签），重开会全丢。 */
@@ -9720,11 +9853,26 @@ function decodeBookPhotoInline(tools, file){
 }
 /* ---------- v77：按书名搜索（ISBN 扫不到时的兜底）---------- */
 function lookupBookByTitle(q, cb){
+  var key='title:'+String(q||'').trim().toLowerCase();
+  var cached=bookCacheGet(key);
+  if (cached){ cb(cached); return; }            /* 同书名秒回 */
   var url='https://openlibrary.org/search.json?q='+encodeURIComponent(q)+
           '&fields=title,author_name,first_publish_year,publisher,isbn,cover_i&limit=15';
+  var olList=[], jdList=[], done2=0;
+  function finish(){
+    if (++done2<2) return;
+    /* 合并：Open Library 在前，京东补充（去重，按书名） */
+    var seen={}, list=[];
+    olList.concat(jdList).forEach(function(b){
+      var nk=String(b['名称']||'').trim().toLowerCase();
+      if (!nk || seen[nk]) return; seen[nk]=1; list.push(b);
+    });
+    list=list.slice(0,14);
+    if (list.length) bookCacheSet(key, list);   /* 只缓存有结果者，避免把瞬时网络失败记 30 天 */
+    cb(list);
+  }
   _olJSON(url).then(function(d){
     var docs=(d && d.docs) || [];
-    var list=[];
     docs.forEach(function(doc){
       var t=String(doc.title||'').trim();
       if (!t) return;
@@ -9732,7 +9880,7 @@ function lookupBookByTitle(q, cb){
       if (doc.isbn && doc.isbn.length){
         for (var i=0;i<doc.isbn.length;i++){ var n=normIsbn(doc.isbn[i]); if (n){ isbn=n; break; } }
       }
-      list.push({
+      olList.push({
         名称: t,
         作者: (doc.author_name||[]).slice(0,3).join(' / '),
         出版社: (doc.publisher && doc.publisher[0]) || '',
@@ -9741,8 +9889,11 @@ function lookupBookByTitle(q, cb){
         封面: doc.cover_i ? ('https://covers.openlibrary.org/b/id/'+doc.cover_i+'-L.jpg') : ''
       });
     });
-    cb(list.slice(0,12));
-  }).catch(function(){ cb([]); });
+    olList=olList.slice(0,12);
+    finish();
+  }).catch(function(){ finish(); });
+  /* v81：京东补充（中文书封面最全）；代理不是 JS 渲染型时安静返回 [] */
+  lookupJDByTitle(q, function(jl){ jdList=jl||[]; finish(); });
 }
 function doTitleSearch(tools){
   var qEl=tools.querySelector('.isbn-title-q');
