@@ -6577,26 +6577,26 @@ function render(){
     act += '<button class="btn ghost sm" type="button" data-act="golib">图库管理</button>';
     act += '<button class="btn ghost sm'+(ui.showCharge?' on':'')+'" type="button" data-act="togglecharge">充电量</button>';
     act += '<button class="btn ghost sm" type="button" data-act="brand">外观</button>';
-    act += '<button class="btn ghost sm" type="button" data-act="reloadall">重新拉取</button>';
+    act += '<button class="btn ghost sm" type="button" data-act="reloadall" title="重新拉取" aria-label="重新拉取">⟳</button>';
   } else if (key==='library'){
     act += '<button class="btn ghost sm" type="button" data-act="go" data-key="overview">← 返回总览</button>';
     act += '<button class="btn ghost sm" type="button" data-act="librebuild">校验并重建索引</button>';
     act += '<button class="btn ghost sm" type="button" data-act="libreload">刷新</button>';
   } else {
     if (key==='food'){
-      act += '<button class="btn primary" type="button" data-act="add" data-key="food">+ '+esc(MODS.food.addLabel)+'</button>';
-      act += '<button class="btn primary" type="button" data-act="add" data-key="recipe">+ '+esc(MODS.recipe.addLabel)+'</button>';
+      act += '<button class="btn primary" type="button" data-act="add" data-key="food">+</button>';
+      act += '<button class="btn primary" type="button" data-act="add" data-key="recipe">+</button>';
       act += '<button class="btn ghost sm" type="button" data-act="foodstars">星级榜</button>';
     } else if (key==='av'){
-      act += '<button class="btn primary" type="button" data-act="avaddmovie">+ 添加赏戏</button>';
-      act += '<button class="btn primary" type="button" data-act="avaddmusic">+ 添加留音</button>';
+      act += '<button class="btn primary" type="button" data-act="avaddmovie">+</button>';
+      act += '<button class="btn primary" type="button" data-act="avaddmusic">+</button>';
       act += '<button class="btn ghost sm" type="button" data-act="avstars">星级榜</button>';
     } else if (key==='study'){
       act += '<button class="btn primary" type="button" data-act="bookadd">+ 书籍</button>';
       act += '<button class="btn primary" type="button" data-act="magadd">+ 杂志</button>';
       act += '<button class="btn primary" type="button" data-act="studyadd">+ 学习计划</button>';
     } else {
-      act += '<button class="btn primary" type="button" data-act="add" data-key="'+key+'">+ '+esc(m.addLabel)+'</button>';
+      act += '<button class="btn primary" type="button" data-act="add" data-key="'+key+'">+</button>';
     }
     if (key==='collection'){
       act += '<button class="btn ghost sm" type="button" data-act="locmgr">存储地点</button>';
@@ -6605,7 +6605,7 @@ function render(){
     if (key==='travel'){
       act += '<button class="btn primary" type="button" data-act="addcheckin">+ 打卡点</button>';
     }
-    act += '<button class="btn ghost sm" type="button" data-act="reload" data-key="'+key+'">重新拉取</button>';
+    act += '<button class="btn ghost sm" type="button" data-act="reload" data-key="'+key+'" title="重新拉取" aria-label="重新拉取">⟳</button>';
     /* v69：六大页面统一「页面管理」入口 */
     if (['collection','av','travel','food','study','idea'].indexOf(key)>=0){
       act += '<button class="btn ghost sm" type="button" data-act="pagemgmt" data-mk="'+key+'">⚙<span class="pm-label"> 页面管理</span></button>';
@@ -11328,7 +11328,7 @@ function renderCollectionMuseum(){
     var subNames=Object.keys(subs);
     var h2='<div class="museum">'+
       ''+
-      '<div class="museum-crumb"><button class="r-back" data-act="mback">← 返回展厅</button>'+
+      '<div class="museum-crumb"><button class="r-back" data-act="mback">← <span class="back-txt">返回展厅</span></button>'+
         '<h2>'+esc(cat)+'</h2><span>'+items.length+' 件 · '+subNames.length+' 个展柜</span></div>'+
       '<div class="museum-grid">';
     subNames.forEach(function(sub){
@@ -11355,11 +11355,12 @@ function renderCollectionMuseum(){
   /* 第 3 层：展柜内部 —— v58：序号排序 + 系列分组 + 按年份折叠 + 分页 */
   var sub=f.sub;
   var all=sortByNum(s.rows.filter(function(r){ return r['大类']===cat && (r['小类']||'未分类')===sub; }), f.numOrder);
-  var h3='<div class="museum">'+
-    ''+
-    '<div class="museum-crumb"><button class="r-back" data-act="mback">← 返回 '+esc(cat)+' 展厅</button>'+
-      '<h2>'+esc(cat)+' · '+esc(sub)+'</h2><span>'+all.length+' 件</span></div>'+
-    numOrderSeg(f.numOrder,'collnum','序号', f.yearView, 'collyear');
+    var h3='<div class="museum">'+
+      '<div class="crumb-row">'+
+      '<div class="museum-crumb"><button class="r-back" data-act="mback">← <span class="back-txt">返回 '+esc(cat)+' 展厅</span></button>'+
+        '<h2>'+esc(cat)+' · '+esc(sub)+'</h2><span>'+all.length+' 件</span></div>'+
+      numOrderSeg(f.numOrder,'collnum','#', f.yearView, 'collyear')+
+      '</div>';
   if(!all.length){
     h3+=emptyHTML('这个展柜还空着','点右上角「添加藏品」放一件进来。')+'</div>';
     return h3;
@@ -11460,7 +11461,7 @@ function renderAVHall(){
   if (f.stars){
     var srows=byQ(s.rows.slice()).sort(function(a,b){ return num(b['星级'])-num(a['星级']); });
     var hs='<div class="avhall">'+
-      '<div class="museum-crumb"><button class="r-back" data-act="avstarsback">← 返回大厅</button>'+
+      '<div class="museum-crumb"><button class="r-back" data-act="avstarsback">← <span class="back-txt">返回大厅</span></button>'+
       '<h2>星级榜</h2><span>'+srows.length+' 部</span></div>';
     if (!srows.length){ hs += emptyHTML('还没有影音','点右上角「添加赏戏 / 留音」。')+'</div>'; return hs; }
     hs += '<div class="star-list" style="position:relative;z-index:2;padding:6px 30px 46px">'+
@@ -11483,7 +11484,7 @@ function renderAVHall(){
       return dstr(b['完成日期']||b['购入日期']).localeCompare(dstr(a['完成日期']||a['购入日期']));
     });
     var hc = '<div class="avhall">'+
-      '<div class="museum-crumb"><button class="r-back" data-act="avback">← 返回大厅</button>'+
+      '<div class="museum-crumb"><button class="r-back" data-act="avback">← <span class="back-txt">返回大厅</span></button>'+
         '<h2>经典列表</h2><span>'+items.length+' 部</span></div>'+
       '<div style="position:relative;z-index:2;padding:6px 30px 0"><input class="search" id="q_av" autocomplete="off" placeholder="搜名称 / 导演 / 演员 / 简介 / 短评" value="'+esc(f.q)+'"></div>';
     if (!items.length){
@@ -11575,12 +11576,13 @@ function renderAVHall(){
   var sub=f.sub;
   var arr=sortByYear(byQ(s.rows.filter(function(r){ return r['大类']===cat && (r['小类']||'未分类')===sub; })), f.numOrder);
   var crumbTitle = (sub===cat) ? esc(cat) : esc(cat)+' · '+esc(sub);
-  var h3='<div class="avhall">'+
-    ''+
-    '<div class="museum-crumb"><button class="r-back" data-act="avback">← 返回 '+esc(cat)+' 大厅</button>'+
-      '<h2>'+crumbTitle+'</h2><span>'+arr.length+' 部</span></div>'+
-    numOrderSeg(f.numOrder,'avnum','年份', f.yearView, 'avyear')+
-    '<div style="display:flex;justify-content:center;position:relative;z-index:2;margin-top:14px;width:100%"><input class="search" id="q_av" autocomplete="off" placeholder="搜名称 / 导演 / 演员 / 简介 / 短评" value="'+esc(f.q)+'" style="width:min(360px,80vw)"></div>';
+    var h3='<div class="avhall">'+
+      '<div class="crumb-row">'+
+      '<div class="museum-crumb"><button class="r-back" data-act="avback">← <span class="back-txt">返回 '+esc(cat)+' 大厅</span></button>'+
+        '<h2>'+crumbTitle+'</h2><span>'+arr.length+' 部</span></div>'+
+      numOrderSeg(f.numOrder,'avnum','年份', f.yearView, 'avyear')+
+      '</div>'+
+      '<div class="av-search" style="display:flex;justify-content:center;position:relative;z-index:2;margin-top:14px;width:100%"><input class="search" id="q_av" autocomplete="off" placeholder="搜名称 / 导演 / 演员 / 简介 / 短评" value="'+esc(f.q)+'" style="width:min(360px,80vw)"></div>';
   if(!arr.length){
     h3+=emptyHTML('这个展柜还空着','点右上角「添加影音」放一部进来。')+'</div>';
     return h3;

@@ -2911,6 +2911,58 @@ input.search{margin-bottom:12px}
     letter-spacing: 6px;
   }
 
+  /* --- 6c. 展柜内部（藏品馆/影音厅）：面包屑 + 序号排序 + 按年份 + 缩放条 紧凑重排 --- */
+  /* 面包屑里的「返回」二字、首个面包屑的计数 span 在手机端隐藏，只留 ← 与标题 */
+  .museum-crumb .back-txt { display: none; }
+  .museum > .museum-crumb:first-child > span,
+  .crumb-row .museum-crumb > span { display: none; }
+
+  /* crumb-row：面包屑与序号排序/按年份同一行，放不下自动换行 */
+  .crumb-row {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: 8px 10px;
+    margin: 14px 0 0 14px;
+  }
+  .crumb-row .museum-crumb { margin: 0; }
+  .crumb-row .numseg { margin: 0 0 0 auto; }   /* 推到面包屑右侧；放不下整组换到下一行并靠右 */
+
+  /* 面包屑 / 序号排序组 / 缩放条：变小变扁、字号统一、间距紧凑 */
+  .crumb-row .museum-crumb {
+    padding: 6px 12px;
+    font-size: 12px;
+    letter-spacing: .5px;
+  }
+  .crumb-row .museum-crumb h2 {
+    font-size: 13px; letter-spacing: 2px; margin-left: 8px;
+  }
+  .crumb-row .numseg { gap: 5px; }
+  .crumb-row .numseg button {
+    padding: 6px 10px; font-size: 11.5px; letter-spacing: .5px;
+    border-radius: 999px;
+  }
+
+  /* cardzoombar 移到面包屑下一行、居右，不再吸顶右上角 */
+  .museum, .avhall { display: flex; flex-direction: column; }
+  .museum > .mcasewall, .museum > .museum-grid, .museum > .yeargroup, .museum > .pgbar,
+  .avhall > .mcasewall, .avhall > .star-list, .avhall > .avclassic-list,
+  .avhall > .av-search, .avhall > .pgbar { order: 2; }
+  .cardzoombar {
+    order: 1;
+    position: static;
+    align-self: flex-end;
+    margin: 6px 14px 0 0;
+    padding: 5px 10px;
+    gap: 5px;
+    border-radius: 999px;
+  }
+  .cardzoombar .zm { font-size: 13px; }
+  .cardzoombar input[type=range] { width: 90px; }
+
+  /* item-card 内容全部居中对齐 */
+  .mcasewall .item-card { align-items: center; text-align: center; }
+  .mcasewall .item-card .no, .mcasewall .item-card .ttl { text-align: center; }
+  .mcasewall { justify-content: center; }
+
   /* --- 6. 工具栏按钮多、窄屏排不开 --- */
   /* --- 6b. 拾纪本：手机端整体规则 --- */
   .studyroom.studyroom-notes .notes-layout {
