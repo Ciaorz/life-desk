@@ -9372,6 +9372,14 @@ function lookupBookByISBN(isbn, cb){
   lookupJDByISBN(isbn, function(jd){
     if (jd && jd['名称'] && !settled) done(jd);
   });
+  /* v82：芸台购（中文高校/教材书最全），与豆瓣并行；命中即采用 */
+  lookupYunByISBN(isbn, function(yb){
+    if (yb && yb['名称'] && !settled) done(yb);
+  });
+  /* v82：中国书网：站点屏蔽搜索，基本只兜底，安静失败 */
+  lookupSinoByISBN(isbn, function(sb){
+    if (sb && sb['名称'] && !settled) done(sb);
+  });
 
   Promise.all([
     _olJSON(edURL).catch(function(){ return null; }),
@@ -9457,6 +9465,88 @@ function lookupJDByTitle(q, cb){
     })
     .catch(function(){ cb([]); });
 }
+
+/* ===================== v82：新增两个中文书源 ===================== */
+/* 云图/芸台购（yuntaigo.com）：服务端渲染，经 r.jina.ai 转 markdown 后仍保留
+   recordid 链接、OSS 封面、编者/责编/出版社/年/价 文本，可直接解析。 */
+function _yunText(target){
+  var px=bookProxy(); if(!px) return Promise.resolve(null);
+  var url=(px.charAt(px.length-1)==='/')?(px+target):(px+encodeURIComponent(target));
+  return _fetchTimeout(url, 12000).then(function(r){ return (r&&r.ok)?r.text():null; }).catch(function(){ return null; });
+}
+function _yunClean(s){
+  return String(s||'').replace(/\s+/g,' ').replace(/\/{2,}/g,' / ').replace(/^(编者|责编)[:：]?/,'').trim();
+}
+function parseYunMarkdown(txt){
+  if (!txt) return [];
+  if (/没有找到|Error Page|索书号不存在|无相关/i.test(txt)) return [];
+  var books=[], re=/\*\s*\[!\[[^\]]*\]\(([^)\s]*oss-cn[^)\s]*)\)\]\(https?:\/\/[^)\s]*?book\.action\?recordid=([A-Za-z0-9]+)[^\n]*\)\s*\r?\n\s*###\s*\[([^\]]+)\]\(https?:\/\/[^)\s]*?book\.action\?recordid=\2[^\n]*\)\s*\r?\n\s*编者:([^\n]*)/g, m;
+  while((m=re.exec(txt))){
+    var cover=String(m[1]||'').split('?')[0];   /* 去掉 ?x-oss-process 缩略图参数，取原图 */
+    var book={ 名称:String(m[3]).trim(), 封面:cover, recordid:m[2], _src:'芸台购' };
+    var parts=String(m[4]).split('|');
+    var au=(parts[0]||'').replace(/^编者[:：]?/,''); if (au) book.作者=_yunClean(au);
+    var segs=(parts[1]||'').replace(/^责编[:：]?/,'').replace(/\/\//g,'、').split('/');
+    if (segs.length>1) book.出版社=String(segs[1]).trim();
+    if (segs.length>2){ var ym=segs[2].match(/\d{4}/); if(ym) book.出版年=ym[0]; }
+    if (segs.length>3){ var pm=segs[3].match(/[\d.]+/); if(pm) book.定价=pm[0]; }
+    if (book.名称) books.push(book);
+  }
+  return books;
+}
+function lookupYunByISBN(isbn, cb){
+  isbn=normIsbn(String(isbn||'')); if(!isbn){ cb(null); return; }
+  _yunText('https://www.yuntaigo.com/bookSearch.action?text='+encodeURIComponent(isbn))
+    .then(function(t){ var l=parseYunMarkdown(t); if(l&&l.length){ l[0].ISBN=isbn; cb(l[0]); } else cb(null); })
+    .catch(function(){ cb(null); });
+}
+function lookupYunByTitle(q, cb){
+  _yunText('https://www.yuntaigo.com/bookSearch.action?text='+encodeURIComponent(q))
+    .then(function(t){ cb(parseYunMarkdown(t)||[]); })
+    .catch(function(){ cb([]); });
+}
+/* 中国书网/中国高校教材图书网（sinobook.com.cn）：详情页经 r.jina.ai 中文正文正常、
+   解析质量高；但站点屏蔽了程序化搜索（ISBN/书名搜索均返回「没有找到」），
+   故仅作兜底/详情解析，命中率低时安静失败。 */
+function parseSinoMarkdown(txt){
+  if (!txt) return null;
+  if (/没有找到满足条件的书目|Error Page/i.test(txt)) return null;
+  /* jina 常把整页压成一行，字段用「Label：value Label：value」串排；
+     用「下一个字段标签」作为取值结束边界，避免抓到文末。
+     注意：作者/出版社在 jina 里常写成 markdown 链接 [名称](url)（无 Label：前缀），
+     故取值后只取第一个链接文本，避免把后面的「相关图书」等导航链接混进来。 */
+  var STOP='(?=\\s*(?:ISBN|责任编辑|作者|定价|版印次|开本|出版社|装订|出版日期|页数|分级|适用专业|类别|年度|季度|中图法分类|用途分类|读者分类|千字数|印刷日期|国家规划教材|省部级规划教材|入选重点出版项目|其他获奖项目|小团购|内容简介|作者简介|章节目录|书\\s*评|其\\s*它|相关评论|相关图书)\\s*[:：]|$)';
+  var get=function(label){
+    var m=new RegExp(label+'\\s*[:：]\\s*([\\s\\S]*?)'+STOP).exec(txt); if(!m) return '';
+    return String(m[1]).trim();
+  };
+  /* 作者/出版社在 jina 里常写成 [名称](url)，只取第一个链接文本，丢弃后面的「相关图书」等导航链接 */
+  var firstLink=function(s){ var m=/\[([^\]]+)\]\([^)]*\)/.exec(s||''); return m?String(m[1]).trim():(String(s||'').replace(/\s+/g,' ').trim()); };
+  var out={ _src:'中国书网' };
+  var nm=new RegExp('书名\\s*[:：]\\s*([\\s\\S]*?)'+STOP).exec(txt);
+  out.名称=nm?String(nm[1]).split('[')[0].replace(/\s+/g,' ').trim():'';   /* 截掉书名后的 [丛书](url) */
+  var im=/([0-9\-Xx]{10,17})/.exec(get('ISBN')); if(im) out.ISBN=im[1];
+  out.作者=firstLink(get('作者')); out.出版社=firstLink(get('出版社'));
+  var yr=get('出版日期')||get('出版时间'); var ym=yr&&yr.match(/\d{4}/); if(ym) out.出版年=ym[0];
+  var pm=get('定价')&&get('定价').match(/[\d.]+/); if(pm) out.定价=pm[0];
+  var cov=/https:\/\/[^)"'\s]*bkimg[^)"'\s]*\.(?:jpg|jpeg|png|webp)/i.exec(txt); if(cov) out.封面=cov[0];
+  if (!out.名称) return null;
+  if (/出现了一个问题|页面不存在|Error|Not Found|502|503/i.test(out.名称)) return null;
+  if (!(out.作者||out.出版社||out.出版年||out.ISBN)) return null;
+  return out;
+}
+function lookupSinoByISBN(isbn, cb){
+  isbn=normIsbn(String(isbn||'')); if(!isbn){ cb(null); return; }
+  _yunText('https://www.sinobook.com.cn/b2c/scrp/book.cfm?sFieldName=isbn&sKeyword='+encodeURIComponent(isbn))
+    .then(function(t){ cb(parseSinoMarkdown(t)); })
+    .catch(function(){ cb(null); });
+}
+function lookupSinoByTitle(q, cb){
+  _yunText('https://www.sinobook.com.cn/b2c/scrp/book.cfm?sFieldName=sname&sKeyword='+encodeURIComponent(q))
+    .then(function(t){ cb(parseSinoMarkdown(t)); })
+    .catch(function(){ cb(null); });
+}
+
 /* v65：把查到的书直接填进「当前这张表」，不重开表单——
    用户可能已经填了一半（存放位置、价格、标签），重开会全丢。 */
 function fillBookInPlace(book){
@@ -9858,12 +9948,14 @@ function lookupBookByTitle(q, cb){
   if (cached){ cb(cached); return; }            /* 同书名秒回 */
   var url='https://openlibrary.org/search.json?q='+encodeURIComponent(q)+
           '&fields=title,author_name,first_publish_year,publisher,isbn,cover_i&limit=15';
-  var olList=[], jdList=[], done2=0;
+  var olList=[], jdList=[], yunList=[], sinoList=[], done2=0, finished=false;
   function finish(){
-    if (++done2<2) return;
-    /* 合并：Open Library 在前，京东补充（去重，按书名） */
+    if (finished) return;
+    if (++done2<4) return;          /* Open Library、京东、芸台购、中国书网 四路并行，全部回才合并 */
+    finished=true;
+    /* 合并：Open Library 在前，京东、芸台购补充（去重，按书名） */
     var seen={}, list=[];
-    olList.concat(jdList).forEach(function(b){
+    olList.concat(jdList, yunList, sinoList).forEach(function(b){
       var nk=String(b['名称']||'').trim().toLowerCase();
       if (!nk || seen[nk]) return; seen[nk]=1; list.push(b);
     });
@@ -9894,6 +9986,9 @@ function lookupBookByTitle(q, cb){
   }).catch(function(){ finish(); });
   /* v81：京东补充（中文书封面最全）；代理不是 JS 渲染型时安静返回 [] */
   lookupJDByTitle(q, function(jl){ jdList=jl||[]; finish(); });
+  /* v82：芸台购（中文高校/教材书最全）并行补充；中国书网搜索被站方屏蔽，基本只兜底 */
+  lookupYunByTitle(q, function(yl){ yunList=yl||[]; finish(); });
+  lookupSinoByTitle(q, function(sl){ sinoList=sl||[]; finish(); });
 }
 function doTitleSearch(tools){
   var qEl=tools.querySelector('.isbn-title-q');
