@@ -132,7 +132,7 @@
 <!-- ===== three.js（外置）+ 地球标记内联图标 + 主应用 ===== -->
 <script defer src="three.min.js"></script>
 <script defer src="marker-icons.js"></script>
-<script defer src="app.js"></script>
+<script defer src="app.min.js" onerror="window.__APP_FALLBACK=true"></script>
 
 <!-- ===== Service Worker =====
   规则（v58 优化：开发期零缓存干扰，发布期保留离线/秒开）：
@@ -179,6 +179,31 @@
       }).catch(function(e){
         if (window.__fatalShow) window.__fatalShow('[SW] 注册失败（不影响页面打开）：' + (e && e.message ? e.message : e));
       });
+
+      // v83：SW 后台发现关键资源（app.min.js / style.css）有新版本时，静默刷新一次以加载新版。
+      // 页面侧加双重闸门（时间 + 次数），即使 SW 异常也绝不会陷入「重载死循环」。
+      navigator.serviceWorker.addEventListener('message', function (ev) {
+        var d = ev.data || {};
+        if (d.type !== 'SUBRES_UPDATED') return;
+        try {
+          var last = parseInt(sessionStorage.getItem('_subres_rl') || '0', 10);
+          var n = parseInt(sessionStorage.getItem('_subres_rl_n') || '0', 10);
+          var now = Date.now();
+          if (now - last > 8000 && n < 3) {     /* 至少隔 8 秒、且单会话最多 3 次 */
+            sessionStorage.setItem('_subres_rl', String(now));
+            sessionStorage.setItem('_subres_rl_n', String(n + 1));
+            window.location.reload();
+          }
+        } catch (e) { /* sessionStorage 不可用时忽略 */ }
+      });
+
+      // v83 保险：若 app.min.js 加载失败（部署时漏传），自动回退到未压缩的 app.js，避免白屏
+      if (window.__APP_FALLBACK) {
+        var fb = document.createElement('script');
+        fb.src = 'app.js';
+        fb.defer = true;
+        document.body.appendChild(fb);
+      }
     } else {
       // 调试/离线场景：清掉任何已安装的 SW，避免旧缓存继续作祟
       unregisterAll();
