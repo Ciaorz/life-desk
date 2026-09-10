@@ -638,7 +638,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .sidebar{display:none}
   .tabbar{display:flex}
   .main{margin-left:0;padding:0 16px 96px}
-  .topbar{padding:14px 0 12px;min-height:0}
+  .topbar{padding:10px 0 8px;min-height:0;background:linear-gradient(180deg,var(--paper) 55%,rgba(245,240,232,.9) 82%,rgba(245,240,232,0))}
   .panel{padding:17px;border-radius:19px}
   .notes{columns:2}
   /* v75fix：单列时必须把 span 复位，否则 span 2 / .q 会撑出隐式列把布局挤歪 */
@@ -728,7 +728,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
      · .avhall    影音厅
    拾纪页额外带第二个类 .studyroom.studyroom-notes，它的独立样式见下方
    「拾纪独立样式区」，本底壳的任何改动都可能被那边的复合选择器覆盖。       */
-.museum, .studyroom, .foodtwo, .avhall {
+.museum, .studyroom, .foodtwo, .avhall, .travelmod, .ideasky {
   position: relative;
   min-height: 100%;
   color: var(--ink);
@@ -764,6 +764,21 @@ input.search:focus{border-color:var(--accent);background:#fff}
 }
 .foodtwo::before {
   background-image: url("images/foodtwo.png");
+}
+
+/* 遐方坞：不再整页铺背景，而是分别铺在「目的地」「打卡点」两块面板里，透明度降低 */
+.travel-bg {
+  position: relative;
+  isolation: isolate;
+}
+.travel-bg::before {
+  content: "";
+  position: absolute; inset: 0;
+  border-radius: inherit;          /* 跟着面板圆角裁切，避免方角溢出 */
+  background: url("images/travel-bg.jpg") center / cover no-repeat;
+  opacity: 0.16;                   /* 低透明度，仅作底纹 */
+  z-index: -1;
+  pointer-events: none;
 }
 
 /* ============================================================
@@ -2236,10 +2251,8 @@ input.search:focus{border-color:var(--accent);background:#fff}
 /* --- 灵感捕捉 · 银河摄影（用户提供的真实银河照片 + 柔光星尘 · 鼠标悬停触发）--- */
 /* v58：主页背景——宽度铺满、图片完整显示（顶部对齐，不被裁切）；
    内容不足一屏时由图片高度撑起（约 56vw ≈ 16:9 背景图），再往下以深色延续 */
+/* v88：取消主页卡片化（圆角 / 外边距 / 阴影），背景整体平铺、不再被容器限制（仿手机端铺满效果） */
 .museum, .studyroom, .foodtwo, .avhall, .ideasky {
-  border-radius: 24px;
-  margin: 14px 14px 34px;
-  box-shadow: var(--shadow-1);
 }
 /* 背景图完整显示、永不被裁切：用 aspect-ratio 让容器高度跟随「自身宽度」，
    即使内容很短，容器也至少和 100% 宽度的背景图一样高（图片不变、不裁切）。
@@ -2268,20 +2281,15 @@ input.search:focus{border-color:var(--accent);background:#fff}
   background-position: top center;
   transform: none;
 }
-.ideasky {
-  border-radius: 24px;
+/* 灵思阁：星空作为「底部背景」（仿其它模块 ::before 写法，桌面/移动一致、且继承移动端 inset 下移） */
+.ideasky { min-height: max(100%, 60vw); }
+.ideasky::before {
+  content: "";
+  position: absolute; inset: 0; z-index: -2;
   background:
-    url("images/idea-sky.png") center top/100% auto no-repeat,
+    url("images/idea-sky.png") center top/cover no-repeat,
     radial-gradient(ellipse at center, #0a1232 0%, #050816 60%, #02030a 100%);
   background-blend-mode: normal, soft-light;
-}
-.ideasky {
-  position: relative; min-height: max(calc(100% - 48px), 52vw);
-  background:
-    url("images/idea-sky.png") center top/100% auto no-repeat,
-    radial-gradient(ellipse at center, #0a1232 0%, #050816 60%, #02030a 100%);
-  background-blend-mode: normal, soft-light;
-  overflow: hidden;
 }
 .ideasky::after {
   content: ""; position: absolute; inset: 0;
@@ -3154,7 +3162,7 @@ input.search{margin-bottom:12px}
   /* --- 10. 超小屏再收紧 --- */
   .mh h1, .st-head h1, .ft-head h1 { font-size: 24px; letter-spacing: 2px; }
   .mh p, .st-head p, .ft-head p { font-size: 9px; letter-spacing: 1px; }
-  .mh, .st-head, .ft-head { padding: 24px 12px 20px; }
+  .mh, .st-head, .ft-head { padding: 14px 12px 12px; }
   .sr-side-card{ height: 180px; border-radius: 12px; }
   .sr-side-title{ font-size: 17px; letter-spacing: 4px; }
   /* 超窄屏：每个 side 内 3 个展柜改 2 列，卡片更大更好点 */
@@ -3533,7 +3541,7 @@ input.search{margin-bottom:12px}
   /* 1) 顶栏增宽到满屏，与全屏背景蒙版同宽；文字保持 16px 与正文对齐 */
   .topbar{ margin: 8px 0 0; }
   /* 背景照片整体下移，在顶栏与照片之间留出 paper 间隙（美观） */
-  .museum::before, .foodtwo::before, .avhall::before, .studyroom:not(.studyroom-notes)::before{
+  .museum::before, .foodtwo::before, .avhall::before, .studyroom:not(.studyroom-notes)::before, .ideasky::before{
     inset: 92px 0 0 0;
   }
   /* 3) 遐方坞：想去 / 去过 / 打卡点 三框并排收窄 */

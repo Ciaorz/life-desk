@@ -5812,7 +5812,7 @@ function renderTravel(){
     '<div class="earth-panel"'+(f.mapTab==='map'?' hidden':'')+'><div id="globeSlot"></div></div>'+
     '<div class="map-panel"'+(f.mapTab!=='map'?' hidden':'')+'><div id="chinaMap" class="china-map"></div><div id="chinaTip" class="map-tip"></div><div id="mapCard" class="map-card" hidden></div></div>'+
     '</section>';
-  h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div class="panel-head"><div><h2>目的地</h2>'+
+  h += '<section class="panel travel-bg" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl"><div class="panel-head"><div><h2>目的地</h2>'+
     '<div class="hint">按状态和心愿等级排</div></div></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
     '<input class="search" autocomplete="off" id="q_travel" placeholder="搜地点 / 国家 / 地区 / 备注" value="'+esc(f.q)+'"></div>'+
@@ -5820,9 +5820,9 @@ function renderTravel(){
     '<button class="chip'+(f.status?'':' on')+'" type="button" data-act="f" data-k="status" data-v="">全部</button>'+
     ['想去','去过'].map(function(t){ return '<button class="chip'+(f.status===t?' on':'')+'" type="button" data-act="f" data-k="status" data-v="'+t+'">'+t+'</button>'; }).join('')+
     '</div>';
-  if (s.status==='loading'){ h += emptyHTML('正在读线上数据…',''); return h+'</section>'; }
-  if (s.status==='error'){ h += emptyHTML('没能读到数据','点上面的「重试」再拉一次。'); return h+'</section>'; }
-  if (!rows.length){ h += emptyHTML(s.rows.length?'没有符合筛选的条目':'还没有目的地','想去哪儿，先记一笔。'); return h+'</section>'; }
+  if (s.status==='loading'){ h += emptyHTML('正在读线上数据…',''); return '<div class="travelmod">'+h+'</section></div>'; }
+  if (s.status==='error'){ h += emptyHTML('没能读到数据','点上面的「重试」再拉一次。'); return '<div class="travelmod">'+h+'</section></div>'; }
+  if (!rows.length){ h += emptyHTML(s.rows.length?'没有符合筛选的条目':'还没有目的地','想去哪儿，先记一笔。'); return '<div class="travelmod">'+h+'</section></div>'; }
   h += '<div class="trips">'+rows.map(function(r){
     var cls = r['状态']==='去过'?'gone':'';
     var meta=[];
@@ -5853,7 +5853,7 @@ function renderTravel(){
         return ((r['地点名字']||'')+' '+(r['所属地点']||'')+' '+(r['省']||'')+' '+(r['国家']||'')+' '+(r['地区']||'')+' '+(r['城市景区']||'')+' '+(r['内容']||'')).toLowerCase().indexOf(ckq)>=0;
       });
     }
-    h += '<section class="panel"><div class="panel-head"><div><h2>打卡点</h2>'+
+    h += '<section class="panel travel-bg"><div class="panel-head"><div><h2>打卡点</h2>'+
          '<div class="hint">点一下卡片就能改 · 在地图「地图」模式里也能看</div></div>'+
          '<span class="muted">'+(ckq?ckShown.length+' / '+ckrows.length:ckrows.length+' 个')+'</span></div>'+
          '<div style="display:flex;gap:10px;margin-bottom:14px">'+
@@ -5876,7 +5876,7 @@ function renderTravel(){
     });
     h += '</div></section>';
   }
-  return h;
+  return '<div class="travelmod">'+h+'</div>';
 }
 
 
@@ -6761,6 +6761,7 @@ function render(){
       act += '<button class="btn primary" type="button" data-act="avaddmovie">+戏</button>';
       act += '<button class="btn primary" type="button" data-act="avaddmusic">+音</button>';
       act += '<button class="btn ghost sm" type="button" data-act="avstars">星级榜</button>';
+      act += '<button class="btn ghost sm" type="button" data-act="avclassic">经典列表</button>';
     } else if (key==='study'){
       act += '<button class="btn primary" type="button" data-act="bookadd">+ 书籍</button>';
       act += '<button class="btn primary" type="button" data-act="magadd">+ 杂志</button>';
@@ -12291,9 +12292,7 @@ function renderAVHall(){
       '<div class="mh">'+
         '<h1>影 音 厅</h1>'+
         '<p>O P E R A   H O U S E · A U D I O   &   V I S U A L</p>'+
-        '<button class="r-btn" style="margin-top:18px;margin-right:12px" data-act="avclassic">经典列表</button>'+
-        '<button class="r-btn" style="margin-top:18px" data-act="avstars">星级榜</button>'+
-        '<div style="display:flex;justify-content:center;position:relative;z-index:2;margin-top:16px;width:100%"><input class="search" id="q_av" autocomplete="off" placeholder="搜名称 / 导演 / 演员 / 简介 / 短评" value="'+esc(f.q)+'" style="width:min(360px,80vw)"></div>'+
+        '<div style="display:flex;justify-content:center;position:relative;z-index:2;margin-top:10px;width:100%"><input class="search" id="q_av" autocomplete="off" placeholder="搜名称 / 导演 / 演员 / 简介 / 短评" value="'+esc(f.q)+'" style="width:min(360px,80vw)"></div>'+
       '</div>'+
       '<div class="museum-floor">'+
         '<div class="museum-side left">'+
