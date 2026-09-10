@@ -493,16 +493,18 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .starsel button{border:0;background:transparent;font-size:21px;line-height:1;cursor:pointer;color:#d8cec0;padding:0 1px}
 .starsel button.on{color:var(--sand)}
 .heartsel{display:flex;gap:4px;align-items:center;min-height:42px}
-.heart-btn{position:relative;display:inline-block;width:24px;height:24px;cursor:pointer}
-.heart-btn .hheart{position:absolute;inset:0;font-size:22px;line-height:24px;text-align:center;color:#f3e2e6;pointer-events:none}
+.heart-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;cursor:pointer}
+.heart-btn .hheart{position:relative;display:inline-block;font-size:22px;line-height:24px;text-align:center;color:rgba(255,143,163,.32);pointer-events:none;font-variant-emoji:text}
 .heart-btn .hheart.on{color:#ff8fa3}
-.heart-btn .hheart.half{background:linear-gradient(90deg,#ff8fa3 50%,#f3e2e6 50%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.heart-btn .hheart.half{color:rgba(255,143,163,.32)}
+.heart-btn .hheart i{display:none}
+.heart-btn .hheart.half i{position:absolute;left:0;top:0;overflow:hidden;width:.5em;color:#ff8fa3;display:inline-block}
 .heart-btn .hit{position:absolute;top:0;bottom:0;width:50%;border:0;background:transparent;cursor:pointer;z-index:2;padding:0;margin:0}
 .heart-btn .hit.left{left:0}
 .heart-btn .hit.right{right:0}
-.hheart{position:relative;display:inline-block;font-size:12px;color:#f3e2e6;letter-spacing:1px}
+.hheart{position:relative;display:inline-block;font-size:12px;color:rgba(255,143,163,.32);letter-spacing:1px;font-variant-emoji:text}
 .hheart.on{color:#ff8fa3}
-.hheart.half{color:#f3e2e6}
+.hheart.half{color:rgba(255,143,163,.32)}
 .hheart.half i{position:absolute;left:0;top:0;overflow:hidden;width:.5em;color:#ff8fa3;display:inline-block}
 .multisel{display:flex;gap:7px;flex-wrap:wrap}
 .multisel button{padding:6px 11px;border:1px solid var(--line);border-radius:999px;background:#fbf8f3;

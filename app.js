@@ -2661,9 +2661,9 @@ function stars(n){
 function heartPills(n){
   n = num(n); if (!n) return '';
   var o=''; for(var i=1;i<=5;i++){
-    if (n>=i) o+='<span class="hheart on">❤</span>';
-    else if (n>=i-0.5) o+='<span class="hheart half">❤<i>❤</i></span>';
-    else o+='<span class="hheart">❤</span>';
+    if (n>=i) o+='<span class="hheart on">♥</span>';
+    else if (n>=i-0.5) o+='<span class="hheart half">♥<i>♥</i></span>';
+    else o+='<span class="hheart">♥</span>';
   }
   return o;
 }
@@ -5054,7 +5054,7 @@ function renderCheckinNew(){
   for(var hi=1;hi<=5;hi++){
     var hcls = (heartV>=hi)?'on':((heartV>=hi-0.5)?'half':'');
     heartBody += '<span class="heart-btn" data-i="'+hi+'">'+
-      '<span class="hheart '+hcls+'">❤</span>'+
+      '<span class="hheart '+hcls+'">♥<i>♥</i></span>'+
       '<button type="button" class="hit left" data-i="'+(hi-0.5)+'" aria-label="'+(hi-0.5)+' 颗心"></button>'+
       '<button type="button" class="hit right" data-i="'+hi+'" aria-label="'+hi+' 颗心"></button>'+
       '</span>';
@@ -9229,7 +9229,7 @@ function fieldHTML(f, v){
     for(var i=1;i<=(f.max||5);i++){
       var cls = (hn>=i)?'on':((hn>=i-0.5)?'half':'');
       body+='<span class="heart-btn" data-i="'+i+'">'+
-        '<span class="hheart '+cls+'">❤</span>'+
+        '<span class="hheart '+cls+'">♥<i>♥</i></span>'+
         '<button type="button" class="hit left" data-i="'+(i-0.5)+'" aria-label="'+(i-0.5)+' 颗心"></button>'+
         '<button type="button" class="hit right" data-i="'+i+'" aria-label="'+i+' 颗心"></button>'+
         '</span>';
