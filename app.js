@@ -118,7 +118,7 @@ function utf8ToB64(str){
   return btoa(bin);
 }
 function ghFileUrl(){ return ghApiBase() + '/repos/' + GH.owner + '/' + GH.repo + '/contents/' + GH.path + '?ref=' + (GH.branch || 'main'); }
-var _ghSha = null, _ghCache = null, _ghLoading = null;
+var _ghSha = null, _ghCache = null, _ghLoading = null, _ghIncrSkip = 0;
 /* v60：一键「获取最新数据」时生成的临时戳；非空时给所有数据请求加 ?_=<戳> 缓存击穿参数，
    绕过 SW / 浏览器 HTTP 缓存，确保拉到服务器上的最新文件。 */
 var _forceFresh = 0;
@@ -1657,25 +1657,42 @@ async function ghStaticLoadV2(){
     idx = normalizeIndex(idx);   /* gh 静态直读也做一次结构自愈（修正书籍等分片路径、补齐分组标记），只读、不写盘 */
     var out = {};
     Object.keys(idx.__main || {}).forEach(function(mk){ out[mk] = (idx.__main[mk] || []).slice(); });
+
+    /* v83 优化：分片与实体文件改为【并发】抓取（Promise.all）。
+       原实现用 for + await 串行，~38 个文件要排队等 38 个往返；改为并发后，
+       首屏等待时间 ≈ 最慢单个文件，而非全部之和。先发全部请求，再统一合并，
+       合并逻辑与串行版本完全一致，行为不变。 */
+    var tasks = [];
     var cats = Object.keys(idx.shards || {});
     for (var i = 0; i < cats.length; i++){
-      var sh = idx.shards[cats[i]] || {};
-      if (sh.dirShard) continue;          /* ip/series 是目录分片，没有单一 file，改走下方 entityFiles 清单 */
-      var obj = await fetchJSONRel(dir + (sh.file || shardFileName(cats[i])));
-      if (!obj) continue;
-      var mk = sh.module || obj.module; if (!mk) continue;
-      if (!out[mk]) out[mk] = [];
-      out[mk] = out[mk].concat(obj.rows || []);
+      (function(c){
+        var sh = idx.shards[c] || {};
+        if (sh.dirShard) return;          /* ip/series 是目录分片，没有单一 file，改走下方 entityFiles 清单 */
+        tasks.push(
+          fetchJSONRel(dir + (sh.file || shardFileName(c))).then(function(obj){
+            return { mk: sh.module || (obj && obj.module), rows: obj && obj.rows };
+          })
+        );
+      })(cats[i]);
     }
     /* 目录分片（ip / series）：每个实体一个文件，静态托管又不能列目录，
        因此按主索引里的 entityFiles 清单逐个拉取这些文件并合并进对应模块。 */
     var ef = idx.entityFiles || [];
     for (var ei = 0; ei < ef.length; ei++){
-      var eo = await fetchJSONRel(dir + ef[ei]);
-      if (!eo || !eo.rows) continue;
-      var emk = eo.module; if (!emk) continue;
-      if (!out[emk]) out[emk] = [];
-      out[emk] = out[emk].concat(eo.rows || []);
+      (function(efp){
+        tasks.push(
+          fetchJSONRel(dir + efp).then(function(eo){
+            return { mk: eo && eo.module, rows: eo && eo.rows };
+          })
+        );
+      })(ef[ei]);
+    }
+    var results = await Promise.all(tasks);
+    for (var ri = 0; ri < results.length; ri++){
+      var r = results[ri];
+      if (!r || !r.mk || !r.rows) continue;
+      if (!out[r.mk]) out[r.mk] = [];
+      out[r.mk] = out[r.mk].concat(r.rows);
     }
     /* 图片相对路径在静态站点上可直接用，记录一下来源目录便于解析 */
     _staticImgBase = dir;
@@ -1731,6 +1748,28 @@ async function walkDirFiles(dirHandle, prefix, out){
   }
   return out;
 }
+/* 增量上传辅助：拉取 GitHub 上 data/images/ 的远端文件大小清单（path -> size）。
+   用 Git Trees API（recursive=1）一次性取整棵树，按前缀过滤成图片清单。
+   失败或返回被截断时返回空对象 → 调用方降级为全量上传，绝不丢文件。 */
+async function ghRemoteImageSizes(){
+  var m = {};
+  try {
+    var br = encodeURIComponent(GH.branch || 'main');
+    var url = ghApiBase() + '/repos/' + GH.owner + '/' + GH.repo + '/git/trees/' + br + '?recursive=1';
+    var r = await fetch(url, { headers: ghHeaders() });
+    if (!r.ok) return m;
+    var j = await r.json();
+    if (!j || !j.tree || j.truncated) return m;     /* 截断则放弃 diff，全量上传最安全 */
+    var prefix = (String(GH.path || '').replace(/[\\/][^\\/]*$/, '') || 'data') + '/' + IMG_DIR + '/';
+    for (var i = 0; i < j.tree.length; i++){
+      var e = j.tree[i];
+      if (e && e.type === 'blob' && typeof e.path === 'string' && e.path.indexOf(prefix) === 0){
+        m[e.path] = (typeof e.size === 'number') ? e.size : -1;
+      }
+    }
+  } catch(e){}
+  return m;
+}
 /* 收集本次需要上传的全部文件 */
 async function collectPushFiles(){
   var idx = await fsReadIndex();
@@ -1759,22 +1798,31 @@ async function collectPushFiles(){
       if (efObj) files.push({ path: dir + '/' + _efp, text: JSON.stringify(efObj, null, 2) });
     } catch(e){}
   }
-  /* 图片 */
+  /* 图片（增量上传：先拉远端 images 清单，仅上传「本地有而远端没有」或「大小变化」的图片，
+     未变更的封面直接跳过，避免每次全量重传几百 MB / 触发限流） */
+  _ghIncrSkip = 0;
   try {
     var imgDir = await _fsaGetDir([IMG_DIR], false);
     if (imgDir){
+      var remoteSizes = await ghRemoteImageSizes();
       var list = await walkDirFiles(imgDir, '', []);
       for (var j = 0; j < list.length; j++){
+        var rel = list[j].rel;
+        var rpath = dir + '/' + IMG_DIR + '/' + rel;
         var f = await list[j].handle.getFile();
-        files.push({ path: dir + '/' + IMG_DIR + '/' + list[j].rel, blob: f });
+        var rsz = remoteSizes[rpath];
+        if (rsz != null && rsz === f.size){ _ghIncrSkip++; continue; }   /* 远端已有且大小一致 → 跳过 */
+        files.push({ path: rpath, blob: f });
       }
+      if (_ghIncrSkip) console.log('[增量上传] 跳过未变更封面 ' + _ghIncrSkip + ' 张，仅上传新增/改动');
     }
   } catch(e){}
   return files;
 }
-/* 批量上传，带进度回调 onProgress(done, total) */
-async function ghPushAll(onProgress){
-  var files = await collectPushFiles();
+/* 批量上传，带进度回调 onProgress(done, total)。
+   若传入 files（已收集好的清单）则直接上传；否则先 collectPushFiles() 收集。 */
+async function ghPushAll(onProgress, files){
+  if (!files) files = await collectPushFiles();
   if (!files.length) return { ok:true, n:0 };
   var okCount = 0;
   for (var i = 0; i < files.length; i++){
@@ -1784,6 +1832,60 @@ async function ghPushAll(onProgress){
     if (onProgress) onProgress(i + 1, files.length, ok, f.path);
   }
   return { ok: okCount === files.length, n: files.length, okCount: okCount };
+}
+
+/* v84：上传前人工审核弹窗——列出本次要上传的文件清单，只有勾选的项才真正上传 */
+function showUploadReview(files, onConfirm){
+  if (!files || !files.length){ toast('没有需要上传的文件'); if (onConfirm) onConfirm(null); return; }
+  var ov = document.createElement('div');
+  ov.className = 'backdrop'; ov.style.zIndex = 300;
+  function rowHTML(f, i){
+    var sz = (f.blob && f.blob.size != null) ? f.blob.size : (f.text != null ? new Blob([f.text]).size : 0);
+    return '<label class="ur-row" style="display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:10px;cursor:pointer">'+
+      '<input type="checkbox" class="ur-cb" data-i="'+i+'" checked style="flex:0 0 auto;width:17px;height:17px;accent-color:var(--accent)">'+
+      '<span style="flex:1;min-width:0;font-size:12.5px;line-height:1.45;word-break:break-all;color:var(--ink)">'+esc(f.path)+'</span>'+
+      '<span style="flex:0 0 auto;color:var(--muted);font-size:11px;white-space:nowrap">'+fmtSize(sz)+'</span>'+
+    '</label>';
+  }
+  ov.innerHTML =
+    '<div class="sheet" style="max-width:520px">'+
+      '<div class="sheet-head"><div><p>上传前审核</p><h2>请勾选要上传的文件</h2></div></div>'+
+      '<div style="font-size:12.5px;color:var(--ink-soft);line-height:1.7;margin-bottom:10px">下面列出本次将上传到 GitHub 的文件（已按增量规则排除未变更的封面）。<b>只有勾选的项才会真正上传</b>，取消勾选即可跳过你不想传的文件。</div>'+
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">'+
+        '<button type="button" class="btn ghost sm" id="urAll">全选</button>'+
+        '<button type="button" class="btn ghost sm" id="urNone">全不选</button>'+
+        '<span id="urCount" style="margin-left:auto;font-size:12px;color:var(--muted)"></span>'+
+      '</div>'+
+      '<div id="urList" style="max-height:48vh;overflow-y:auto;border:1px solid var(--line);border-radius:12px;padding:6px;background:var(--card)"></div>'+
+      '<div class="sheet-actions">'+
+        '<button type="button" class="btn ghost" id="urCancel">取消</button>'+
+        '<button type="button" class="btn primary" id="urOk">确认上传</button>'+
+      '</div>'+
+    '</div>';
+  document.body.appendChild(ov);
+  var list = ov.querySelector('#urList');
+  list.innerHTML = files.map(rowHTML).join('');
+  function updateCount(){
+    var n = list.querySelectorAll('.ur-cb:checked').length;
+    var c = ov.querySelector('#urCount');
+    if (c) c.textContent = '已选 ' + n + ' / ' + files.length + ' 个';
+    var ok = ov.querySelector('#urOk');
+    if (ok) ok.textContent = '确认上传' + (n ? ' (' + n + ')' : '');
+  }
+  ov.querySelectorAll('.ur-cb').forEach(function(cb){ cb.addEventListener('change', updateCount); });
+  ov.querySelector('#urAll').onclick = function(){ list.querySelectorAll('.ur-cb').forEach(function(cb){ cb.checked = true; }); updateCount(); };
+  ov.querySelector('#urNone').onclick = function(){ list.querySelectorAll('.ur-cb').forEach(function(cb){ cb.checked = false; }); updateCount(); };
+  function close(){ try{ ov.remove(); }catch(e){} }
+  ov.onclick = function(e){ if (e.target === ov) close(); };
+  ov.querySelector('#urCancel').onclick = close;
+  ov.querySelector('#urOk').onclick = function(){
+    var sel = [];
+    list.querySelectorAll('.ur-cb').forEach(function(cb){ if (cb.checked) sel.push(files[Number(cb.getAttribute('data-i'))]); });
+    close();
+    if (!sel.length){ toast('未勾选任何文件，已取消上传'); if (onConfirm) onConfirm(null); return; }
+    if (onConfirm) onConfirm(sel);
+  };
+  updateCount();
 }
 
 /* 分片感知的 GitHub 保存（gh 模式、无本地文件时，如 iPhone 网页端）：
@@ -2483,13 +2585,22 @@ function addDataTools(){
   $('ghUpload').onclick = async function(){
     if (!GH || !GH.token){ $('ghHint').textContent = '请先在同步设置里保存并连接（粘贴有 repo 权限的 Token）'; return; }
     if (_shardMode && MODE === 'localfile'){
-      /* 分片模式：主索引 + 各类目 json + 图片，逐个推送 */
+      /* 分片模式：先统计要上传的文件，弹出人工审核清单，只有勾选的项才真正上传 */
       $('ghHint').textContent = '正在统计要上传的文件…';
-      var r = await ghPushAll(function(done, total, ok, path){
-        $('ghHint').textContent = '上传中 ' + done + '/' + total + '（' + path.split('/').pop() + '）' + (ok ? '' : ' ✗');
+      var files = await collectPushFiles();
+      if (!files.length){
+        $('ghHint').textContent = '没有需要上传的文件（云端已是最新）';
+        toast('没有需要上传的文件');
+        return;
+      }
+      showUploadReview(files, async function(sel){
+        if (!sel){ $('ghHint').textContent = '已取消上传'; return; }
+        var r = await ghPushAll(function(done, total, ok, path){
+          $('ghHint').textContent = '上传中 ' + done + '/' + total + '（' + path.split('/').pop() + '）' + (ok ? '' : ' ✗');
+        }, sel);
+        if (r.ok){ setGhStatus('synced'); $('ghHint').textContent = '已上传 ' + r.n + ' 个文件到 GitHub ✓' + (_ghIncrSkip ? '（另有 ' + _ghIncrSkip + ' 张未变更封面已跳过）' : ''); toast('已上传 ' + r.n + ' 个文件到云端' + (_ghIncrSkip ? '，跳过 ' + _ghIncrSkip + ' 张未变更' : '')); }
+        else { setGhStatus('failed'); $('ghHint').textContent = '上传完成 ' + r.okCount + '/' + r.n + '，部分失败（检查 Token / 网络）'; }
       });
-      if (r.ok){ setGhStatus('synced'); $('ghHint').textContent = '已上传 ' + r.n + ' 个文件到 GitHub ✓'; toast('已上传 ' + r.n + ' 个文件到云端'); }
-      else { setGhStatus('failed'); $('ghHint').textContent = '上传完成 ' + r.okCount + '/' + r.n + '，部分失败（检查 Token / 网络）'; }
       return;
     }
     $('ghHint').textContent = '上传中…';
@@ -2532,6 +2643,12 @@ function dstr(v){ if(!v) return ''; var s=String(v); return s.slice(0,10); }
 function ym(v){ return dstr(v).slice(0,7); }
 function yr(v){ return dstr(v).slice(0,4); }
 function num(v){ var n=Number(v); return isFinite(n)?n:0; }
+function fmtSize(n){
+  n = Number(n) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1024*1024) return (n/1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+  return (n/1024/1024).toFixed(2) + ' MB';
+}
 function hue(s){ var h=0; s=String(s||''); for(var i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))>>>0; } return h%360; }
 function stars(n){
   /* v58：支持半星显示——3.5 → ★★★½☆ */
@@ -2545,7 +2662,7 @@ function heartPills(n){
   n = num(n); if (!n) return '';
   var o=''; for(var i=1;i<=5;i++){
     if (n>=i) o+='<span class="hheart on">❤</span>';
-    else if (n>=i-0.5) o+='<span class="hheart half">❤</span>';
+    else if (n>=i-0.5) o+='<span class="hheart half">❤<i>❤</i></span>';
     else o+='<span class="hheart">❤</span>';
   }
   return o;
@@ -5681,7 +5798,7 @@ function renderTravel(){
   var h='<div class="strip">'+stripHTML('travel')+'</div>';
   var cnt={ '想去':0,'去过':0 };
   s.rows.forEach(function(r){ if(cnt[r['状态']]!=null) cnt[r['状态']]++; });
-  h += '<section class="panel"><div class="statgrid">'+
+  h += '<section class="panel"><div class="statgrid tstat">'+
     '<div class="stat"><u>🌱 想去</u><b>'+cnt['想去']+'</b><i>处</i></div>'+
     '<div class="stat"><u>🚩 去过</u><b>'+cnt['去过']+'</b><i>处</i></div>'+
     '<div class="stat clickable" data-act="addcheckin" title="在地图上标记一个打卡点"><u>📍 打卡点</u><b>'+checkinTotal()+'</b><i>个</i></div>'+
@@ -6637,17 +6754,21 @@ function render(){
     act += '<button class="btn ghost sm" type="button" data-act="libreload">刷新</button>';
   } else {
     if (key==='food'){
-      act += '<button class="btn primary" type="button" data-act="add" data-key="food">+</button>';
-      act += '<button class="btn primary" type="button" data-act="add" data-key="recipe">+</button>';
+      act += '<button class="btn primary" type="button" data-act="add" data-key="food">+美食</button>';
+      act += '<button class="btn primary" type="button" data-act="add" data-key="recipe">+菜谱</button>';
       act += '<button class="btn ghost sm" type="button" data-act="foodstars">星级榜</button>';
     } else if (key==='av'){
-      act += '<button class="btn primary" type="button" data-act="avaddmovie">+</button>';
-      act += '<button class="btn primary" type="button" data-act="avaddmusic">+</button>';
+      act += '<button class="btn primary" type="button" data-act="avaddmovie">+戏</button>';
+      act += '<button class="btn primary" type="button" data-act="avaddmusic">+音</button>';
       act += '<button class="btn ghost sm" type="button" data-act="avstars">星级榜</button>';
     } else if (key==='study'){
       act += '<button class="btn primary" type="button" data-act="bookadd">+ 书籍</button>';
       act += '<button class="btn primary" type="button" data-act="magadd">+ 杂志</button>';
       act += '<button class="btn primary" type="button" data-act="studyadd">+ 学习计划</button>';
+    } else if (key==='collection'){
+      act += '<button class="btn primary" type="button" data-act="add" data-key="collection">+藏品</button>';
+    } else if (key==='travel'){
+      act += '<button class="btn primary" type="button" data-act="add" data-key="travel">+目的地</button>';
     } else {
       act += '<button class="btn primary" type="button" data-act="add" data-key="'+key+'">+</button>';
     }
@@ -12604,7 +12725,7 @@ function renderStudyRoom(){
   shelfHtml = tab === 'home' ? '' :
     '<section class="sr-shelf">'+
       '<header>'+
-        '<h3>书 房 / '+esc(studyTabLabel(tab))+'</h3>'+
+        '<h3>'+esc(studyTabLabel(tab))+'</h3>'+
         '<span>'+displayRows.length+' '+(tab==='学习计划'?'个':unit)+'</span>'+
         dlBtn+
         '<button class="crumb-add r-btn" data-act="'+addAct+'"'+(addKey?' data-key="'+addKey+'"':'')+'>＋ 添加'+esc(tab)+'</button>'+

@@ -315,7 +315,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .trip:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--accent);opacity:.7}
 .trip.gone:before{background:var(--sage)}
 .trip .top{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
-.trip h4{font:700 17px/1.3 "Songti SC",serif}
+.trip h4{font:700 15px/1.3 "Songti SC",serif;white-space:nowrap}
 .trip .where{color:var(--muted);font-size:11.5px;margin-top:3px;letter-spacing:.04em}
 .trip .hearts{display:flex;gap:2px;align-items:center;margin-top:6px;font-size:12px;line-height:1}
 .trip .meta{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:11.5px;color:var(--muted)}
@@ -500,9 +500,10 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .heart-btn .hit{position:absolute;top:0;bottom:0;width:50%;border:0;background:transparent;cursor:pointer;z-index:2;padding:0;margin:0}
 .heart-btn .hit.left{left:0}
 .heart-btn .hit.right{right:0}
-.hheart{font-size:12px;color:#f3e2e6;letter-spacing:1px}
+.hheart{position:relative;display:inline-block;font-size:12px;color:#f3e2e6;letter-spacing:1px}
 .hheart.on{color:#ff8fa3}
-.hheart.half{background:linear-gradient(90deg,#ff8fa3 50%,#f3e2e6 50%);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hheart.half{color:#f3e2e6}
+.hheart.half i{position:absolute;left:0;top:0;overflow:hidden;width:.5em;color:#ff8fa3;display:inline-block}
 .multisel{display:flex;gap:7px;flex-wrap:wrap}
 .multisel button{padding:6px 11px;border:1px solid var(--line);border-radius:999px;background:#fbf8f3;
   font-size:11.5px;font-weight:600;color:var(--muted);cursor:pointer}
@@ -2737,7 +2738,7 @@ input.search{margin-bottom:12px}
 /* 打卡点卡片（与想去/去过同款 .trip 风格，点一下即编辑） */
 .trip.ck{cursor:pointer}
 .trip.ck:before{background:#ff7043}
-.ck-pill{display:inline-block;font-size:11px;font-weight:600;line-height:1;padding:4px 9px;border-radius:10px;
+.ck-pill{display:inline-block;font-size:10px;font-weight:600;line-height:1;padding:3px 8px;border-radius:10px;white-space:nowrap;
   color:#ff7043;background:rgba(255,112,67,.12)}
 .ck-del{position:absolute;top:10px;right:12px;z-index:3;width:26px;height:26px;border:0;border-radius:50%;
   background:rgba(40,30,20,.45);color:#fff;font-size:16px;line-height:1;cursor:pointer;
@@ -3522,4 +3523,27 @@ input.search{margin-bottom:12px}
   .pkno{ width:46px; height:20px; font-size:10.5px; line-height:17px; }
   #batchBar{ gap:6px; padding:8px 10px; bottom:10px; flex-wrap:wrap; max-width:94vw; justify-content:center; }
   .batchrow .bchk{ flex-basis:96px; }
+}
+
+/* ============================================================
+   v86 手机端微调：topbar 增宽 + 背景蒙版下降留间隙 + 遐方坞/文渊斋布局
+   （仅 ≤960px 生效；置于文件末尾以保证覆盖上方同选择器规则）
+   ============================================================ */
+@media (max-width:960px){
+  /* 1) 顶栏增宽到满屏，与全屏背景蒙版同宽；文字保持 16px 与正文对齐 */
+  .topbar{ margin: 8px 0 0; }
+  /* 背景照片整体下移，在顶栏与照片之间留出 paper 间隙（美观） */
+  .museum::before, .foodtwo::before, .avhall::before, .studyroom:not(.studyroom-notes)::before{
+    inset: 92px 0 0 0;
+  }
+  /* 3) 遐方坞：想去 / 去过 / 打卡点 三框并排收窄 */
+  .statgrid.tstat{ grid-template-columns: repeat(3,1fr); gap: 8px; }
+  .tstat .stat{ padding: 12px 8px; }
+  .tstat .stat u{ font-size: 9px; letter-spacing: .06em; }
+  .tstat .stat b{ font-size: 20px; }
+  /* 4) 文渊斋分主页：容器撑到与 topbar 同宽，shelf-item 一行三个 */
+  .sr-shelf{ padding: 0 0 60px; }
+  .sr-shelf .shelf-grid{ grid-template-columns: repeat(3,1fr); gap: 10px; }
+  .sr-shelf .shelf-item{ padding: 6px; }
+  .sr-shelf .shelf-title{ font-size: 11.5px; }
 }
