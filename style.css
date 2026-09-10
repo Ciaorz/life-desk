@@ -28,9 +28,33 @@
 html[data-theme="forest"]{--accent:#365f53;--accent-soft:#dfe8df}
 html[data-theme="clay"]{--accent:#8f4f3b;--accent-soft:#f3dfd6}
 html[data-theme="navy"]{--accent:#344b63;--accent-soft:#dde4ea}
+/* 唯一背景层（两步方案）：全局只在此铺一次背景图，最底层、不在任何元素之上铺。
+   ⚠️ 关键：body 必须 background:transparent（见下方 html/body 规则），基底纸色由 html 提供；
+      否则 body 自身的不透明纸色会盖住 z-index:-2 的 body::before 背景图 → 整页变成纸色。
+   tabbar / 桌面侧栏用不透明纸色块固定在最顶端 → 背景视觉上从它们底部起；
+   topbar 随内容滚动，容器内铺 90% 不透明纸色衬底（仅限 topbar 自身，不在整页铺）；
+   museum 等卡片各自浮在背景之上。body[data-pg] 由 app.js 在 render 时按当前页写入。 */
+body{--page-bg:none}
+body[data-pg="collection"]{--page-bg:url("images/museum-bg.png")}
+body[data-pg="av"]{--page-bg:url("images/opera-bg.png")}
+body[data-pg="study"]{--page-bg:url("images/study-bg.png")}
+body[data-pg="food"]{--page-bg:url("images/foodtwo.png")}
+body[data-pg="idea"]{--page-bg:url("images/idea-sky.png"), radial-gradient(ellipse at center,#0a1232 0%,#050816 60%,#02030a 100%)}
+body::before{
+  content:"";
+  position:fixed; inset:-6px;     /* 略超出视口，遮住模糊羽化边，避免边缘露纸色 */
+  z-index:-2;
+  background-image: var(--page-bg);
+  background-position:center;
+  background-size:cover;
+  background-repeat:no-repeat;
+  opacity:1;                     /* 六大主页背景图 100% 不透明，纯净无纸色透出 */
+  filter:blur(2.5px) saturate(0.75);  /* 轻微模糊+降饱和，柔化细节、减刺眼 */
+  pointer-events:none;
+}
 *{box-sizing:border-box}
 html{background:var(--paper);-webkit-text-size-adjust:100%}
-body{margin:0;color:var(--ink);background:var(--paper);
+body{margin:0;color:var(--ink);background:transparent;  /* 透明：基底纸色由 html 提供；body 自身不铺纸色，否则会盖住 z-index:-2 的 body::before 背景图 */
   font:15px/1.6 "Inter","PingFang SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,sans-serif;
   -webkit-font-smoothing:antialiased}
 h1,h2,h3,h4,p{margin:0}
@@ -70,13 +94,17 @@ input,select,textarea{font:inherit;color:inherit}
 .side-foot b{display:block;color:var(--muted);font-weight:600}
 
 .main{margin-left:var(--sidebar);padding:0 clamp(18px,3.2vw,46px) 90px}
-.topbar{position:sticky;top:0;z-index:20;padding:26px 0 16px;display:flex;align-items:flex-end;
-  justify-content:space-between;gap:18px;flex-wrap:wrap;
-  background:linear-gradient(180deg,var(--paper) 76%,rgba(245,240,232,.86) 92%,rgba(245,240,232,0))}
-.eyebrow{margin:0 0 5px;color:#94887a;font-size:10px;font-weight:750;letter-spacing:.2em;text-transform:uppercase}
+.topbar{position:static;z-index:auto;display:flex;align-items:flex-end;justify-content:space-between;
+  gap:20px 28px;flex-wrap:wrap;
+  padding:22px 26px 20px;
+  background:color-mix(in srgb, var(--paper) 90%, transparent);  /* 90% 不透明纸色块，仅在 topbar 容器内衬底 */
+  border:1px solid rgba(104,87,68,.10);
+  border-radius:18px;margin-top:14px;margin-bottom:18px;box-shadow:0 8px 24px rgba(63,48,36,.06)}
+.topbar > div:first-child{flex:1 1 360px;min-width:0}
+.eyebrow{margin:0 0 6px;color:#94887a;font-size:10px;font-weight:750;letter-spacing:.2em;text-transform:uppercase}
 .topbar h1{font:700 clamp(23px,2.3vw,32px)/1.22 "Songti SC",serif;letter-spacing:.02em}
-.topbar p.sub{margin-top:5px;color:var(--muted);font-size:12.5px;letter-spacing:.03em;max-width:52ch}
-.top-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.topbar p.sub{margin-top:6px;color:var(--muted);font-size:12.5px;letter-spacing:.03em;max-width:64ch}
+.top-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;flex:0 0 auto;align-self:flex-end;justify-content:flex-end}
 
 /* ---------- controls ---------- */
 .btn{min-height:40px;padding:0 15px;display:inline-flex;align-items:center;justify-content:center;gap:7px;
@@ -638,10 +666,9 @@ input.search:focus{border-color:var(--accent);background:#fff}
 @media (max-width:960px){
   :root{--sidebar:0px}
   .sidebar{display:none}
-  .topwrap{position:sticky;top:0;z-index:25}
-  .tabbar{display:flex;position:static}
+  .tabbar{display:flex;position:sticky;top:0}
   .main{margin-left:0;padding:0 16px 96px}
-  .topbar{padding:10px 0 8px;min-height:0;position:static}
+  .topbar{padding:12px 14px 10px;min-height:0;position:static;background:color-mix(in srgb,var(--paper) 90%,transparent);border-radius:14px;box-shadow:0 6px 18px rgba(63,48,36,.06)}
   .panel{padding:17px;border-radius:19px}
   .notes{columns:2}
   /* v75fix：单列时必须把 span 复位，否则 span 2 / .q 会撑出隐式列把布局挤歪 */
@@ -742,32 +769,8 @@ input.search:focus{border-color:var(--accent);background:#fff}
 
 
 /* 真实照片背景——四屏各自一张                                */
-.museum::before,
-.foodtwo::before,
-.studyroom::before,
-.avhall::before {
-  content: "";
-  position: absolute; inset: 0;
-  background-position: center 35%;
-  background-size: cover;
-  background-repeat: no-repeat;
-  z-index: -2;
-  transform: scale(1.06);          /* 留出模糊边缘空间 */
-  filter: saturate(1.05) contrast(1.02);
-}
-.museum::before {
-  background-image: url("images/museum-bg.png");
-}
-.studyroom::before{
-  background-image: url("images/study-bg.png");
-}
-.avhall::before {
-  background-image: url("images/opera-bg.png");
-  background-position: center center;          /* 图片中线 ≡ 页面中线 */
-}
-.foodtwo::before {
-  background-image: url("images/foodtwo.png");
-}
+/* 背景已统一移到 body::before（全局唯一层，见文件顶部）；
+   各模块不再各自铺图，避免「每个元素块都铺一遍」。museum 卡片/蒙版保持原样。 */
 
 /* 遐方坞：不再整页铺背景，而是分别铺在「目的地」「打卡点」两块面板里，透明度降低 */
 .travel-bg {
@@ -2276,24 +2279,10 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .museum .mcase .meta, .avhall .mcase .meta { color: #f1e3c8; font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,.65); }
 .museum .mcase .meta .tag, .avhall .mcase .meta .tag { background: rgba(255,255,255,.2); color: #fdeccb; border: 1px solid rgba(245,234,208,.3); }
 .museum .mcase .meta .count, .avhall .mcase .meta .count { background: rgba(255,255,255,.22); color: #ffe9c4; border: 1px solid rgba(245,234,208,.3); }
-.museum::before,
-.studyroom::before,
-.foodtwo::before,
-.avhall::before {
-  background-size: 100% auto;
-  background-position: top center;
-  transform: none;
-}
+/* 模块 ::before 已不再铺背景（见全局 body::before），此处旧覆盖停用 */
 /* 灵思阁：星空作为「底部背景」（仿其它模块 ::before 写法，桌面/移动一致、且继承移动端 inset 下移） */
 .ideasky { min-height: max(100%, 60vw); }
-.ideasky::before {
-  content: "";
-  position: absolute; inset: 0; z-index: -2;
-  background:
-    url("images/idea-sky.png") center top/cover no-repeat,
-    radial-gradient(ellipse at center, #0a1232 0%, #050816 60%, #02030a 100%);
-  background-blend-mode: normal, soft-light;
-}
+/* 灵思阁背景已并入全局 body::before（data-pg=idea 含星空图 + 深色径向渐变） */
 .ideasky::after {
   content: ""; position: absolute; inset: 0;
   background: linear-gradient(180deg, rgba(8,5,18,0.10) 0%, transparent 25%, transparent 70%, rgba(8,5,18,0.32) 100%);
@@ -2629,7 +2618,6 @@ input.search{margin-bottom:12px}
      容器会塌成内容高度、背景铺不开（表现就是「背景一直加载不出来」）。
      小屏下直接给视口高度，并把背景改为居中裁切。 */
   .foodtwo { min-height: 100vh; min-height: 100dvh; }
-  .foodtwo::before { background-position: center center; }
   .foodtwo .ft-grid { gap: 14px; padding: 14px 12px 56px; }
   .foodtwo .left, .foodtwo .right { padding: 16px 14px; min-height: 200px; }
   .foodtwo .left h2, .foodtwo .right h2 { font-size: 18px; letter-spacing: 1px; }
@@ -2838,42 +2826,34 @@ input.search{margin-bottom:12px}
     border-radius: 0 !important;
     margin: 0 !important;
   }
-  .museum::before, .foodtwo::before, .avhall::before, .studyroom:not(.studyroom-notes)::before {
-    position: fixed;
-    inset: 0;
-    background-size: cover !important;
-    background-position: center top !important;
-    background-repeat: no-repeat !important;
-    transform: none !important;
-    filter: none !important;
-    z-index: -2;
-  }
+  /* 背景现为全局 body::before 单一层，模块 ::before 不再铺图，此旧覆盖停用 */
   /* 拾纪页：保留自身「顶部 3:2 图 + 渐变填充」逻辑，只去掉裁切与圆角（背景仍按它的设计铺满） */
   .studyroom.studyroom-notes {
     overflow: visible !important;
     border-radius: 0 !important;
     margin: 0 !important;
   }
-  /* 顶栏：毛玻璃圆角遮罩，盖住背景图上沿 */
+  /* 背景图从 tabbar 底部起铺满（全局唯一层 body::before）；
+     topbar 随内容滚动，容器内铺 90% 不透明纸色衬底（仅限 topbar 自身，不在整页铺）；
+     标题加浅色描边保证在照片上可读 */
   .topbar{
-    background: rgba(255, 252, 247, 0.82);
-    backdrop-filter: blur(18px) saturate(180%);
-    -webkit-backdrop-filter: blur(18px) saturate(180%);
-    border: 1px solid rgba(104,87,68,.12);
+    background: color-mix(in srgb, var(--paper) 90%, transparent);  /* 90% 不透明纸色衬底，仅 topbar 容器 */
+    border: 0;
     border-radius: 16px;
     margin: 8px 10px 0;
     padding: 14px 16px 12px;
+    position: relative;
+    z-index: 1;
+    text-shadow: 0 1px 4px rgba(255,255,255,.6);
   }
   /* 顶部模块导航栏：毛玻璃衬底，背景条撑满屏幕宽度
      （.main 在手机端有左右 16px 内边距，用负外边距把背景条拉到屏幕两边；
        再用 padding 把按钮推回来，避免贴着屏幕边缘） */
   .tabbar{
-    background: rgba(255, 252, 247, 0.72);
-    backdrop-filter: blur(18px) saturate(180%);
-    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    background: var(--paper);
     margin: 0 -16px;
     padding: 12px 16px 10px;
-    border-radius: 0;
+    border-bottom: 1px solid rgba(104,87,68,.10);
   }
 
   /* 行动条：所有按钮（含「添加」）统一为 sm 紧凑风格，与「重新拉取/页面管理」一致 */
@@ -3543,11 +3523,8 @@ input.search{margin-bottom:12px}
    ============================================================ */
 @media (max-width:960px){
   /* 1) 顶栏增宽到满屏，与全屏背景蒙版同宽；文字保持 16px 与正文对齐 */
-  .topbar{ margin: 8px 0 0; }
-  /* 背景照片整体下移，在顶栏与照片之间留出 paper 间隙（美观） */
-  .museum::before, .foodtwo::before, .avhall::before, .studyroom:not(.studyroom-notes)::before, .ideasky::before{
-    inset: 92px 0 0 0;
-  }
+  .topbar{ margin: 8px 0 18px; }   /* 底部 18px 间隙，与桌面端一致（修复手机端 topbar 贴住 panel） */
+  /* 背景现为全局 body::before，模块 ::before 不再铺图，此旧下移停用 */
   /* 3) 遐方坞：想去 / 去过 / 打卡点 三框并排收窄 */
   .statgrid.tstat{ grid-template-columns: repeat(3,1fr); gap: 8px; }
   .tstat .stat{ padding: 12px 8px; }

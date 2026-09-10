@@ -6800,6 +6800,9 @@ function render(){
   /* 重建 stage 前先把常驻地球宿主移出文档（挂回 body），避免被 innerHTML 销毁导致 WebGL 上下文丢失 */
   var _gh=$('globeHost'); if(_gh && _gh.parentNode){ _gh.parentNode.removeChild(_gh); document.body.appendChild(_gh); _gh.hidden=true; }
   $('stage').innerHTML=h;
+  /* v91fix(两步方案)：用 body[data-pg] 标记当前页面，style.css 据此把顶栏区背景设为对应照片
+     （无图页 overview/library/travel 回落到纸色），背景图从 tabbar 底部起铺、且不透明挡住上滚内容 */
+  document.body.setAttribute('data-pg', key);
   /* v69：页面管理面板（overlay） */
   if (ui.pagemgmt && ui.pagemgmt.module){
     var pm = document.createElement('div');
