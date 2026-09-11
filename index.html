@@ -132,7 +132,7 @@
 <!-- ===== three.js（外置）+ 地球标记内联图标 + 主应用 ===== -->
 <script defer src="three.min.js"></script>
 <script defer src="marker-icons.js"></script>
-<script defer src="app.min.js" onerror="window.__APP_FALLBACK=true"></script>
+<script defer src="app.js"></script>
 
 <!-- ===== Service Worker =====
   规则（v58 优化：开发期零缓存干扰，发布期保留离线/秒开）：
@@ -197,13 +197,7 @@
         } catch (e) { /* sessionStorage 不可用时忽略 */ }
       });
 
-      // v83 保险：若 app.min.js 加载失败（部署时漏传），自动回退到未压缩的 app.js，避免白屏
-      if (window.__APP_FALLBACK) {
-        var fb = document.createElement('script');
-        fb.src = 'app.js';
-        fb.defer = true;
-        document.body.appendChild(fb);
-      }
+      // 直接加载未压缩的 app.js（本地开发，编辑即生效，不再需要单独构建 app.min.js）
     } else {
       // 调试/离线场景：清掉任何已安装的 SW，避免旧缓存继续作祟
       unregisterAll();

@@ -4483,11 +4483,45 @@ function stArr(r){
   return String(v||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
 }
 function hasStatus(r, v){ return stArr(r).indexOf(v) >= 0; }
+/* 在库 与 云游 互斥：一旦标记为在库，自动清掉云游（东西已经回库，不该还挂在云游里） */
+function clearWanderWhenOwned(arr){
+  if (!Array.isArray(arr)) return arr;
+  if (arr.indexOf('在库') >= 0){
+    var yi = arr.indexOf('云游');
+    if (yi >= 0) arr.splice(yi, 1);
+  }
+  return arr;
+}
 /* 持有数量的有效值：在库藏品若没填过，默认视作 1（「手里至少这一件」）；
    非在库或已填过则按原值。用于详情卡展示、内联编辑、新增表单默认值。 */
 function effHold(r){
   if (r['持有']!=null && r['持有']!=='') return r['持有'];
   return hasStatus(r,'在库') ? 1 : null;
+}
+/* 在库件数（按实物计）：只数「在库」的藏品，并把每件「持有」多出的数量累加进来。
+   录入多少条记录无关，只看在库实物的总件数（某件持有=3 就当作 3 件）。 */
+function ownedCount(rows){
+  var n = 0;
+  (rows || []).forEach(function(r){
+    if (hasStatus(r, '在库')){
+      var h = num(effHold(r));
+      if (!(h >= 1)) h = 1;          /* 在库必至少 1 件；防御 持有 异常值 */
+      n += h;
+    }
+  });
+  return n;
+}
+/* 按「大类」聚合在库实物件数（持有累加），用于分类分布 / IP 卡统计 */
+function ownedByCat(rows){
+  var m = {};
+  (rows || []).forEach(function(r){
+    if (hasStatus(r, '在库')){
+      var h = num(effHold(r)); if (!(h >= 1)) h = 1;
+      var k = r['大类'] || '其他';
+      m[k] = (m[k] || 0) + h;
+    }
+  });
+  return m;
 }
 function statusPill(v){
   var map={'想看':0,'在看':1,'看完':2,'搁置':3,'想去':0,'去过':2,
@@ -4519,7 +4553,13 @@ function renderOverview(){
     var m=MODS[p[0]], s=store[p[0]];
     /* v58：统一用 moduleCount（藏品排除书籍杂志、馐馔坊含菜谱、文渊斋含书籍杂志） */
     var count = moduleCount(p[0]);
-    var n = s.status==='loading' ? '读取中' : (s.status==='error' ? '读取失败' : String(count)+(m.unit||' 条'));
+    var unit = m.unit || ' 条';
+    if (p[0]==='collection'){
+      /* 总览藏品卡：显示在库实物件数（按持有累加），书籍/杂志已归文渊斋排除 */
+      count = ownedCount(((s.rows)||[]).filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0; }));
+      unit = ' 件';
+    }
+    var n = s.status==='loading' ? '读取中' : (s.status==='error' ? '读取失败' : String(count)+unit);
     var bg = MOD_BG[p[0]] || '';
     return '<button class="ovcard" type="button" data-act="go" data-key="'+p[0]+'"'+
       ' style="--ovbg:url(\''+bg+'\')">'+
@@ -4535,7 +4575,8 @@ function renderOverview(){
   var cs=store.collection;
   var csRows = cs.rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类']) < 0; });
   var year=ui.year;
-  var owned=csRows.filter(function(r){ return hasStatus(r,'在库'); });
+  /* 在库件数按实物计：只数在库藏品，并把「持有」多出的数量累加（录入多少条无关） */
+  var ownedCnt = ownedCount(csRows);
   /* v59：年份未选时默认统计全部 */
   var isAll = !year;
   var bought = isAll ? csRows : csRows.filter(function(r){ return yr(r['购入日期'])===year; });
@@ -4543,7 +4584,8 @@ function renderOverview(){
   var allCost = 0; csRows.forEach(function(r){ allCost += num(r['购入价格']); });
   /* v58：有价格但没填购入日期的藏品不会计入「年投入」，给出明确提示避免误解 */
   var noDateCost = csRows.filter(function(r){ return !yr(r['购入日期']) && num(r['购入价格'])>0; });
-  var byCat={}; csRows.forEach(function(r){ var k=r['大类']||'其他'; byCat[k]=(byCat[k]||0)+1; });
+  /* 分类分布也只计在库实物件数（与上方「在库」一致；非在库大类不显示） */
+  var byCat=ownedByCat(csRows);
   var maxC=1; Object.keys(byCat).forEach(function(k){ if(byCat[k]>maxC) maxC=byCat[k]; });
   var ys={}; csRows.forEach(function(r){ var y=yr(r['购入日期']); if(y) ys[y]=1; });
   var curY = String(new Date().getFullYear());
@@ -4554,15 +4596,17 @@ function renderOverview(){
     Object.keys(ys).filter(function(y){ return y!==''; }).sort().reverse().map(function(y){
       return '<option value="'+y+'"'+(y===ui.year?' selected':'')+'>'+y+'</option>'; }).join('')+'</select>';
   var yearLabel = isAll ? '全部的藏品' : (year+' 年的藏品');
-  var boughtLabel = isAll ? '总入手' : (year+' 年入手');
+  /* 总条目：藏品总录入条数（按购入日期所在年份分年；与状态、持有数量无关） */
+  var totalEntries = isAll ? csRows.length : csRows.filter(function(r){ return yr(r['购入日期'])===year; }).length;
+  var entriesLabel = isAll ? '总条目' : (year+' 年条目');
   var spendLabel = isAll ? '总投入' : (year+' 年投入');
 
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+yearLabel+'</h2>'+
     '<div class="hint">按购入日期统计'+(noDateCost.length ? ' · '+noDateCost.length+' 件没填「购入日期」未计入当年投入' : '')+'</div></div>'+ysel+'</div>'+
     '<div class="statgrid">'+
-      '<div class="stat"><u>在库</u><b>'+owned.length+'</b><i>件</i></div>'+
-      '<div class="stat"><u>'+boughtLabel+'</u><b>'+bought.length+'</b><i>件</i></div>'+
+      '<div class="stat"><u>在库</u><b>'+ownedCnt+'</b><i>件</i></div>'+
+      '<div class="stat"><u>'+entriesLabel+'</u><b>'+totalEntries+'</b><i>条</i></div>'+
       '<div class="stat"><u>IP 数</u><b>'+store.ip.rows.length+'</b><i>个</i></div>'+
     '</div>'+
     '<div class="charge-pop'+(ui.showCharge?' open':'')+'">'+
@@ -4630,17 +4674,19 @@ function collStats(){
   var s=store.collection, year=ui.year;
   /* v58：书籍/杂志归文渊斋，藏品馆统计排除 */
   var rows=s.rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
-  var owned=rows.filter(function(r){ return hasStatus(r,'在库'); });
+  var ownedCnt = ownedCount(rows);
   var isAll = !year;
   var bought = isAll ? rows : rows.filter(function(r){ return yr(r['购入日期'])===year; });
   var spend=0; bought.forEach(function(r){ spend += num(r['购入价格']); });
   var byCat={}; rows.forEach(function(r){ var k=r['大类']||'其他'; byCat[k]=(byCat[k]||0)+1; });
   var maxC=1; Object.keys(byCat).forEach(function(k){ if(byCat[k]>maxC) maxC=byCat[k]; });
-  var boughtLabel = isAll ? '总入手' : (year+' 年入手');
+  /* 总条目：藏品总录入条数（按购入日期所在年份分年；与状态、持有数量无关） */
+  var totalEntries = isAll ? rows.length : rows.filter(function(r){ return yr(r['购入日期'])===year; }).length;
+  var entriesLabel = isAll ? '总条目' : (year+' 年条目');
   var spendLabel = isAll ? '总投入' : (year+' 年投入');
   var h='<div class="statgrid">'+
-    '<div class="stat"><u>在库</u><b>'+owned.length+'</b><i>件</i></div>'+
-    '<div class="stat"><u>'+boughtLabel+'</u><b>'+bought.length+'</b><i>件</i></div>'+
+    '<div class="stat"><u>在库</u><b>'+ownedCnt+'</b><i>件</i></div>'+
+    '<div class="stat"><u>'+entriesLabel+'</u><b>'+totalEntries+'</b><i>条</i></div>'+
     '<div class="stat"><u>IP 数</u><b>'+store.ip.rows.length+'</b><i>个</i></div>'+
     '<div class="stat"><u>系列数</u><b>'+store.series.rows.length+'</b><i>套</i></div>'+
     '</div>';
@@ -4733,9 +4779,9 @@ function renderCatMode(){
     '<div class="chips">'+
     '<button class="chip'+(f.cat?'':' on')+'" type="button" data-act="f" data-k="cat" data-v="">全部</button>'+
     CATS.map(function(t){
-      var n=s.rows.filter(function(r){ return r['大类']===t; }).length;
+      /* 六大类 chip：只做筛选入口，不显示数量 */
       return '<button class="chip'+(f.cat===t?' on':'')+'" type="button" data-act="f" data-k="cat" data-v="'+t+'">'+
-        t+(n?' '+n:'')+'</button>';
+        t+'</button>';
     }).join('')+'</div>';
   var used={};
   (SUBS[f.cat]||[]).forEach(function(x){ used[x]=1; });
@@ -4778,8 +4824,8 @@ function renderCatMode(){
         var se = store.series.rows.filter(function(r){ return r['系列名称']===sn; })[0];
         var sid = se ? se._id : '';
         var cover = se && hasCover(se) ? coverStyle(se, sn) : (srows[0] && hasCover(srows[0]) ? coverStyle(srows[0], sn) : '');
-        var subcats={}; srows.forEach(function(r){ var k=r['大类']||'其他'; subcats[k]=(subcats[k]||0)+1; });
-        var desc = Object.keys(subcats).map(function(k){ return k+' '+subcats[k]; }).join(' · ') || srows.length+' 件';
+        var subcats=ownedByCat(srows);
+        var desc = Object.keys(subcats).map(function(k){ return k+' '+subcats[k]; }).join(' · ') || '0 件';
         h += '<div class="ipcard ipseries-card" data-act="seriesopen" data-id="'+esc(sid)+'"'+
           ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
           '<div class="ph" style="'+cover+'">'+(cover?'':'<b>'+esc(String(sn).slice(0,1))+'</b>')+'</div>'+
@@ -4847,8 +4893,9 @@ function renderIpMode(){
   if (s.status==='error'){ h += emptyHTML('没能读到 IP 库','点上面的「重试」再拉一次。'); return h+'</section>'; }
   h += '<div class="ipgrid">'+s.rows.map(function(ip){
     var name=ip['IP名称']||'未命名';
-    var items=c.rows.filter(function(r){ return r['IP']===name; });
-    var by={}; items.forEach(function(r){ var k=r['大类']||'其他'; by[k]=(by[k]||0)+1; });
+    /* 每种 IP：只统计在库实物件数（按持有累加）；书籍/杂志已归文渊斋，不计入 IP */
+    var items=c.rows.filter(function(r){ return r['IP']===name && LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
+    var by=ownedByCat(items);
     var desc=Object.keys(by).map(function(k){ return k+' '+by[k]; }).join(' · ') || '还没挂东西';
     return '<div class="ipcard" data-act="ipopen" data-id="'+esc(ip._id)+'"'+
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
@@ -4862,7 +4909,7 @@ function renderIpMode(){
   /* v58：书籍/杂志归文渊斋，不进 IP 库的未绑定列表 */
   var loose=c.rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0 && (!r['IP'] || !ipNames[r['IP']]); });
   if (loose.length){
-    h += '<div class="grp" style="margin-top:24px"><h4>未绑定 IP <i>'+loose.length+' 件</i></h4>'+collectionWall(loose)+'</div>';
+    h += '<div class="grp" style="margin-top:24px"><h4>未绑定 IP <i>'+ownedCount(loose)+' 件</i></h4>'+collectionWall(loose)+'</div>';
   }
   return h+'</section>';
 }
@@ -4908,8 +4955,8 @@ function renderIpDetail(){
       var se = store.series.rows.filter(function(r){ return r['系列名称']===sn; })[0];
       var sid = se ? se._id : '';
       var cover = se && hasCover(se) ? coverStyle(se, sn) : (srows[0] && hasCover(srows[0]) ? coverStyle(srows[0], sn) : '');
-      var subcats={}; srows.forEach(function(r){ var k=r['大类']||'其他'; subcats[k]=(subcats[k]||0)+1; });
-      var desc = Object.keys(subcats).map(function(k){ return k+' '+subcats[k]; }).join(' · ') || srows.length+' 件';
+      var subcats=ownedByCat(srows);
+      var desc = Object.keys(subcats).map(function(k){ return k+' '+subcats[k]; }).join(' · ') || '0 件';
       h += '<div class="ipcard ipseries-card" data-act="seriesopen" data-id="'+esc(sid)+'"'+
         ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
         '<div class="ph" style="'+cover+'">'+(cover?'':'<b>'+esc(String(sn).slice(0,1))+'</b>')+'</div>'+
@@ -6847,7 +6894,10 @@ function renderNav(){
     if (k!=='overview'){
       n = store[k].status==='loading' ? '读取中'
         : store[k].status==='error' ? '读取失败'
-        : moduleCount(k) + (m.unit || ' 条');
+        : (k==='collection'
+            /* 侧栏藏品数 = 在库实物件数（按持有累加）。书籍/杂志已归文渊斋，这里排除 */
+            ? ownedCount(store[k].rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0; })) + (m.unit || ' 件')
+            : moduleCount(k) + (m.unit || ' 条'));
     }
     var on = ui.view===k;
     var bg = MOD_BG[k] || '';
@@ -8357,10 +8407,18 @@ function toggleRowStatus(key, id, status){
   var row = ((store[key] && store[key].rows) || []).filter(function(r){ return String(r._id)===String(id); })[0];
   if (!row || !status) return false;
   var arr = stArr(row);
-  var ix = arr.indexOf(status);
   var on;
-  if (ix >= 0){ arr.splice(ix,1); on = false; }
-  else { arr.push(status); on = true; }
+  if (status==='在库' && arr.indexOf('在库')>=0 && arr.indexOf('云游')>=0){
+    /* 已是在库、却还挂着云游（历史脏数据）：点一下只清掉云游、保留在库，
+       不再把在库一起关掉 —— 否则点「在库」反而把在库取消了，云游还在 */
+    arr.splice(arr.indexOf('云游'),1);
+    on = true;
+  } else {
+    var ix = arr.indexOf(status);
+    if (ix >= 0){ arr.splice(ix,1); on = false; }
+    else { arr.push(status); on = true; }
+    if (status==='在库') clearWanderWhenOwned(arr);   /* 点在库：自动清掉「云游」 */
+  }
   if (MODE === 'db'){
     /* db 模式：走 updateRow，字段值先用 fieldVal 摊平成表单形状（img → 字符串 URL） */
     var vals = {};
@@ -8440,7 +8498,8 @@ function renderSeriesMode(){
     var name=se['系列名称']||'未命名';
     var target=num(se['目标数量']);
     var items=seriesItems(name);
-    var pct= target? Math.min(100, Math.round(items.length/target*100)) : 0;
+    var owned=ownedCount(items);
+    var pct= target? Math.min(100, Math.round(owned/target*100)) : 0;
     return '<div class="ipcard" data-act="seriesopen" data-id="'+esc(se._id)+'"'+
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
       '<div class="ph" style="'+coverStyle(se,name)+'">'+(hasCover(se)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
@@ -8448,8 +8507,8 @@ function renderSeriesMode(){
         '<span>'+esc(se['所属IP']||'未绑 IP')+'</span>'+
         (target
           ? '<div class="track2" style="margin-top:8px"><i style="width:'+pct+'%"></i></div>'+
-            '<span>'+items.length+' / '+target+' · 还差 '+Math.max(0,target-items.length)+'</span>'
-          : '<span>'+items.length+' 件</span>')+
+            '<span>'+owned+' / '+target+' · 还差 '+Math.max(0,target-owned)+'</span>'
+          : '<span>'+owned+' 件</span>')+
       '</div></div>';
   }).join('')+
   '<div class="ipcard add" data-act="add" data-key="series">'+
@@ -8459,7 +8518,7 @@ function renderSeriesMode(){
   /* v58：书籍/杂志归文渊斋，不进系列的未归入列表 */
   var loose=c.rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0 && (!r['系列'] || !names[r['系列']]); });
   if (loose.length){
-    h += '<div class="grp" style="margin-top:24px"><h4>未归入系列 <i>'+loose.length+' 件</i></h4>'+collectionWall(loose)+'</div>';
+    h += '<div class="grp" style="margin-top:24px"><h4>未归入系列 <i>'+ownedCount(loose)+' 件</i></h4>'+collectionWall(loose)+'</div>';
   }
   return h+'</section>';
 }
@@ -8647,10 +8706,11 @@ function renderSeriesDetail(){
   var itemsAll = isPk ? pkSortItems(seriesItems(name)) : sortByNo(seriesItems(name));
   var inLib=itemsAll.filter(function(r){ return hasStatus(r,'在库'); });
   var miss= target ? missingNos(itemsAll, target) : [];
-  var pct= target ? Math.min(100, Math.round(itemsAll.length/target*100)) : 0;
+  var pct= target ? Math.min(100, Math.round(ownedCount(itemsAll)/target*100)) : 0;
   /* v77：宝可梦冰箱贴 —— 完成度只数 base 槽位（formCode 为空），形态卡不计入目标 */
   var pkBase = isPk ? itemsAll.filter(function(r){ return !String(r.formCode||''); }) : itemsAll;
-  var cntAll = isPk ? pkBase.length : itemsAll.length;
+  /* 普通系列「已有」按在库实物件数（持有累加）；宝可梦冰箱贴保持图鉴槽位计数（形态卡不计入目标） */
+  var cntAll = isPk ? pkBase.length : ownedCount(itemsAll);
   if (isPk){
     miss = target ? missingNos(pkBase, target) : [];
     pct  = target ? Math.min(100, Math.round(pkBase.length/target*100)) : 0;
@@ -9026,6 +9086,13 @@ function openForm(key, id, opts){
     if (bad){ toast('「'+bad.k+'」还没填'); return; }
     var after = formAfter; formAfter = null;
     var doSave = function(){
+      /* 藏品馆：在库 与 云游 互斥，标记为在库即清掉云游 */
+      if (key==='collection' && editing.vals['状态']!=null){
+        var _sa = Array.isArray(editing.vals['状态'])
+          ? editing.vals['状态'].slice()
+          : String(editing.vals['状态']||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+        editing.vals['状态'] = clearWanderWhenOwned(_sa);
+      }
       if (id) updateRow(key, id, editing.vals, after);
       else addRow(key, editing.vals, after);
       try { localStorage.removeItem(draftKey); } catch(e){}
@@ -10422,7 +10489,10 @@ function applyBatchEdit(){
   });
   if (checked('状态')){
     var st=[]; sheet.querySelectorAll('input[data-bf-status]').forEach(function(c){ if(c.checked) st.push(c.getAttribute('data-bf-status')); });
-    if (st.length) patch['状态']=st;
+    if (st.length){
+      st = clearWanderWhenOwned(st.slice());   /* 在库 与 云游 互斥 */
+      patch['状态']=st;
+    }
   }
   if (!Object.keys(patch).length){ toast('没有勾选任何字段，或勾选的字段都留空了'); return; }
   applyBatchPatch(ids, patch);
@@ -11931,7 +12001,7 @@ function _renderPerspectiveCases(items, cats, sidePrefix, fn){
   cats.forEach(function(cat, i){
     var arr = items.filter(function(r){ return r['大类']===cat; });
     var depth = 2 - i;   /* 越靠前（i 越小）depth 越大 */
-    html += fn(cat, sidePrefix, depth, arr.length);
+    html += fn(cat, sidePrefix, depth, ownedCount(arr));
   });
   return html;
 }
@@ -12102,7 +12172,7 @@ function renderCollectionMuseum(){
     var h2='<div class="museum">'+
       ''+
       '<div class="museum-crumb"><button class="r-back" data-act="mback">← <span class="back-txt">返回展厅</span></button>'+
-        '<h2>'+esc(cat)+'</h2><span>'+items.length+' 件 · '+subNames.length+' 个展柜</span></div>'+
+        '<h2>'+esc(cat)+'</h2><span>'+ownedCount(items)+' 件 · '+subNames.length+' 个展柜</span></div>'+
       '<div class="museum-grid">';
     subNames.forEach(function(sub){
       var arr=subs[sub];
@@ -12118,7 +12188,7 @@ function renderCollectionMuseum(){
         '<div class="zone-thumbs">'+thumbs+'</div>'+
         '<span class="ph subname"><b>'+esc(sub)+'</b></span>'+
         '<h3>'+esc(sub)+'</h3>'+
-        '<div class="meta"><span class="tag">展柜</span><span class="count">'+arr.length+' 件</span></div>'+
+        '<div class="meta"><span class="tag">展柜</span><span class="count">'+ownedCount(arr)+' 件</span></div>'+
         '</div>';
     });
     h2+='</div></div>';
@@ -12131,7 +12201,7 @@ function renderCollectionMuseum(){
     var h3='<div class="museum">'+
       '<div class="crumb-row">'+
       '<div class="museum-crumb"><button class="r-back" data-act="mback">← <span class="back-txt">返回 '+esc(cat)+' 展厅</span></button>'+
-        '<h2>'+esc(cat)+' · '+esc(sub)+'</h2><span>'+all.length+' 件</span></div>'+
+        '<h2>'+esc(cat)+' · '+esc(sub)+'</h2><span>'+ownedCount(all)+' 件</span></div>'+
       numOrderSeg(f.numOrder,'collnum','#', f.yearView, 'collyear')+
       '</div>';
   if(!all.length){
@@ -12143,7 +12213,7 @@ function renderCollectionMuseum(){
     var sw=sortByNum(all.filter(function(r){ return String(r['系列']||'').trim()===String(f.seriesWall); }), f.numOrder);
     var spg=pageSlice(sw,'collL3');
     h3+='<div class="museum-crumb" style="margin-top:10px"><button class="r-back" data-act="serback">‹ <span class="back-txt">返回</span>全部'+esc(sub)+'</button>'+
-        '<h2>'+esc(f.seriesWall)+'</h2><span>'+sw.length+' 件</span></div>'+
+        '<h2>'+esc(f.seriesWall)+'</h2><span>'+ownedCount(sw)+' 件</span></div>'+
         '<div class="mcasewall">'+spg.rows.map(museumItemCard).join('')+'</div>'+
         pageBar('collL3', spg.page, spg.total)+'</div>';
     return h3;
@@ -12158,7 +12228,7 @@ function renderCollectionMuseum(){
       var open = ui._yopen[yk]!==false;
       h3+='<div class="yeargroup">'+
         '<button type="button" class="yhead" data-act="yoggle" data-k="'+esc(yk)+'">'+
-          '<span class="ytri'+(open?' cls':'')+'"></span>'+esc(y)+' <em>'+ygroups[y].length+' 件</em></button>'+
+          '<span class="ytri'+(open?' cls':'')+'"></span>'+esc(y)+' <em>'+ownedCount(ygroups[y])+' 件</em></button>'+
         (open?'<div class="mcasewall">'+ygroups[y].map(museumItemCard).join('')+'</div>':'')+
         '</div>';
     });
@@ -12189,7 +12259,7 @@ function renderCollectionMuseum(){
       h3+='<div class="item-card glass-card" data-act="serwall" data-v="'+esc(sn)+'">'+
         gthumb+
         '<div class="ttl">'+esc(sn)+'</div>'+
-        '<div class="no">'+g.length+' 件</div>'+
+        '<div class="no">'+ownedCount(g)+' 件</div>'+
         '</div>';
     });
     h3+='</div>';
