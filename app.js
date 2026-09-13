@@ -7500,14 +7500,21 @@ document.addEventListener('click', function(ev){
     var ptarr = pkTypesOf(pko);
     if (!ptv) ptarr.length = 0;                     /* 全部：清空 */
     else { var pti = ptarr.indexOf(ptv); if (pti>=0) ptarr.splice(pti,1); else ptarr.push(ptv); }
+    ui.collection.pkShown = 0;                      /* 筛选变了 → 回到第一页 */
     render(); return;
   }
-  if (act==='pkboth'){ ui.collection.pk.both = (node.getAttribute('data-v')==='both'); render(); return; }
+  if (act==='pkboth'){ ui.collection.pk.both = (node.getAttribute('data-v')==='both'); ui.collection.pkShown = 0; render(); return; }
   /* v96：手机端筛选组 —— 点标题展开，再点一次折叠 */
   if (act==='pktab'){
     var tbk = node.getAttribute('data-t')||'';
     var pkz = ui.collection.pk || (ui.collection.pk = { types:[], both:false, form:'', region:'', group:'', gen:'' });
-    pkz.tab = (pkz.tab===tbk) ? '' : tbk;
+    if (!pkz.tabs || typeof pkz.tabs!=='object') pkz.tabs = {};
+    pkz.tabs[tbk] = !pkz.tabs[tbk];      /* 各组独立开合，互不影响（可同时展开） */
+    render(); return;
+  }
+  /* v96：加载更多（分页）。筛选条件变化时在下面的 pktype / pkfilt / pkboth 里重置计数 */
+  if (act==='pkmore'){
+    ui.collection.pkShown = (ui.collection.pkShown || PK_PAGE) + PK_PAGE;
     render(); return;
   }
   /* v96：手机端卡片密度 —— 一排 2 / 一排 3 */
@@ -7525,6 +7532,7 @@ document.addEventListener('click', function(ev){
       /* 特殊形态切离「地区形态」时，把下级地区筛选一并清掉，免得留一个看不见的过滤条件 */
       if (pfk==='form' && ui.collection.pk.form!=='地区形态') ui.collection.pk.region='';
     }
+    ui.collection.pkShown = 0;                     /* 筛选变了 → 回到第一页 */
     render(); return;
   }
   if (act==='pkgen'){
@@ -8461,6 +8469,9 @@ function pad3(n){ n=String(n); while(n.length<3) n='0'+n; return n; }
 var PK_IP = '宝可梦', PK_SERIES = '30周年冰箱贴';
 var PK_TYPE_EN = {一般:'normal',火:'fire',水:'water',电:'electric',草:'grass',冰:'ice',格斗:'fighting',毒:'poison',地面:'ground',飞行:'flying',超能力:'psychic',虫:'bug',岩石:'rock',幽灵:'ghost',龙:'dragon',恶:'dark',钢:'steel',妖精:'fairy'};
 var PK_TYPES = ['一般','火','水','电','草','冰','格斗','毒','地面','飞行','超能力','虫','岩石','幽灵','龙','恶','钢','妖精'];
+/* v96：分页大小。30周年冰箱贴有 1324 件，一次性渲染 1324 张带封面/阴影/圆角的卡片
+   会让手机每次点击筛选都卡好几秒；改成先渲染 60 张，点「加载更多」再追加。 */
+var PK_PAGE = 60;
 var PK_FORMS = ['常规图鉴','超级进化','地区形态','超极巨化','原始回归','无极巨化'];
 var PK_GROUPS = ['传说宝可梦','幻之宝可梦','究极异兽','初始的伙伴'];
 /* v77：地区形态的下级选项——只有「特殊形态 = 地区形态」时才显示这一行 */
@@ -8720,13 +8731,20 @@ function pkFilterBar(rows){
 
   /* v96：手机端 —— 四个组标题放在最上面一行，单击标题展开/折叠对应的组 */
   if (IS_MOBILE){
-    var tab = (p.tab === '') ? '' : (p.tab || 'type');    /* 默认展开「属性」 */
+    /* v96b：四组可以同时展开（原来是互斥的单一 tab）。用 tabs 对象记录每组的开合。 */
+    if (!p.tabs || typeof p.tabs !== 'object'){
+      p.tabs = {};
+      if (p.tab) p.tabs[p.tab] = true;      /* 迁移旧的单一 tab 状态 */
+      else p.tabs.type = true;              /* 默认展开「属性」 */
+      delete p.tab;
+    }
+    var tabs = p.tabs;
     function tabBtn(k,label,badge){
-      return '<button type="button" class="pktab'+(tab===k?' on':'')+'" data-act="pktab" data-t="'+k+'">'+
+      return '<button type="button" class="pktab'+(tabs[k]?' on':'')+'" data-act="pktab" data-t="'+k+'">'+
         esc(label)+(badge?'<i>'+esc(badge)+'</i>':'')+'</button>';
     }
     function panel(k, inner){
-      return '<div class="pkpanel'+(tab===k?' open':'')+'" data-panel="'+k+'">'+inner+'</div>';
+      return '<div class="pkpanel'+(tabs[k]?' open':'')+'" data-panel="'+k+'">'+inner+'</div>';
     }
     h += '<div class="pktabs">'+
       tabBtn('type','属性', ptypes.length?String(ptypes.length):'')+
@@ -8976,6 +8994,16 @@ function renderSeriesDetail(){
   var showHdr = sf==='全部' ? '全部子项' : sf==='在库' ? '在库子项' : sf==='云游' ? '云游子项' : '想收子项';
   /* v96：手机端卡片密度（一排 2 / 3 个），默认 3；仅宝可梦系列传，其余页面保持原自适应 */
   var pkCols = isPk ? (((ui.collection.pk && ui.collection.pk.cols) || 3)) : 0;
+  /* v96：分页。这个系列有 1324 件，一次性渲染 1324 张带封面的卡片，手机上每次点筛选都要卡好几秒。
+     改成先渲染 PK_PAGE 张，剩下的点「加载更多」追加。 */
+  var totalFiltered = items.length;
+  if (isPk){
+    var pkLim = (ui.collection.pkShown && ui.collection.pkShown > 0) ? ui.collection.pkShown : PK_PAGE;
+    if (pkLim < PK_PAGE) pkLim = PK_PAGE;
+    if (pkLim < totalFiltered) items = items.slice(0, pkLim);
+  }
+  /* 标题上的计数：分页时显示「60 / 1324」这种形式 */
+  var hdrCnt = (isPk && items.length < totalFiltered) ? (items.length + ' / ' + totalFiltered) : String(items.length);
   if (!items.length){
     h += emptyHTML('「'+sf+'」下没有子项',
       sf==='在库' ? '把这些子项的状态改成「在库」就会显示在这里。'
@@ -8988,9 +9016,14 @@ function renderSeriesDetail(){
     h += '<div class="segline" style="margin:-2px 0 14px"><div class="seg seriessort">'+
       '<button type="button" data-act="seriessort" data-v="no" class="'+(ui.collection.seriesSort!=='wish'?'on':'')+'">按序号</button>'+
       '<button type="button" data-act="seriessort" data-v="wish" class="'+(ui.collection.seriesSort==='wish'?'on':'')+'">按想收排列</button></div></div>'+
-      '<div class="grp"><h4>'+showHdr+' <i>'+items.length+'</i></h4>'+seriesCloudWall(items, pkCols)+'</div>';
+      '<div class="grp"><h4>'+showHdr+' <i>'+hdrCnt+'</i></h4>'+seriesCloudWall(items, pkCols)+'</div>';
   } else {
-    h += '<div class="grp"><h4>'+showHdr+' <i>'+items.length+'</i></h4>'+collectionWall(items, pkCols)+'</div>';
+    h += '<div class="grp"><h4>'+showHdr+' <i>'+hdrCnt+'</i></h4>'+collectionWall(items, pkCols)+'</div>';
+  }
+  /* v96：分页 —— 还没显示完时给「加载更多」 */
+  if (isPk && items.length < totalFiltered){
+    h += '<div class="pkmore"><button class="btn ghost sm" type="button" data-act="pkmore">'+
+      '加载更多（还有 '+(totalFiltered-items.length)+' 个）</button></div>';
   }
   return h+'</section>';
 }

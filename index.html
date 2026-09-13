@@ -5,7 +5,10 @@
 <!-- 关键：viewport-fit=cover 让 iPhone 灵动岛/全面屏的 env(safe-area-inset-*) 生效 -->
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- v96：原来是 black-translucent（内容顶到状态栏底下、会被灵动岛盖住）。
+     改成 default：iOS 给状态栏留独立空间，内容不再钻到灵动岛下面。
+     另外 .main 加了 padding-top: env(safe-area-inset-top) 兜底（不重叠时该值为 0，不会重复留白）。 -->
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#f5f0e8">
 <title>日常集 · 生活工作台</title>
 <!-- manifest 仅在 http/https（含 GitHub Pages）注入；file:// 双击打开因 origin=null 会触发 CORS，故跳过 -->
