@@ -2658,12 +2658,17 @@ function stars(n){
   for(var i=1;i<=5;i++) o += (i<=full?'★':(i===full+1&&half?'½':'☆'));
   return o;
 }
+/* v93：心形强制「文本呈现」——在 ♥ 后加 U+FE0E 变体选择符。
+   移动端（尤其旧版 iOS/Android）不支持 font-variant-emoji:text，会把 ♥ 当成
+   彩色 emoji 渲染、直接忽略 CSS 的 color，于是「关」的心也显示成实心红 → 展示卡
+   看起来「全满」。加 VS 后两端表现一致，桌面端原本就走文本呈现、无副作用。 */
+var HE = '♥\uFE0E';
 function heartPills(n){
   n = num(n); if (!n) return '';
   var o=''; for(var i=1;i<=5;i++){
-    if (n>=i) o+='<span class="hheart on">♥</span>';
-    else if (n>=i-0.5) o+='<span class="hheart half">♥<i>♥</i></span>';
-    else o+='<span class="hheart">♥</span>';
+    if (n>=i) o+='<span class="hheart on">'+HE+'</span>';
+    else if (n>=i-0.5) o+='<span class="hheart half">'+HE+'<i>'+HE+'</i></span>';
+    else o+='<span class="hheart">'+HE+'</span>';
   }
   return o;
 }
@@ -2792,7 +2797,8 @@ function mdText(v){ return dstr(v).slice(5).replace('-','.'); }
 
 /* ============ 模块定义 ============ */
 /* v16.0 藏品分类体系：6 大类在博物馆透视展厅里展示，电影/留声机已转到新模块「影音厅」；书籍/杂志在文渊斋里 */
-var CATS = ['手办','周边','杯盏','毛绒','卡牌','着物'];  /* 博物馆展厅只用这 6 类：前 3 在展厅左侧，后 3 在右侧 */
+var CATS = ['手办','周边','杯盏','毛绒','居陈','着物'];  /* 博物馆展厅只用这 6 类：前 3 在展厅左侧，后 3 在右侧
+   v92：原「卡牌」大类改名「居陈」；卡牌改挂到「周边」大类下作小类（见 SUBS['周边']） */
 /* v75fix：影音厅大类改名 电影→「戏」、留声机→「音」。
    原来大类叫「电影」时，它下面的小类里还有一个叫「电影」的，看着像「电影里套电影」，很怪。
    改成「戏 / 音」后：戏 ▸ 电影/剧集/纪录片/动画/戏剧，层级就顺了。 */
@@ -2803,7 +2809,7 @@ var AV_CATS = ['赏戏','留音'];                            /* 影音厅（新
 var BOOK_CATS = ['书籍','杂志'];                          /* 文渊斋里的书与杂志 */
 /* v13 重命名：观影→电影，音乐→留声机；v75fix：统一映射到 赏戏 / 留音。
    注意 normalizeRow 只做「一次」映射，所以旧值必须直接写成最终结果，不能链式。 */
-var LEGACY_CATS = {'观影':'赏戏','音乐':'留音','电影':'赏戏','留声机':'留音','戏':'赏戏','音':'留音','杯子':'杯盏','服装':'着物'};
+var LEGACY_CATS = {'观影':'赏戏','音乐':'留音','电影':'赏戏','留声机':'留音','戏':'赏戏','音':'留音','杯子':'杯盏','服装':'着物','卡牌':'居陈'};  /* v92：旧「卡牌」大类 → 居陈 */
 /* 表单「类别」下拉的可选项：只保留博物馆 6 类。
    v30：电影/留声机已归「影音厅」、书籍/杂志已归「文渊斋」，藏品表单不再列出这 4 类。 */
 var CATS_FORM = CATS.slice();
@@ -2821,9 +2827,9 @@ var SUBS = {
   '电影':     ['电影','剧集','纪录片','动画','戏剧'],  /* v65：戏剧收舞台剧/音乐剧/话剧 */
   '手办':     ['比例','景品','可动','雕像'],
   '毛绒':     ['大号','中号','小号','挂件'],
-  '卡牌':     ['单卡','卡盒','卡组'],
+  '居陈':     ['单卡','卡盒','卡组'],   /* v92：原「卡牌」大类改名「居陈」（子小类沿用） */
   '杯盏':     ['玻璃杯','马克杯','茶杯','酒器'],
-  '周边':     ['徽章','立牌','挂件','海报','文具','生活用品','其他']
+  '周边':     ['卡牌','徽章','立牌','挂件','海报','文具','生活用品','其他']   /* v92：新增「卡牌」小类，卡牌类藏品归到周边下 */
 };
 var USER_CATS = [];   /* v75：页面管理里新增大类（运行时 + 持久化到 lifedesk.json.userCats） */
 var USER_SUBS = {};   /* v75：页面管理里新增小类，结构同 SUBS（{ 大类:[小类...] }） */
@@ -2834,13 +2840,13 @@ var STATES_OWN  = ['在库','云游','想收','已预订'];   /* v75fix：藏品
 var STATES_VIEW = ['想看','在看','看完'];
 var STATES_ALL  = STATES_OWN.concat(STATES_VIEW);
 /* v75fix：影音厅大类定名「赏戏 / 留音」后补上图标（旧名保留） */
-var CAT_ICON = {'手办':'办','毛绒':'绒','卡牌':'牌','周边':'周','赏戏':'戏','留音':'音','戏':'戏','音':'音','电影':'影','留声机':'声','杯盏':'杯','着物':'衣'};
+var CAT_ICON = {'手办':'办','毛绒':'绒','居陈':'陈','周边':'周','赏戏':'戏','留音':'音','戏':'戏','音':'音','电影':'影','留声机':'声','杯盏':'杯','着物':'衣'};  /* v92：卡牌→居陈 */
 
 /* v17.0：影音厅两个子项目改回「老版本」的胶片 / 留声机封面（本地 PNG），歌剧院留给展厅背景与角落装饰 */
 var CAT_BG = {
   '手办':   'images/figure-cover.png',                                                             /* 博物馆左侧最近（动漫手办图，PNG 带透明背景） */
   '毛绒':   'images/cat_fluffy.png',  /* 博物馆右侧 */
-  '卡牌':   'images/cat_card.png',  /* 博物馆右侧 */
+  '居陈':   'images/cat_card.png',  /* 博物馆右侧（v92：原卡牌大类改名居陈，沿用原封面图） */
   '周边':   'images/cat_peripheral.png',  /* 博物馆左侧 */
   '电影':   'images/film-cover.png',                                                               /* 影音厅左侧：老版胶片图 */
   '留声机': 'images/gramophone-cover.png',                                                          /* 影音厅右侧：老版留声机图 */
@@ -2856,7 +2862,7 @@ var CAT_BG = {
 var CAT_DECOR = {
   '手办':   'images/figure-cover.png',
   '毛绒':   'images/cat_fluffy.png',
-  '卡牌':   'images/cat_card.png',
+  '居陈':   'images/cat_card.png',   /* v92：原卡牌大类改名居陈 */
   '周边':   'images/cat_peripheral.png',
   '电影':   'images/film-cover.png',                                                               /* v17.0：换回老版胶片图 */
   '留声机': 'images/gramophone-cover.png',                                                          /* v17.0：换回老版留声机图 */
@@ -3823,7 +3829,7 @@ var ui = {
   view:'overview',
   collection:{ mode:'cat', cat:'', sub:'', q:'', view:'wall', ipId:null, seriesId:null, inbox:false, classic:false, editing:false, numOrder:'asc', yearView:false, seriesWall:'', seriesStatus:'全部', seriesSort:'no', pageSize:0, page:1,
     /* v77：宝可梦 30 周年冰箱贴专用视图状态 */
-    pk:{ type:'', both:false, form:'', region:'', group:'', gen:'' }, pkIndex:false, pkGenOpen:{},
+    pk:{ types:[], both:false, form:'', region:'', group:'', gen:'' }, pkIndex:false, pkGenOpen:{},
     /* v78：批量编辑——selMode 选择模式；sel 选中 id 集合（{id:true}） */
     selMode:false, sel:{} },
   av:{ cat:'', sub:'', q:'', classic:false, stars:false, numOrder:'asc', yearView:false },
@@ -4888,7 +4894,7 @@ function renderIpMode(){
   var s=store.ip, c=store.collection;
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>IP 库</h2>'+
-    '<div class="hint">同一个 IP 下的手办、毛绒、卡牌、周边都归在一起</div></div>'+modeSeg()+'</div>';
+    '<div class="hint">同一个 IP 下的手办、毛绒、居陈、周边都归在一起</div></div>'+modeSeg()+'</div>';
   if (s.status==='loading'){ h += emptyHTML('正在读线上数据…',''); return h+'</section>'; }
   if (s.status==='error'){ h += emptyHTML('没能读到 IP 库','点上面的「重试」再拉一次。'); return h+'</section>'; }
   h += '<div class="ipgrid">'+s.rows.map(function(ip){
@@ -4933,7 +4939,7 @@ function renderIpDetail(){
         '<button class="btn ghost sm" type="button" data-act="delip" data-id="'+esc(ip._id)+'" style="color:var(--red)">删除 IP</button>'+
       '</div></div></div>';
   if (!items.length){
-    h += emptyHTML('这个 IP 下还没有东西','点「在这个 IP 下添加」，手办、毛绒、卡牌，或者任何别的都行。');
+    h += emptyHTML('这个 IP 下还没有东西','点「在这个 IP 下添加」，手办、毛绒、居陈，或者任何别的都行。');
     return h+'</section>';
   }
 
@@ -5101,7 +5107,7 @@ function renderCheckinNew(){
   for(var hi=1;hi<=5;hi++){
     var hcls = (heartV>=hi)?'on':((heartV>=hi-0.5)?'half':'');
     heartBody += '<span class="heart-btn" data-i="'+hi+'">'+
-      '<span class="hheart '+hcls+'">♥<i>♥</i></span>'+
+      '<span class="hheart '+hcls+'">'+HE+'<i>'+HE+'</i></span>'+
       '<button type="button" class="hit left" data-i="'+(hi-0.5)+'" aria-label="'+(hi-0.5)+' 颗心"></button>'+
       '<button type="button" class="hit right" data-i="'+hi+'" aria-label="'+hi+' 颗心"></button>'+
       '</span>';
@@ -7396,10 +7402,13 @@ document.addEventListener('click', function(ev){
   if (act==='pkindex'){ ui.collection.pkIndex=true; render(); return; }
   if (act==='pkindexback'){ ui.collection.pkIndex=false; render(); return; }
   if (act==='pkshape'){ pkSetShape(node.getAttribute('data-v')); render(); return; }
-  /* v77：属性按钮也是开关——点已选中的那个就取消 */
+  /* v94：属性支持多选——单击选中（可同时选多个），再点一次取消；「全部」清空 */
   if (act==='pktype'){
     var ptv = node.getAttribute('data-v')||'';
-    ui.collection.pk.type = (ui.collection.pk.type===ptv) ? '' : ptv;
+    var pko = ui.collection.pk || (ui.collection.pk = { types:[], both:false, form:'', region:'', group:'', gen:'' });
+    var ptarr = pkTypesOf(pko);
+    if (!ptv) ptarr.length = 0;                     /* 全部：清空 */
+    else { var pti = ptarr.indexOf(ptv); if (pti>=0) ptarr.splice(pti,1); else ptarr.push(ptv); }
     render(); return;
   }
   if (act==='pkboth'){ ui.collection.pk.both = (node.getAttribute('data-v')==='both'); render(); return; }
@@ -8560,17 +8569,28 @@ function pkToolsBar(){
   '</div>';
 }
 var PK_FIELD_OF = { form:'特殊形态', group:'图鉴组', gen:'世代组', region:'地区' };
+/* v94：属性改为「多选」——types 是数组；老的单选字符串 type 自动迁移进来。 */
+function pkTypesOf(p){
+  if (!p) return [];
+  if (!Array.isArray(p.types)) p.types = p.type ? [p.type] : [];
+  if (p.type) delete p.type;
+  return p.types;
+}
 /* v77：属性图标栏 + 三个正交维度筛选栏（仅宝可梦冰箱贴系列） */
 function pkFilterBar(rows){
-  var p = ui.collection.pk || (ui.collection.pk = { type:'', both:false, form:'', region:'', group:'', gen:'' });
+  var p = ui.collection.pk || (ui.collection.pk = { types:[], both:false, form:'', region:'', group:'', gen:'' });
+  var ptypes = pkTypesOf(p);
   var sh = pkShape();
   function cnt(f, v){ return (rows||[]).filter(function(r){ return String(r[PK_FIELD_OF[f]]||'')===v; }).length; }
   var h = '<div class="pkbar">';
-  h += '<div class="pkrow"><u>属性</u><div class="pktypebar">'+
-    '<button type="button" class="pktbtn pktxt'+(p.type?'':' on')+'" data-act="pktype" data-v="">全部</button>';
+  h += '<div class="pkrow"><u>属性'+(ptypes.length?'（已选 '+ptypes.length+'）':'')+'</u><div class="pktypebar">'+
+    '<button type="button" class="pktbtn pktxt'+(ptypes.length?'':' on')+'" data-act="pktype" data-v=""'+
+    (ptypes.length?' title="清空已选的 '+ptypes.length+' 个属性"':'')+'>全部</button>';
   PK_TYPES.forEach(function(t){
     var src = resolveImgUrl(pkTypeSrc(t, sh));
-    h += '<button type="button" class="pktbtn'+(p.type===t?' on':'')+'" data-act="pktype" data-v="'+esc(t)+'" title="'+esc(t)+'">'+
+    var on = ptypes.indexOf(t)>=0;
+    h += '<button type="button" class="pktbtn'+(on?' on':'')+'" data-act="pktype" data-v="'+esc(t)+'"'+
+      ' title="'+esc(t)+(on?'（再点一次取消）':'')+'">'+
       (src ? '<img src="'+esc(src)+'" alt="'+esc(t)+'">' : '<b>'+esc(String(t).slice(0,1))+'</b>')+'</button>';
   });
   h += '<span class="pkseg pkseg-sm">'+
@@ -8597,10 +8617,12 @@ function pkFilterBar(rows){
 /* v77：三维 + 属性 联合过滤 */
 function pkApplyFilters(items){
   var p = ui.collection.pk || {};
+  var ptypes = pkTypesOf(p);
   return items.filter(function(r){
-    if (p.type){
+    if (ptypes.length){
       var t1 = r['属性']||'', t2 = r['副属性']||'';
-      if (!(t1===p.type || (p.both && t2===p.type))) return false;
+      /* 多选：主属性命中 或（两者皆可时副属性命中）任一即通过 */
+      if (!(ptypes.indexOf(t1)>=0 || (p.both && ptypes.indexOf(t2)>=0))) return false;
     }
     if (p.form  && String(r['特殊形态']||'')!==p.form) return false;
     if (p.region&& String(r['地区']||'')!==p.region) return false;
@@ -9299,7 +9321,7 @@ function fieldHTML(f, v){
     for(var i=1;i<=(f.max||5);i++){
       var cls = (hn>=i)?'on':((hn>=i-0.5)?'half':'');
       body+='<span class="heart-btn" data-i="'+i+'">'+
-        '<span class="hheart '+cls+'">♥<i>♥</i></span>'+
+        '<span class="hheart '+cls+'">'+HE+'<i>'+HE+'</i></span>'+
         '<button type="button" class="hit left" data-i="'+(i-0.5)+'" aria-label="'+(i-0.5)+' 颗心"></button>'+
         '<button type="button" class="hit right" data-i="'+i+'" aria-label="'+i+' 颗心"></button>'+
         '</span>';
@@ -11964,7 +11986,7 @@ function rDetailHead(coverUrl, fallbackText, title, sub){
 /* ============================================================
    藏品 · 大英博物馆阳光长廊（v16：背景透视走向 + 6 个玻璃展柜）
    ============================================================ */
-/* 6 大类在展厅里按透视走向摆放：左侧手办/周边/杯盏、右侧毛绒/卡牌/着物
+/* 6 大类在展厅里按透视走向摆放：左侧手办/周边/杯盏、右侧毛绒/居陈/着物（v92：卡牌→居陈）
    每个展柜 = 玻璃罩（贴类目封面）+ 黑色类目标签；两者都跟随背景透视倾斜 */
 function _museumCase(cat, side, depth, cnt){
   var cover = CAT_BG[cat] || '';
@@ -12135,7 +12157,7 @@ function renderCollectionMuseum(){
   /* 第 1 层：6 大类透视展厅（左侧 3 / 右侧 3，跟随背景透视走向） */
   if (!f.cat){
     var leftCats  = CATS.slice(0,3);   /* 手办 / 周边 / 杯盏 */
-    var rightCats = CATS.slice(3,6);   /* 毛绒 / 卡牌 / 着物 */
+    var rightCats = CATS.slice(3,6);   /* 毛绒 / 居陈 / 着物  （v92：卡牌→居陈） */
     var h='<div class="museum">'+
       ''+
       '<div class="mh">'+
@@ -14139,12 +14161,14 @@ function initFireworks(){
   if(!rows.length){
     /* 空状态：只在背景上撒更多柔和小星点（不画 idea 锚点） */
     var bgstars=[];
-    for(var i=0;i<140;i++) bgstars.push({ x:Math.random(), y:Math.random()*0.95, r:Math.random()*1.4+0.3, p:Math.random()*0.5+0.15, h:Math.random()*360 });
+    /* 星尘减弱：数量与亮度都下调（手机端更弱），避免与底层银河照片的星星叠出重影 */
+    var bgN = IS_MOBILE ? 60 : 100;
+    for(var i=0;i<bgN;i++) bgstars.push({ x:Math.random(), y:Math.random()*0.95, r:Math.random()*1.1+0.25, p:Math.random()*0.22+0.08, h:Math.random()*360 });
     function bgFrame(t){
       ctx.clearRect(0,0,w,h);
       for(var i=0;i<bgstars.length;i++){
         var s=bgstars[i];
-        var a = s.p + 0.12*Math.sin(t/1800+s.x*8+i);
+        var a = s.p + 0.05*Math.sin(t/1800+s.x*8+i);
         ctx.fillStyle='hsla('+s.h+',40%,92%,'+a+')';
         ctx.beginPath(); ctx.arc(s.x*w, s.y*h, s.r, 0, 7); ctx.fill();
       }
@@ -14177,7 +14201,10 @@ function initFireworks(){
   });
   /* 背景细密小星点（柔光，不抢戏） */
   var stars=[];
-  for(var i=0;i<120;i++) stars.push({ x:Math.random(), y:Math.random()*0.95, r:Math.random()*1.3+0.25, p:Math.random()*0.45+0.2, h:Math.random()*360 });
+  /* 星尘减弱：数量与亮度都下调（手机端更弱），避免与底层银河照片的星星叠出重影；
+     灵感锚点星（代表每条灵感、可交互）保持原样不动 */
+  var starN = IS_MOBILE ? 55 : 90;
+  for(var i=0;i<starN;i++) stars.push({ x:Math.random(), y:Math.random()*0.95, r:Math.random()*1.1+0.22, p:Math.random()*0.22+0.10, h:Math.random()*360 });
 
   var mouseX=-1, mouseY=-1;
   function startLaunch(a){
@@ -14225,7 +14252,7 @@ function initFireworks(){
     /* 背景小星点（柔光） */
     for(var i=0;i<stars.length;i++){
       var s=stars[i];
-      var a = s.p + 0.10*Math.sin(now/1500+s.x*10);
+      var a = s.p + 0.05*Math.sin(now/1500+s.x*10);
       ctx.fillStyle='hsla('+s.h+',40%,92%,'+a+')';
       ctx.beginPath(); ctx.arc(s.x*w, s.y*h, s.r, 0, 7); ctx.fill();
     }
