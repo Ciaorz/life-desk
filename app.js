@@ -4799,8 +4799,9 @@ function collStats(){
   }
   return h;
 }
-function collectionWall(rows){
-  return '<div class="wall">'+rows.map(function(r){
+/* v96：cols=2 / 3 —— 手机端固定每行列数并整体等比缩小（目前只有宝可梦系列详情传入） */
+function collectionWall(rows, cols){
+  return '<div class="wall'+(cols?' wall-c'+cols:'')+'">'+rows.map(function(r){
     var t=r['名称']||'未命名';
     var sub=(r['小类']||'')+(r['IP']?' · '+r['IP']:'');
     var no=String(r['编号']||'');
@@ -7502,6 +7503,19 @@ document.addEventListener('click', function(ev){
     render(); return;
   }
   if (act==='pkboth'){ ui.collection.pk.both = (node.getAttribute('data-v')==='both'); render(); return; }
+  /* v96：手机端筛选组 —— 点标题展开，再点一次折叠 */
+  if (act==='pktab'){
+    var tbk = node.getAttribute('data-t')||'';
+    var pkz = ui.collection.pk || (ui.collection.pk = { types:[], both:false, form:'', region:'', group:'', gen:'' });
+    pkz.tab = (pkz.tab===tbk) ? '' : tbk;
+    render(); return;
+  }
+  /* v96：手机端卡片密度 —— 一排 2 / 一排 3 */
+  if (act==='pkcols'){
+    var pkw = ui.collection.pk || (ui.collection.pk = { types:[], both:false, form:'', region:'', group:'', gen:'' });
+    pkw.cols = (parseInt(node.getAttribute('data-v'),10)===2) ? 2 : 3;
+    render(); return;
+  }
   /* v77：所有维度按钮都是开关——点一次选中，再点一次取消（清回空 = 全部） */
   if (act==='pkfilt'){
     var pfk = node.getAttribute('data-f');
@@ -8623,8 +8637,8 @@ function renderSeriesMode(){
 }
 /* 系列详情·云游视图专用墙：每张卡带「点击想要」标签；点过则显示「已想要」
    （云游状态仍在，想收叠加共存，不再显示「云游（心愿）」合并字样） */
-function seriesCloudWall(rows){
-  return '<div class="wall">'+rows.map(function(r){
+function seriesCloudWall(rows, cols){
+  return '<div class="wall'+(cols?' wall-c'+cols:'')+'">'+rows.map(function(r){
     var t=r['名称']||'未命名';
     var sub=(r['小类']||'')+(r['IP']?' · '+r['IP']:'');
     var no=String(r['编号']||'');
@@ -8649,6 +8663,14 @@ function seriesCloudWall(rows){
 /* v77：系列详情右上工具条 —— 号码索引入口 + 属性图标形状开关 */
 function pkToolsBar(){
   var sh = pkShape();
+  /* v96：手机端卡片密度（一排 2 / 3 个）。CSS 只在手机端生效，所以桌面端不显示这个开关。 */
+  var cols = (ui.collection.pk && ui.collection.pk.cols) || 3;
+  var colsHTML = IS_MOBILE ? (
+    '<span class="pkseg pkseg-sm">'+
+      '<button type="button" data-act="pkcols" data-v="2" class="'+(cols==2?'on':'')+'">一排 2</button>'+
+      '<button type="button" data-act="pkcols" data-v="3" class="'+(cols==3?'on':'')+'">一排 3</button>'+
+    '</span><span class="pkhint">卡片密度</span>'
+  ) : '';
   return '<div class="pktools">'+
     '<button class="btn ghost sm" type="button" data-act="pkindex">号码索引</button>'+
     '<span class="pkseg pkseg-sm">'+
@@ -8656,6 +8678,7 @@ function pkToolsBar(){
       '<button type="button" data-act="pkshape" data-v="square" class="'+(sh==='square'?'on':'')+'">方形</button>'+
     '</span>'+
     '<span class="pkhint">属性图标形状</span>'+
+    colsHTML+
   '</div>';
 }
 var PK_FIELD_OF = { form:'特殊形态', group:'图鉴组', gen:'世代组', region:'地区' };
@@ -8672,36 +8695,78 @@ function pkFilterBar(rows){
   var ptypes = pkTypesOf(p);
   var sh = pkShape();
   function cnt(f, v){ return (rows||[]).filter(function(r){ return String(r[PK_FIELD_OF[f]]||'')===v; }).length; }
-  var h = '<div class="pkbar">';
-  h += '<div class="pkrow"><u>属性'+(ptypes.length?'（已选 '+ptypes.length+'）':'')+'</u><div class="pktypebar">'+
-    '<button type="button" class="pktbtn pktxt'+(ptypes.length?'':' on')+'" data-act="pktype" data-v=""'+
-    (ptypes.length?' title="清空已选的 '+ptypes.length+' 个属性"':'')+'>全部</button>';
-  PK_TYPES.forEach(function(t){
-    var src = resolveImgUrl(pkTypeSrc(t, sh));
-    var on = ptypes.indexOf(t)>=0;
-    h += '<button type="button" class="pktbtn'+(on?' on':'')+'" data-act="pktype" data-v="'+esc(t)+'"'+
-      ' title="'+esc(t)+(on?'（再点一次取消）':'')+'">'+
-      (src ? '<img src="'+esc(src)+'" alt="'+esc(t)+'">' : '<b>'+esc(String(t).slice(0,1))+'</b>')+'</button>';
-  });
-  h += '<span class="pkseg pkseg-sm">'+
-    '<button type="button" data-act="pkboth" data-v="first" class="'+(p.both?'':' on')+'">第一属性</button>'+
-    '<button type="button" data-act="pkboth" data-v="both" class="'+(p.both?' on':'')+'">两者皆可</button></span>';
-  h += '</div></div>';
-  /* v77：每个按钮都是「再点一次取消」的开关——点当前选中项会把值清回空（=全部） */
-  function chipRow(label, f, list, extraCls){
-    var s = '<div class="pkrow'+(extraCls?' '+extraCls:'')+'"><u>'+label+'</u><div class="pkchips">'+
-      '<button type="button" class="pkchip'+(p[f]?'':' on')+'" data-act="pkfilt" data-f="'+f+'" data-v="">全部</button>';
+  /* 通用：一组「全部 + 若干 chip」（每个都是再点一次取消的开关） */
+  function chipsHTML(f, list){
+    var s = '<button type="button" class="pkchip'+(p[f]?'':' on')+'" data-act="pkfilt" data-f="'+f+'" data-v="">全部</button>';
     list.forEach(function(v){
       s += '<button type="button" class="pkchip'+(p[f]===v?' on':'')+'" data-act="pkfilt" data-f="'+f+'" data-v="'+esc(v)+'"'+
         ' title="'+(p[f]===v?'再点一次取消筛选':'')+'">'+esc(v)+'<i>'+cnt(f,v)+'</i></button>';
     });
-    return s+'</div></div>';
+    return s;
   }
-  h += chipRow('特殊形态','form',PK_FORMS);
-  /* v77：选中「地区形态」后，下面多出一行地区选项（阿罗拉 / 伽勒尔 / 洗翠 / 帕底亚） */
-  if (p.form === '地区形态') h += chipRow('地区','region',PK_REGIONS,'pkrow-sub');
-  h += chipRow('图鉴组','group',PK_GROUPS);
-  h += chipRow('世代组','gen',PK_GENS.map(function(g){ return g.n; }).concat(['第十世代']));
+  /* 18 个属性图标 */
+  function typeIconsHTML(){
+    var s='';
+    PK_TYPES.forEach(function(t){
+      var src = resolveImgUrl(pkTypeSrc(t, sh));
+      var on = ptypes.indexOf(t)>=0;
+      s += '<button type="button" class="pktbtn'+(on?' on':'')+'" data-act="pktype" data-v="'+esc(t)+'"'+
+        ' title="'+esc(t)+(on?'（再点一次取消）':'')+'">'+
+        (src ? '<img src="'+esc(src)+'" alt="'+esc(t)+'">' : '<b>'+esc(String(t).slice(0,1))+'</b>')+'</button>';
+    });
+    return s;
+  }
+  var h = '<div class="pkbar'+(IS_MOBILE?' pkbar-m':'')+'">';
+
+  /* v96：手机端 —— 四个组标题放在最上面一行，单击标题展开/折叠对应的组 */
+  if (IS_MOBILE){
+    var tab = (p.tab === '') ? '' : (p.tab || 'type');    /* 默认展开「属性」 */
+    function tabBtn(k,label,badge){
+      return '<button type="button" class="pktab'+(tab===k?' on':'')+'" data-act="pktab" data-t="'+k+'">'+
+        esc(label)+(badge?'<i>'+esc(badge)+'</i>':'')+'</button>';
+    }
+    function panel(k, inner){
+      return '<div class="pkpanel'+(tab===k?' open':'')+'" data-panel="'+k+'">'+inner+'</div>';
+    }
+    h += '<div class="pktabs">'+
+      tabBtn('type','属性', ptypes.length?String(ptypes.length):'')+
+      tabBtn('form','特殊形态', p.form?'✓':'')+
+      tabBtn('group','图鉴组', p.group?'✓':'')+
+      tabBtn('gen','世代组', p.gen?'✓':'')+
+    '</div>';
+    /* 属性：第一行 = 「全部」+ 第一属性/两者皆可；第二行起 = 18 个图标（9 个一行，共两行） */
+    h += panel('type',
+      '<div class="pkline">'+
+        '<button type="button" class="pktbtn pktxt'+(ptypes.length?'':' on')+'" data-act="pktype" data-v=""'+
+        (ptypes.length?' title="清空已选的 '+ptypes.length+' 个属性"':'')+'>全部</button>'+
+        '<span class="pkseg pkseg-sm">'+
+          '<button type="button" data-act="pkboth" data-v="first" class="'+(p.both?'':' on')+'">第一属性</button>'+
+          '<button type="button" data-act="pkboth" data-v="both" class="'+(p.both?' on':'')+'">两者皆可</button>'+
+        '</span>'+
+      '</div>'+
+      '<div class="pktypegrid">'+typeIconsHTML()+'</div>');
+    /* 特殊形态（选中「地区形态」时下面多出地区子项） */
+    var formInner = '<div class="pkchips">'+chipsHTML('form',PK_FORMS)+'</div>';
+    if (p.form === '地区形态') formInner += '<div class="pkchips pkchips-sub">'+chipsHTML('region',PK_REGIONS)+'</div>';
+    h += panel('form', formInner);
+    h += panel('group', '<div class="pkchips">'+chipsHTML('group',PK_GROUPS)+'</div>');
+    h += panel('gen', '<div class="pkchips">'+chipsHTML('gen',PK_GENS.map(function(g){ return g.n; }).concat(['第十世代']))+'</div>');
+    return h+'</div>';
+  }
+
+  /* 桌面端：保持原样（每行一个标签 + 选项） */
+  h += '<div class="pkrow"><u>属性'+(ptypes.length?'（已选 '+ptypes.length+'）':'')+'</u><div class="pktypebar">'+
+    '<button type="button" class="pktbtn pktxt'+(ptypes.length?'':' on')+'" data-act="pktype" data-v=""'+
+    (ptypes.length?' title="清空已选的 '+ptypes.length+' 个属性"':'')+'>全部</button>'+
+    typeIconsHTML()+
+    '<span class="pkseg pkseg-sm">'+
+      '<button type="button" data-act="pkboth" data-v="first" class="'+(p.both?'':' on')+'">第一属性</button>'+
+      '<button type="button" data-act="pkboth" data-v="both" class="'+(p.both?' on':'')+'">两者皆可</button>'+
+    '</span></div></div>';
+  h += '<div class="pkrow"><u>特殊形态</u><div class="pkchips">'+chipsHTML('form',PK_FORMS)+'</div></div>';
+  if (p.form === '地区形态') h += '<div class="pkrow pkrow-sub"><u>地区</u><div class="pkchips">'+chipsHTML('region',PK_REGIONS)+'</div></div>';
+  h += '<div class="pkrow"><u>图鉴组</u><div class="pkchips">'+chipsHTML('group',PK_GROUPS)+'</div></div>';
+  h += '<div class="pkrow"><u>世代组</u><div class="pkchips">'+chipsHTML('gen',PK_GENS.map(function(g){ return g.n; }).concat(['第十世代']))+'</div></div>';
   return h+'</div>';
 }
 /* v77：三维 + 属性 联合过滤 */
@@ -8909,6 +8974,8 @@ function renderSeriesDetail(){
     });
   }
   var showHdr = sf==='全部' ? '全部子项' : sf==='在库' ? '在库子项' : sf==='云游' ? '云游子项' : '想收子项';
+  /* v96：手机端卡片密度（一排 2 / 3 个），默认 3；仅宝可梦系列传，其余页面保持原自适应 */
+  var pkCols = isPk ? (((ui.collection.pk && ui.collection.pk.cols) || 3)) : 0;
   if (!items.length){
     h += emptyHTML('「'+sf+'」下没有子项',
       sf==='在库' ? '把这些子项的状态改成「在库」就会显示在这里。'
@@ -8921,9 +8988,9 @@ function renderSeriesDetail(){
     h += '<div class="segline" style="margin:-2px 0 14px"><div class="seg seriessort">'+
       '<button type="button" data-act="seriessort" data-v="no" class="'+(ui.collection.seriesSort!=='wish'?'on':'')+'">按序号</button>'+
       '<button type="button" data-act="seriessort" data-v="wish" class="'+(ui.collection.seriesSort==='wish'?'on':'')+'">按想收排列</button></div></div>'+
-      '<div class="grp"><h4>'+showHdr+' <i>'+items.length+'</i></h4>'+seriesCloudWall(items)+'</div>';
+      '<div class="grp"><h4>'+showHdr+' <i>'+items.length+'</i></h4>'+seriesCloudWall(items, pkCols)+'</div>';
   } else {
-    h += '<div class="grp"><h4>'+showHdr+' <i>'+items.length+'</i></h4>'+collectionWall(items)+'</div>';
+    h += '<div class="grp"><h4>'+showHdr+' <i>'+items.length+'</i></h4>'+collectionWall(items, pkCols)+'</div>';
   }
   return h+'</section>';
 }

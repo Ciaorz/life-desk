@@ -3536,3 +3536,47 @@ input.search{margin-bottom:12px}
   .sr-shelf .shelf-item{ padding: 6px; }
   .sr-shelf .shelf-title{ font-size: 11.5px; }
 }
+
+/* ============================================================
+   v96 手机端：宝可梦系列筛选栏（四个组标题一行 + 可折叠）
+   ＋ 展示卡密度（一排 2 / 一排 3，3 个时整体等比缩小防排版变形）
+   （仅 ≤960px 生效；置于文件末尾以覆盖上方同选择器规则）
+   ============================================================ */
+@media (max-width:960px){
+  /* 1) 筛选栏：四个组标题排在最上面一行 */
+  .pkbar-m{ padding: 8px 9px; }
+  .pktabs{ display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:8px; }
+  .pktab{ border:1px solid var(--line); background:#fff; border-radius:9px; padding:7px 2px;
+    font-size:12px; color:var(--ink); cursor:pointer; font-family:inherit; line-height:1.2; }
+  .pktab.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
+  .pktab i{ font-style:normal; font-size:9.5px; opacity:.8; margin-left:2px; }
+
+  /* 2) 折叠面板：默认收起，.open 才展开 */
+  .pkpanel{ display:none; }
+  .pkpanel.open{ display:block; }
+  .pkline{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+
+  /* 3) 属性图标：9 个一行 → 18 个正好排两行（第一行已被「全部+两者皆可」占用） */
+  .pktypegrid{ display:grid; grid-template-columns:repeat(9,1fr); gap:5px; }
+  .pktypegrid .pktbtn{ width:100%; height:auto; aspect-ratio:1/1; padding:2px; border-radius:7px; }
+
+  .pkpanel .pkchips{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .pkchips-sub{ margin-top:6px; padding-left:8px; border-left:2px solid var(--line); }
+
+  /* 4) 卡片密度：固定列数 */
+  .wall.wall-c3{ grid-template-columns:repeat(3,1fr); gap:9px; }
+  .wall.wall-c2{ grid-template-columns:repeat(2,1fr); gap:12px; }
+
+  /* 5) 一排 3 个时整体等比缩小，避免文字/徽标/按钮撑爆卡片导致排版变形 */
+  .wall.wall-c3 .poster .cover{ border-radius:9px; box-shadow:0 6px 14px rgba(63,48,36,.12); }
+  .wall.wall-c3 .poster .cover.noimg b{ font-size:26px; }
+  .wall.wall-c3 .poster .cover .tag{ left:5px; top:5px; padding:1px 5px; font-size:8.5px; border-radius:5px; }
+  .wall.wall-c3 .poster .cover .no{ right:5px; top:5px; padding:1px 5px; font-size:8.5px; border-radius:5px; }
+  .wall.wall-c3 .poster .cover .score{ right:5px; bottom:5px; padding:1px 5px; font-size:8.5px; border-radius:5px; }
+  .wall.wall-c3 .poster h4{ margin-top:7px; font-size:11px; }
+  .wall.wall-c3 .poster p{ font-size:9.5px; }
+  .wall.wall-c3 .pkquick{ left:4px; bottom:4px; gap:3px; }
+  .wall.wall-c3 .pkq{ font-size:8.5px; padding:2px 4px; border-radius:5px; }
+  .wall.wall-c3 .pktypes{ right:4px; bottom:4px; gap:2px; }
+  .wall.wall-c3 .pktypes .pktype{ width:15px; height:15px; }
+}
