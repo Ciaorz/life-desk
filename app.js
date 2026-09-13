@@ -322,6 +322,7 @@ async function localfsWrite(obj, cb){
    ============================================================ */
 var SCHEMA_V2 = 2;
 var IMG_DIR = 'images';
+var THUMB_DIR = 'thumbs';      /* v95：tools/gen_thumbs.py 生成的 WebP 缩略图目录 data/thumbs */
 /* 数据目录在站点下的路径前缀。
    注意区分两种路径：
    - 写文件时用的路径：相对于 FSA 数据目录，形如 images/{类目}-封面/0001.jpg
@@ -1760,11 +1761,17 @@ async function ghRemoteImageSizes(){
     if (!r.ok) return m;
     var j = await r.json();
     if (!j || !j.tree || j.truncated) return m;     /* 截断则放弃 diff，全量上传最安全 */
-    var prefix = (String(GH.path || '').replace(/[\\/][^\\/]*$/, '') || 'data') + '/' + IMG_DIR + '/';
+    /* v95：同时覆盖 data/images/ 与 data/thumbs/，缩略图的增量 diff 才能生效 */
+    var baseDir = (String(GH.path || '').replace(/[\\/][^\\/]*$/, '') || 'data');
+    var prefixes = [baseDir + '/' + IMG_DIR + '/', baseDir + '/' + THUMB_DIR + '/'];
     for (var i = 0; i < j.tree.length; i++){
       var e = j.tree[i];
-      if (e && e.type === 'blob' && typeof e.path === 'string' && e.path.indexOf(prefix) === 0){
-        m[e.path] = (typeof e.size === 'number') ? e.size : -1;
+      if (!e || e.type !== 'blob' || typeof e.path !== 'string') continue;
+      for (var p = 0; p < prefixes.length; p++){
+        if (e.path.indexOf(prefixes[p]) === 0){
+          m[e.path] = (typeof e.size === 'number') ? e.size : -1;
+          break;
+        }
       }
     }
   } catch(e){}
@@ -1801,22 +1808,31 @@ async function collectPushFiles(){
   /* 图片（增量上传：先拉远端 images 清单，仅上传「本地有而远端没有」或「大小变化」的图片，
      未变更的封面直接跳过，避免每次全量重传几百 MB / 触发限流） */
   _ghIncrSkip = 0;
-  try {
-    var imgDir = await _fsaGetDir([IMG_DIR], false);
-    if (imgDir){
-      var remoteSizes = await ghRemoteImageSizes();
-      var list = await walkDirFiles(imgDir, '', []);
+  var remoteSizes = await ghRemoteImageSizes();
+  /* 把某个目录整体纳入上传（增量：远端已有且大小一致则跳过） */
+  async function pushDir(dirName){
+    try {
+      var d = await _fsaGetDir([dirName], false);
+      if (!d) return;
+      var list = await walkDirFiles(d, '', []);
       for (var j = 0; j < list.length; j++){
         var rel = list[j].rel;
-        var rpath = dir + '/' + IMG_DIR + '/' + rel;
+        var rpath = dir + '/' + dirName + '/' + rel;
         var f = await list[j].handle.getFile();
         var rsz = remoteSizes[rpath];
         if (rsz != null && rsz === f.size){ _ghIncrSkip++; continue; }   /* 远端已有且大小一致 → 跳过 */
         files.push({ path: rpath, blob: f });
       }
-      if (_ghIncrSkip) console.log('[增量上传] 跳过未变更封面 ' + _ghIncrSkip + ' 张，仅上传新增/改动');
-    }
-  } catch(e){}
+    } catch(e){}
+  }
+  /* v95：缩略图必须上传——手机端只读 data/thumbs，这是唯一会被同步的图片目录 */
+  await pushDir(THUMB_DIR);
+  /* 原图默认不再上传（132MB，手机端用不到，传了也是白占仓库和流量）。
+     需要保留桌面网页版看图时，控制台执行 localStorage.setItem('pushOriginals','1') 即可恢复。 */
+  var wantOriginals = false;
+  try { wantOriginals = localStorage.getItem('pushOriginals') === '1'; } catch(e){}
+  if (wantOriginals) await pushDir(IMG_DIR);
+  if (_ghIncrSkip) console.log('[增量上传] 跳过未变更文件 ' + _ghIncrSkip + ' 个，仅上传新增/改动');
   return files;
 }
 /* 批量上传，带进度回调 onProgress(done, total)。
@@ -2408,8 +2424,12 @@ function addDataTools(){
       '<button type="button" id="ghSplit" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">拆分数据文件</button>' +
       '<button type="button" id="ghReadme" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">生成说明文件</button>' +
       '<button type="button" id="ghRefresh" style="padding:7px 12px;border:1px solid #3b6fd4;border-radius:7px;background:#3b6fd4;color:#fff;cursor:pointer;font-size:12px">获取最新数据</button>' +
+      /* v95：把封面预下载到手机本地，之后浏览不联网、断网可用 */
+      '<button type="button" id="offlineWarm" style="padding:7px 12px;border:1px solid #2f7a5a;border-radius:7px;background:#2f7a5a;color:#fff;cursor:pointer;font-size:12px">离线下载封面</button>' +
     '</div>' +
     '<div style="font-size:10px;color:#888;margin-top:6px;line-height:1.5">「获取最新数据」会清空本地与缓存的旧数据，重新从网站拉取。手机端拿不到最新内容时，点它即可（不必重装/清缓存）。</div>' +
+    '<div style="font-size:10px;color:#888;margin-top:4px;line-height:1.5">「离线下载封面」把所有封面存进手机本地（建议在 WiFi 下点一次）。存完之后浏览全程不联网、断网也能看。<b>提示：iPhone 上请先用 Safari「添加到主屏幕」，这样才是全屏 App，且本地数据不会被系统清理。</b></div>' +
+    '<div style="font-size:10px;color:#888;margin-top:4px;line-height:1.5">「上传本地数据」现在只上传<b>缩略图</b>（约 25MB）+ 数据文件，不再上传 132MB 原图（手机端用不到）。若想恢复上传原图，在控制台执行 localStorage.setItem(\'pushOriginals\',\'1\')。</div>' +
       '</div>' +
     '</div>' +
     /* ── 折叠 2：高德地图 ── */
@@ -2549,6 +2569,46 @@ function addDataTools(){
   $('ghRefresh').onclick = function(){
     refreshFromServer();
   };
+  /* v95：离线下载全部封面——逐个 fetch，SW 顺手写进 Cache Storage。
+     存完之后图片走 cache-first 本地读取，浏览不联网、断网可用。 */
+  function warmOfflineCovers(){
+    var urls = [], seen = {};
+    function add(u){ if (u && !seen[u]){ seen[u] = 1; urls.push(u); } }
+    Object.keys(store).forEach(function(k){
+      var m = store[k];
+      if (!m || !m.rows) return;
+      m.rows.forEach(function(r){
+        add(coverImg(r));
+        if (r['封面图片']) add(ckCoverUrl(r));
+      });
+    });
+    var hint = $('ghHint'), btn = $('offlineWarm');
+    if (!urls.length){
+      if (hint) hint.textContent = '没有找到封面。';
+      return;
+    }
+    var total = urls.length, i = 0, done = 0, fail = 0;
+    if (btn) btn.disabled = true;
+    function upd(){
+      if (hint) hint.textContent = '离线下载中 ' + done + '/' + total + (fail ? ('（失败 ' + fail + '）') : '');
+    }
+    function step(){
+      if (i >= total){
+        if (btn) btn.disabled = false;
+        if (hint) hint.textContent = '封面已存到本地：' + done + '/' + total + ' 张' + (fail ? ('，失败 ' + fail + ' 张') : '');
+        toast('封面已存入本地，之后断网也能浏览');
+        return;
+      }
+      var u = urls[i++];
+      fetch(u).then(function(){ done++; }, function(){ fail++; }).then(function(){
+        upd(); step();
+      });
+    }
+    upd();
+    /* 6 路并发：够快，又不至于把手机网络/内存打满 */
+    for (var c = 0; c < 6 && c < total; c++) step();
+  }
+  if ($('offlineWarm')) $('offlineWarm').onclick = function(){ warmOfflineCovers(); };
   $('ghSplit').onclick = async function(){
     if (MODE !== 'localfile'){ $('ghHint').textContent = '请先在右下角点「📂 选择数据目录」连接本地文件夹'; return; }
     if (_shardMode){
@@ -2672,9 +2732,36 @@ function heartPills(n){
   }
   return o;
 }
+/* v95：缩略图（配合 tools/gen_thumbs.py 生成的 data/thumbs/）
+   手机端只同步缩略图（约 15MB）而不是原图（约 132MB），所以移动端一律走缩略图；
+   桌面端是本地目录模式、不受带宽限制，仍用原图保证清晰度。
+   需要时用 localStorage 设置 useThumbs = '1' / '0' 强制开关。 */
+var USE_THUMBS = (function(){
+  try{
+    var v = localStorage.getItem('useThumbs');
+    if (v === '1') return true;
+    if (v === '0') return false;
+  }catch(e){}
+  return IS_MOBILE === true;
+})();
+/* data/images/series/x/a.png  ->  data/thumbs/series/x/a.webp
+   外链、blob:、以及非 data/images 路径原样返回，不影响已有逻辑。 */
+function thumbOf(u){
+  if (!u) return '';
+  var p = String(u), key = 'data/images/';
+  var i = p.indexOf(key);
+  if (i < 0) return p;
+  var rest = p.slice(i + key.length);
+  var dot = rest.lastIndexOf('.');
+  var base = dot >= 0 ? rest.slice(0, dot) : rest;
+  return p.slice(0, i) + 'data/thumbs/' + base + '.webp';
+}
 function coverImg(row){
   var imgs = row['封面'] || row['照片'] || row['IP图像'] || row['系列封面'] || row['图片'];
-  if (imgs && imgs[0] && imgs[0].imageUrl) return resolveImgUrl(imgs[0].imageUrl);
+  if (imgs && imgs[0] && imgs[0].imageUrl){
+    var cu = resolveImgUrl(imgs[0].imageUrl);
+    return USE_THUMBS ? thumbOf(cu) : cu;
+  }
   return '';
 }
 function coverViewport(row){
@@ -2785,7 +2872,8 @@ function collectCheckinCustomFields(row){
 }
 function ckCoverUrl(row){
   var u = row && row['封面图片'] || '';
-  return u ? resolveImgUrl(u) : '';
+  var cu = u ? resolveImgUrl(u) : '';
+  return USE_THUMBS ? thumbOf(cu) : cu;
 }
 function ckCoverBg(row){
   var u = ckCoverUrl(row);
@@ -6866,9 +6954,11 @@ function render(){
   $('stage').classList.toggle('selmode', !!(key==='collection' && ui.collection.selMode));
   if (key==='collection' && ui.collection.selMode) renderBatchSel();
   if (key==='travel'){
+    /* v95：地球/地图的重资源（地球贴图 2.7~5.5MB + 边界 6.7MB + three.js 0.6MB）
+       改成进入本模块时才拉取，首屏不再下载这 ~10MB。 */
     if (ui.travel.ckNew){ detachGlobe(); }
-    else if (ui.travel.mapTab==='map'){ detachGlobe(); attachChinaMap(); }
-    else { attachGlobe(); }
+    else if (ui.travel.mapTab==='map'){ detachGlobe(); withEarthAssets(attachChinaMap); }
+    else { withEarthAssets(attachGlobe); }
   } else { detachGlobe(); }
   if (key==='study'){ /* 文渊斋暂无常驻 3D 场景 */ }
   if (key==='idea'){ initFireworks(); } else { stopFireworks(); }
@@ -11850,6 +11940,28 @@ function showGlobeFallback(cv){
     wrap.style.position = wrap.style.position || 'relative';
     wrap.appendChild(note);
   }catch(e){}
+}
+/* v95：地球贴图 / 边界数据 / three.js 改为按需加载——只有进入遐方坞才拉取。
+   加载失败也照常回调：attachGlobe 内部有 try/catch，会降级成静态提示，不会白屏。 */
+function withEarthAssets(cb){
+  var note=null;
+  function kill(){ if(note&&note.parentNode) note.parentNode.removeChild(note); }
+  try{
+    if (typeof window.ensureEarthAssets==='function'){
+      if (!window.earthAssetsReady){
+        var slot=document.getElementById('globeSlot');
+        if (slot){
+          note=document.createElement('div');
+          note.style.cssText='display:flex;align-items:center;justify-content:center;min-height:180px;color:#cfe0ff;font-size:13px;letter-spacing:.05em';
+          note.textContent='地球资源加载中…';
+          slot.appendChild(note);
+        }
+      }
+      window.ensureEarthAssets(function(){ kill(); cb(); });
+      return;
+    }
+  }catch(e){ console.error(e); }
+  kill(); cb();
 }
 function attachGlobe(){
   var host=$('globeHost'), slot=$('globeSlot');

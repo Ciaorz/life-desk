@@ -15,7 +15,7 @@
  *      绝不让一个资源 404 把整个页面卡死。
  * ============================================================ */
 
-const CACHE = 'lifedesk-v62-2026-09-09';
+const CACHE = 'lifedesk-v63-2026-09-11';
 
 // 只缓存已知存在的、必须的子资源（白名单）。绝不强制 addAll 整个列表
 // （之前 v5 因为引用了 4 个 404 文件导致整个 install 失败、SW 永远装不上）
@@ -23,8 +23,9 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './style.css',
-  './app.min.js',            /* v83：改用压缩版（app.js 仍保留为源文件） */
-  './three.min.js',
+  './app.js',                /* 直接缓存源文件（本地优先，编辑即生效） */
+  /* v95：three.min.js 已从预缓存移除——它改由 ensureEarthAssets() 进入遐方坞时按需加载，
+     这里若预缓存，装 SW 时会白下 593KB，抵消首屏瘦身的收益。首次按需加载时仍会被 fetch 处理器缓存。 */
   './marker-icons.js',
   './manifest.webmanifest',
   './icon-180.png',
@@ -37,6 +38,11 @@ const PRECACHE_URLS = [
 
 // 关键资源：后台更新且内容变化时，通知页面静默刷新一次
 const CRITICAL = /\/(?:app\.min\.js|app\.js|style\.css)(?:[?#]|$)/;
+
+// v95：图片一律走 cache-first（本地优先）。
+// 原因：封面是不可变的，原来也走 SWR，导致每次访问都把看过的图整份重下一次
+// （平均 102KB × 上千张），这正是"缓存了但还是慢"的根因。
+const IMG_RE = /\.(?:png|jpe?g|webp|gif|avif|svg)(?:[?#]|$)/i;
 
 function cacheAdd(cache, u) {
   return cache.add(new Request(u, { cache: 'no-cache' })).catch(() => null);
@@ -77,9 +83,32 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // v95：图片本地优先——命中缓存直接返回，完全不发网络请求（离线也能看）
+  if (IMG_RE.test(url.pathname)) {
+    event.respondWith(cacheFirst(req));
+    return;
+  }
+
   // 子资源：stale-while-revalidate（命中缓存立即返回，后台静默更新）
   event.respondWith(staleWhileRevalidate(req, url));
 });
+
+// v95：图片专用——有缓存就用缓存，绝不回源；没缓存才下载并写入缓存
+async function cacheFirst(req) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(req);
+  if (cached) return cached;
+  try {
+    const resp = await fetch(req);
+    if (resp && resp.status === 200 && resp.type === 'basic') {
+      await cache.put(req, resp.clone());
+    }
+    return resp;
+  } catch (e) {
+    // 离线且没缓存：给一个空响应，不让单个图片把页面卡死
+    return cached || new Response('', { status: 504, statusText: 'offline' });
+  }
+}
 
 async function networkFirstHTML(req) {
   try {

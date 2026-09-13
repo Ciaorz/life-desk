@@ -115,22 +115,52 @@
   <button id="globeRefresh" class="globe-refresh" type="button" title="重新加载已添加的目的地">↻ 刷新地球</button>
 </div>
 
-<!-- ===== 3D 地球模型：按设备加载不同纹理 ===== -->
+<!-- ===== 3D 地球 / 地图资源：v95 改为「按需加载」=====
+     原来这里用 document.write 无条件注入地球贴图 + 边界数据 + three.js，
+     每次打开首页都要下载约 11MB（手机端也一样），是首屏慢的主因。
+     现在只注册一个加载器 ensureEarthAssets(cb)：等用户真正进入「遐方坞」
+     模块时才去拉这些文件，全部就绪后回调。首屏不再背这 11MB。 -->
+
 <script>
 (function(){
-  // defer 顺序：先 three，再纹理/数据，再 app
-  var earthJS = window.__IS_MOBILE__ ? 'earth_color_8k.js' : 'earth_color_16k.js';
-  document.write('<script defer src="' + earthJS + '"><\/script>');
-  document.write('<script defer src="earth_height_4k.js"><\/script>');
-  document.write('<script defer src="borders0.js"><\/script>');
-  document.write('<script defer src="borders1.js"><\/script>');
-  document.write('<script defer src="borders_cn_prov.js"><\/script>');
-  document.write('<script defer src="cities.js"><\/script>');
+  var loading=false, done=false, queue=[];
+  window.earthAssetsReady=false;
+  function list(){
+    return [
+      window.__IS_MOBILE__ ? 'earth_color_8k.js' : 'earth_color_16k.js',
+      'earth_height_4k.js',
+      'borders0.js',
+      'borders1.js',
+      'borders_cn_prov.js',
+      'cities.js',
+      'three.min.js'
+    ];
+  }
+  function finish(){
+    done=true; loading=false; window.earthAssetsReady=true;
+    var q=queue.slice(); queue.length=0;
+    q.forEach(function(fn){ try{ fn(); }catch(e){ console.error(e); } });
+  }
+  window.ensureEarthAssets=function(cb){
+    if (typeof cb!=='function') cb=function(){};
+    if (done){ cb(); return; }
+    queue.push(cb);
+    if (loading) return;
+    loading=true;
+    var files=list(), pending=files.length;
+    files.forEach(function(src){
+      var s=document.createElement('script'), settled=false;
+      function tick(){ if(settled) return; settled=true; if(--pending<=0) finish(); }
+      s.onload=tick;
+      s.onerror=function(){ console.warn('[perf] 地球资源加载失败，已跳过：'+src); tick(); };
+      s.src=src;
+      document.head.appendChild(s);
+    });
+  };
 })();
 </script>
 
-<!-- ===== three.js（外置）+ 地球标记内联图标 + 主应用 ===== -->
-<script defer src="three.min.js"></script>
+<!-- ===== 地球标记内联图标 + 主应用（three.js 已改为按需加载）===== -->
 <script defer src="marker-icons.js"></script>
 <script defer src="app.js"></script>
 
