@@ -196,41 +196,55 @@
 
   window.addEventListener('load', function () {
     if (shouldEnable) {
-      /* v96m：updateViaCache:'none' —— 不让浏览器用 HTTP 缓存里的旧 sw.js，
-         否则 GitHub Pages 缓存未过期时，手机端永远发现不了新版本（PWA 卡在旧代码的常见原因）。 */
-      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
-        // 新版本装好后自动刷新，避免一直停在旧缓存里看不到更新
-        var _reloaded = false;
-        reg.addEventListener('updatefound', function () {
-          var nw = reg.installing;
-          if (!nw) return;
-          nw.addEventListener('statechange', function () {
-            if (nw.state === 'installed' && navigator.serviceWorker.controller && !_reloaded) {
-              _reloaded = true;
-              window.location.reload();
+      /* v96o：撤销 v96m 的 updateViaCache:'none' —— 那个设置会强制浏览器每次都用
+         cache:no-cache 去拉 sw.js，等于每次打开站点都白打一次网络请求（用户反馈浪费流量）。
+         改回默认（'imports'）：sw.js 走 HTTP 缓存，没过期就直接命中/304，流量降到最低。
+         新版本改为「用户手动点按钮」触发，见下方 __applySwUpdate；不点就不更新、不刷新。 */
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        window.__swReg = reg;   /* 暴露给同步设置里的「抓取最新版本」按钮 */
+        /* v96o：手动更新入口 —— 不自动刷新，只有用户点按钮才去拉最新 sw.js 并应用。
+           返回 Promise：'up-to-date' / 'no-sw' / 'error' / 或已触发刷新（页面会重载，promise 不再 resolve）。 */
+        window.__applySwUpdate = function () {
+          return new Promise(function (resolve) {
+            if (!reg) { resolve('no-sw'); return; }
+            function skipAndReload(worker) {
+              try {
+                var ch = new MessageChannel();
+                ch.port1.onmessage = function () { window.location.reload(); };
+                worker.postMessage({ type: 'SKIP_WAITING' }, [ch.port2]);
+              } catch (e) { window.location.reload(); }
             }
+            if (reg.waiting) { skipAndReload(reg.waiting); return; }
+            var fired = false;
+            var uh = function () {
+              fired = true;
+              var nw = reg.installing;
+              if (!nw) { resolve('up-to-date'); return; }
+              nw.addEventListener('statechange', function () {
+                if (nw.state === 'installed') {
+                  reg.removeEventListener('updatefound', uh);
+                  skipAndReload(nw);
+                }
+              });
+            };
+            reg.addEventListener('updatefound', uh);
+            reg.update().then(function () {
+              if (!fired) {
+                reg.removeEventListener('updatefound', uh);
+                if (reg.waiting) { skipAndReload(reg.waiting); }
+                else { resolve('up-to-date'); }
+              }
+            }).catch(function () { resolve('error'); });
           });
-        });
+        };
       }).catch(function(e){
         if (window.__fatalShow) window.__fatalShow('[SW] 注册失败（不影响页面打开）：' + (e && e.message ? e.message : e));
       });
 
-      // v83：SW 后台发现关键资源（app.min.js / style.css）有新版本时，静默刷新一次以加载新版。
-      // 页面侧加双重闸门（时间 + 次数），即使 SW 异常也绝不会陷入「重载死循环」。
-      navigator.serviceWorker.addEventListener('message', function (ev) {
-        var d = ev.data || {};
-        if (d.type !== 'SUBRES_UPDATED') return;
-        try {
-          var last = parseInt(sessionStorage.getItem('_subres_rl') || '0', 10);
-          var n = parseInt(sessionStorage.getItem('_subres_rl_n') || '0', 10);
-          var now = Date.now();
-          if (now - last > 8000 && n < 3) {     /* 至少隔 8 秒、且单会话最多 3 次 */
-            sessionStorage.setItem('_subres_rl', String(now));
-            sessionStorage.setItem('_subres_rl_n', String(n + 1));
-            window.location.reload();
-          }
-        } catch (e) { /* sessionStorage 不可用时忽略 */ }
-      });
+      /* v96o：撤销 v83 的「SUBRES_UPDATED 自动刷新」。
+         以前 SW 后台发现 app.js / style.css 有新版就静默重载页面——本质上还是自动更新，
+         违背「手动」诉求。现在 SW 只在后台把新文件写进缓存（stale-while-revalidate），
+         不触发任何刷新；由同步设置里的「抓取最新版本」按钮来真正换上新代码。 */
 
       // 直接加载未压缩的 app.js（本地开发，编辑即生效，不再需要单独构建 app.min.js）
     } else {

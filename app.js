@@ -2551,6 +2551,12 @@ function addDataTools(){
         '</svg>' +
       '</button>' +
     '</div>' +
+    /* v96o：手动「抓取最新版本」按钮 —— 取代后台自动更新；点了才去拉新 sw.js 并刷新应用。
+       与「最新」（刷新数据）区分开：这个按钮更新的是「应用代码本身」（app.js / style.css）。 */
+    '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+      '<button type="button" id="swUpdate" style="padding:7px 12px;border:1px solid #4d3045;border-radius:7px;background:#4d3045;color:#fff;cursor:pointer;font-size:12px">抓取最新版本</button>' +
+      '<span id="swUpdateHint" style="font-size:10px;color:#888"></span>' +
+    '</div>' +
     /* v96d：原直接展示的三段说明，改为点「说明」按钮折叠/展开 */
     '<div id="ghHelp" style="display:none;margin-top:8px;padding:8px 10px;background:#f7f5f1;border:1px solid #e3ddd2;border-radius:7px">' +
       '<div style="font-size:10px;color:#888;line-height:1.6">「最新」会清空本地与缓存的旧数据，重新从网站拉取。手机端拿不到最新内容时，点它即可（不必重装/清缓存）。</div>' +
@@ -2695,6 +2701,28 @@ function addDataTools(){
   /* v60：获取网站最新数据——清空 SW/本地/兜底缓存后，重新从服务器拉取全部数据 */
   $('ghRefresh').onclick = function(){
     refreshFromServer();
+  };
+  /* v96o：手动「抓取最新版本」—— 调 index.html 暴露的 __applySwUpdate。
+     只有用户主动点才去拉新 sw.js 并换上新代码（不再后台自动刷新 / 自动重载）。 */
+  if ($('swUpdate')) $('swUpdate').onclick = function(){
+    var btn = this, sp = $('swUpdateHint');
+    if (!('serviceWorker' in navigator) || !window.__applySwUpdate){
+      if (sp) sp.textContent = '未启用 Service Worker（请用 https 打开本站点）';
+      return;
+    }
+    btn.disabled = true;
+    if (sp) sp.textContent = '正在检查…';
+    window.__applySwUpdate().then(function(res){
+      btn.disabled = false;
+      if (!sp) return;
+      if (res === 'up-to-date') sp.textContent = '已是最新版本';
+      else if (res === 'no-sw') sp.textContent = '未注册 SW（请用 https 打开）';
+      else if (res === 'error') sp.textContent = '检查失败，稍后重试';
+      else sp.textContent = '正在更新…';
+    }).catch(function(){
+      btn.disabled = false;
+      if (sp) sp.textContent = '检查失败，稍后重试';
+    });
   };
   /* v95：离线下载全部封面——逐个 fetch，SW 顺手写进 Cache Storage。
      存完之后图片走 cache-first 本地读取，浏览不联网、断网可用。 */

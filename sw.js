@@ -17,7 +17,7 @@
 
 /* v96m：每次部署请 bump 这个版本号 —— 浏览器只有发现 sw.js 字节变了才会安装新 SW，
    版本号不变 → 手机上永远拿不到新的 app.js / style.css（这就是"PWA 不更新"的根因）。 */
-const CACHE = 'lifedesk-v64-2026-09-16';
+const CACHE = 'lifedesk-v65-2026-09-16';
 
 /* v96m：图片单独放一个「不随版本清理」的缓存桶。
    以前图片和代码共用 CACHE，每次部署 bump 版本号，activate 会把图片一起删光，
@@ -57,10 +57,13 @@ function cacheAdd(cache, u) {
 
 self.addEventListener('install', (event) => {
   // 单文件失败不阻断 install（关键：之前 v5 的死循环就是被这一步卡死的）
+  /* v96o：不再自动 skipWaiting —— 否则新 SW 一装好就抢走控制权，用户没机会「手动」决定何时更新。
+     现在新 SW 装好后停在 waiting 状态，由同步设置里的「抓取最新版本」按钮发 SKIP_WAITING 才接管。
+     注：首次安装（没有旧 SW 在控）仍会自动激活，因为 activate 里 self.clients.claim() 会立即认领页面。 */
   event.waitUntil(
     caches.open(CACHE).then((cache) =>
       Promise.all(PRECACHE_URLS.map((u) => cacheAdd(cache, u)))
-    ).then(() => self.skipWaiting())
+    )
   );
 });
 
@@ -204,6 +207,14 @@ self.addEventListener('message', (event) => {
         if (event.ports && event.ports[0]) {
           event.ports[0].postMessage({ ok: true });
         }
+      })
+    );
+  } else if (data.type === 'SKIP_WAITING') {
+    /* v96o：手动更新按钮发来的「接管」指令 —— 让停在 waiting 的新 SW 立即激活，
+       接管现有页面，随后页面侧会 reload 拉取新代码。 */
+    event.waitUntil(
+      self.skipWaiting().then(() => {
+        if (event.ports && event.ports[0]) event.ports[0].postMessage({ type: 'ACK' });
       })
     );
   }
