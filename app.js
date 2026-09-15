@@ -2701,11 +2701,21 @@ function addDataTools(){
   function warmOfflineCovers(){
     var urls = [], seen = {};
     function add(u){ if (u && !seen[u]){ seen[u] = 1; urls.push(u); } }
+    /* v96m：遍历每条记录的「整组」封面（原来只取第一张，多图条目会漏掉后面几张），
+       并统一走 thumbOf —— 手机端实际请求的就是 data/thumbs/ 下的 webp，
+       缓存原图没用，必须对上手机端真正会去 fetch 的那个 URL，否则断网时照样空白。 */
     Object.keys(store).forEach(function(k){
       var m = store[k];
       if (!m || !m.rows) return;
       m.rows.forEach(function(r){
-        add(coverImg(r));
+        for (var fi = 0; fi < IMG_FIELDS.length; fi++){
+          var arr = r[IMG_FIELDS[fi]];
+          if (Array.isArray(arr)){
+            arr.forEach(function(it){ if (it && it.imageUrl) add(thumbOf(resolveImgUrl(it.imageUrl))); });
+          } else if (typeof arr === 'string' && arr){
+            add(thumbOf(resolveImgUrl(arr)));
+          }
+        }
         if (r['封面图片']) add(ckCoverUrl(r));
       });
     });

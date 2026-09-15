@@ -15,7 +15,14 @@
  *      绝不让一个资源 404 把整个页面卡死。
  * ============================================================ */
 
-const CACHE = 'lifedesk-v63-2026-09-11';
+/* v96m：每次部署请 bump 这个版本号 —— 浏览器只有发现 sw.js 字节变了才会安装新 SW，
+   版本号不变 → 手机上永远拿不到新的 app.js / style.css（这就是"PWA 不更新"的根因）。 */
+const CACHE = 'lifedesk-v64-2026-09-16';
+
+/* v96m：图片单独放一个「不随版本清理」的缓存桶。
+   以前图片和代码共用 CACHE，每次部署 bump 版本号，activate 会把图片一起删光，
+   于是离线封面全部失效、出门没网又得重新下载一遍所有图。现在代码随便升级，图片缓存不受影响。 */
+const IMG_CACHE = 'lifedesk-imgs-v1';
 
 // 只缓存已知存在的、必须的子资源（白名单）。绝不强制 addAll 整个列表
 // （之前 v5 因为引用了 4 个 404 文件导致整个 install 失败、SW 永远装不上）
@@ -63,7 +70,8 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((k) => k.startsWith('lifedesk-') && k !== CACHE)
+          /* v96m：排除 IMG_CACHE —— 升级代码版本时保留离线图片 */
+          .filter((k) => k.startsWith('lifedesk-') && k !== CACHE && k !== IMG_CACHE)
           .map((k) => caches.delete(k).catch(() => null))
       )
     ).then(() => self.clients.claim())
@@ -95,9 +103,15 @@ self.addEventListener('fetch', (event) => {
 
 // v95：图片专用——有缓存就用缓存，绝不回源；没缓存才下载并写入缓存
 async function cacheFirst(req) {
-  const cache = await caches.open(CACHE);
+  const cache = await caches.open(IMG_CACHE);
   const cached = await cache.match(req);
   if (cached) return cached;
+  /* v96m：兼容旧版——升级前图片存在主 CACHE 里，先回退查一次并顺手搬进 IMG_CACHE，
+     避免用户升级后「离线封面全没了」又要重下一次。 */
+  try {
+    const old = await caches.match(req);
+    if (old) { cache.put(req, old.clone()).catch(() => null); return old; }
+  } catch (e) {}
   try {
     const resp = await fetch(req);
     if (resp && resp.status === 200 && resp.type === 'basic') {
@@ -106,7 +120,7 @@ async function cacheFirst(req) {
     return resp;
   } catch (e) {
     // 离线且没缓存：给一个空响应，不让单个图片把页面卡死
-    return cached || new Response('', { status: 504, statusText: 'offline' });
+    return new Response('', { status: 504, statusText: 'offline' });
   }
 }
 
@@ -135,8 +149,19 @@ async function staleWhileRevalidate(req, url) {
     ? (cached.headers.get('etag') || cached.headers.get('last-modified'))
     : null;
 
-  const network = fetch(req, { cache: 'no-store' })
+  /* v96m：后台更新改为「条件请求」——带上 If-None-Match / If-Modified-Since。
+     服务器回 304 就表示文件没变，此时不下载任何响应体（只有几十字节的头部，几乎零流量），
+     直接沿用缓存。改之前是无条件整份重下，几十个数据分片每次都白吃一遍流量，
+     这正是"点一次最新就要重新下载所有旧数据"的原因。 */
+  const cachedEtag = cached ? cached.headers.get('etag') : null;
+  const cachedLM = cached ? cached.headers.get('last-modified') : null;
+  const condHeaders = new Headers(req.headers);
+  if (cachedEtag) condHeaders.set('If-None-Match', cachedEtag);
+  else if (cachedLM) condHeaders.set('If-Modified-Since', cachedLM);
+
+  const network = fetch(new Request(req, { headers: condHeaders }), { cache: 'no-store' })
     .then(async (resp) => {
+      if (resp && resp.status === 304 && cached) return cached;   /* 未变化：零流量沿用缓存 */
       if (resp && resp.status === 200 && resp.type === 'basic') {
         await cache.put(req, resp.clone());
         if (isCritical) {
@@ -170,8 +195,11 @@ self.addEventListener('message', (event) => {
   const data = event.data || {};
   if (data.type === 'PURGE_CACHES') {
     event.waitUntil(
+      /* v96m：保留 IMG_CACHE —— 点「最新」只想刷代码和数据，不该把辛辛苦苦离线好的封面删掉 */
       caches.keys().then((keys) =>
-        Promise.all(keys.map((k) => caches.delete(k).catch(() => null)))
+        Promise.all(
+          keys.filter((k) => k !== IMG_CACHE).map((k) => caches.delete(k).catch(() => null))
+        )
       ).then(() => {
         if (event.ports && event.ports[0]) {
           event.ports[0].postMessage({ ok: true });

@@ -196,7 +196,9 @@
 
   window.addEventListener('load', function () {
     if (shouldEnable) {
-      navigator.serviceWorker.register('sw.js').then(function (reg) {
+      /* v96m：updateViaCache:'none' —— 不让浏览器用 HTTP 缓存里的旧 sw.js，
+         否则 GitHub Pages 缓存未过期时，手机端永远发现不了新版本（PWA 卡在旧代码的常见原因）。 */
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
         // 新版本装好后自动刷新，避免一直停在旧缓存里看不到更新
         var _reloaded = false;
         reg.addEventListener('updatefound', function () {

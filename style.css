@@ -472,9 +472,14 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .f.w3.rs{grid-column-end:span 3}
 .f.full.rs{grid-column-end:-1}
 .f label{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted)}
-/* 注意：必须排除 checkbox / radio，否则复选框会被套上「100% 宽 + 42px 高 + 边框」的文本框样式（状态行被撑高的元凶） */
-.f input:not([type="checkbox"]):not([type="radio"]),.f select,.f textarea{width:100%;min-height:42px;padding:10px 12px;border:1px solid #ddd4c8;
+/* 注意：必须排除 checkbox / radio，否则复选框会被套上「100% 宽 + 42px 高 + 边框」的文本框样式（状态行被撑高的元凶）
+   v96o：再加排除 range —— 滑动杆也被这条命中，被拉成 100% 宽、套上 42px 高 + 内边距 + 边框 + 米色底
+   的「文本框外壳」。这条选择器特异性高达 (0,0,3,1)，单靠 .imgvp-pan 的 (0,0,1,0) 根本压不过，
+   所以必须从源头把 range 摘出去（缩放杆、左右/上下杆都因此恢复成原生滑杆样式）。 */
+.f input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),.f select,.f textarea{width:100%;min-height:42px;padding:10px 12px;border:1px solid #ddd4c8;
   border-radius:11px;background:#fbf8f3;outline:0;transition:.18s}
+/* v96o：range 自带的最小高度/内边距清零，免得继承到别处又被撑高 */
+.f input[type="range"]{min-height:0;padding:0;border:0;background:transparent}
 .f textarea{min-height:76px;resize:vertical;line-height:1.6}
 .f input:focus,.f select:focus,.f textarea:focus{border-color:var(--accent);background:#fff;
   box-shadow:0 0 0 3px rgba(77,48,69,.06)}
@@ -661,9 +666,16 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .imgvp-sliderwrap{display:flex;align-items:center;gap:6px}
 .imgvp-slider{flex:1;min-width:0;height:22px;cursor:pointer;accent-color:#4d3045}
 .imgvp-pct{font-size:11px;color:var(--muted);min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
-.imgvp-btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-/* v96i：左右 / 上下位置滑杆——与方向键同一行；v96k：按用户要求缩短到原来的 35%（62px → 22px） */
-.imgvp-pan{width:22px;flex:0 0 auto;height:22px;cursor:pointer;accent-color:#4d3045;padding:0}
+/* v96m：强制一行——原来 flex-wrap:wrap + gap:6px + 按钮 padding 3px 9px 时整行要约 280px，
+   窄容器（手机端 / 表单列）放不下就折行。现在 gap→4px、按钮内边距→2px 6px、分隔线更细，
+   整行压到约 200px，并用 nowrap 兜底，保证「← 杆 → | ↑ 杆 ↓ | 重置」始终同一排。 */
+.imgvp-btns{display:flex;align-items:center;gap:4px;flex-wrap:nowrap}
+.imgvp-btns .btn.xs{padding:2px 6px;font-size:12px;line-height:1.35}
+.imgvp-btns .imgvp-sp{margin:0 1px;height:14px}
+/* v96i：左右 / 上下位置滑杆——与方向键同一行。
+   v96o：宽度取桌面实测最和谐的 150px；手机端必须更小，否则整排（←杆→ | ↑杆↓ | 重置）放不下。
+   用 min(150px, 19vw) 连续等比缩放：宽屏封顶 150px，390px 手机约 74px，更窄的屏继续跟着缩。 */
+.imgvp-pan{width:min(150px,19vw);flex:0 0 auto;height:20px;cursor:pointer;accent-color:#4d3045;padding:0;margin:0}
 
 /* ---------- v96k：展示卡缩放滑杆（藏品页 / IP库 / 系列页 / 系列详情 共用） ---------- */
 .cslider{display:inline-flex;align-items:center;gap:7px;vertical-align:middle}
