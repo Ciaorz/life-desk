@@ -40,6 +40,8 @@ body[data-pg="av"]{--page-bg:url("images/opera-bg.png")}
 body[data-pg="study"]{--page-bg:url("images/study-bg.png")}
 body[data-pg="food"]{--page-bg:url("images/foodtwo.png")}
 body[data-pg="idea"]{--page-bg:url("images/idea-sky.png"), radial-gradient(ellipse at center,#0a1232 0%,#050816 60%,#02030a 100%)}
+/* 灵思阁：背景银河图保持高清，不加模糊（仅灵思阁；其它主页维持轻模糊柔化） */
+body[data-pg="idea"]::before{ filter:none; }
 body::before{
   content:"";
   position:fixed; inset:-6px;     /* 略超出视口，遮住模糊羽化边，避免边缘露纸色 */
@@ -438,6 +440,11 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .sheet-head p{color:var(--muted);font-size:11px;letter-spacing:.12em;margin-bottom:4px}
 .x{border:0;background:#f1ebe2;width:30px;height:30px;border-radius:9px;cursor:pointer;font-size:16px;
   line-height:1;color:var(--muted);flex:0 0 30px}
+/* v96d：录入窗口右上角「归位」小按钮，位于关闭按钮左侧 */
+.sheet-head-acts{display:flex;align-items:flex-start;gap:8px}
+.guiwei{border:0;background:#efe7da;color:#7a6a55;font-size:12px;font-weight:600;
+  height:30px;padding:0 12px;border-radius:9px;cursor:pointer;letter-spacing:.04em;flex:0 0 auto}
+.guiwei:active{background:#e6dccb}
 /* v75fix：改成 4 列栅格——这样同一行既能放「1/2 + 1/4 + 1/4」，也能放两个 1/2。
    默认每个字段占 2 格（一半）；加 .q 的占 1 格（四分之一）；.full 占满 4 格。 */
 .fgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:13px}
@@ -618,16 +625,21 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .locrow b{font-size:13.5px;font-weight:620}
 .locrow span{color:var(--muted);font-size:11.5px}
 .locrow .ops{display:flex;gap:6px}
-.imgwrap .imgprev{min-height:200px;aspect-ratio:3/4;border-radius:12px;background:#efe9df;margin-bottom:9px;
+.imgwrap .imgprev{min-height:200px;aspect-ratio:3/4;border-radius:12px;background:#fff;margin-bottom:9px;
   border:1px solid rgba(111,89,67,.08);overflow:hidden;position:relative;cursor:grab;outline:0;
   background-position:50% 50%;background-size:100% auto;background-repeat:no-repeat}
 .imgwrap .imgprev:active{cursor:grabbing}
 .imgvp-hint{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);font-size:10px;
   color:#fff;background:rgba(0,0,0,.35);padding:2px 8px;border-radius:99px;pointer-events:none}
-.imgvp-bar{display:flex;align-items:center;gap:6px;margin:-4px 0 10px;flex-wrap:wrap}
+.imgvp-bar{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin:-4px 0 10px;flex-wrap:wrap}
 .imgvp-bar span{font-size:11px;color:var(--muted)}
 .imgvp-bar .btn.xs{padding:3px 9px;font-size:13px;min-height:0}
 .imgvp-sp{width:1px;height:16px;background:rgba(104,87,68,.15);margin:0 2px}
+/* v96h：无级缩放滑杆 */
+.imgvp-sliderwrap{display:flex;align-items:center;gap:6px}
+.imgvp-slider{flex:1;min-width:0;height:22px;cursor:pointer;accent-color:#4d3045}
+.imgvp-pct{font-size:11px;color:var(--muted);min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
+.imgvp-btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .imgrow{display:flex;gap:8px;align-items:center}
 .imgrow input{flex:1;min-width:0}
 /* v75fix：封面框右上角的「✕」清除按钮 */
@@ -2552,9 +2564,9 @@ input.search:focus{border-color:var(--accent);background:#fff}
   padding-top: max(env(safe-area-inset-top), 0px);
 }
 
-/* 底部操作按钮不要被 Home Indicator 挡住 */
+/* 底部操作按钮不要被 Home Indicator 挡住（注意：悬浮「记一条灵感」FAB 不在此列，
+   它用 bottom 偏移自身避开 Home Indicator，若加 padding-bottom 会被撑成两倍高度） */
 .sheet-actions,
-.r-btn[style*="bottom:24"],
 button[data-x="1"] {
   padding-bottom: max(env(safe-area-inset-bottom), 12px);
 }
@@ -2630,7 +2642,7 @@ input.search{margin-bottom:12px}
   /* --- 灵思阁：星空背景 --- */
   .ideasky { min-height: 0; }
   .ideasky canvas#ideaSky { max-width: 100%; height: auto !important; }
-  .ideasky .idea-add { right: 16px !important; bottom: 16px !important; }
+  .ideasky .idea-add { right: 16px !important; bottom: calc(env(safe-area-inset-bottom, 0px) + 12px) !important; }
 
   /* --- 打卡点：小屏地图高度收敛 --- */
   .checkin-map { height: 300px; }
@@ -2665,6 +2677,18 @@ input.search{margin-bottom:12px}
 #dataTools{box-shadow:none !important}
 #dataTools .btn{box-shadow:0 4px 14px rgba(63,48,36,.08)}
 #dataTools .btn:active{transform:translateY(1px)}
+/* v96h：数据按钮行（包一层，好让「回到顶部」能排在它正上方） */
+.dt-row{display:flex;gap:8px;align-items:center}
+/* v96h：回到顶部按钮——默认隐藏，页面能上下滚动时才出现（.show） */
+.to-top{display:none;width:38px;height:38px;padding:0;border-radius:50%;flex:0 0 auto;
+  border:1px solid #d8d2c7;background:#fff;color:#4d3045;cursor:pointer;
+  align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(63,48,36,.14);
+  transition:transform .18s ease}
+.to-top.show{display:inline-flex}
+.to-top:active{transform:translateY(1px)}
+.to-top svg{display:block}
+/* 手机端「数据」向上展开导入/导出时，回到顶部按钮上移让位，避免被盖住 */
+#dataTools.dt-open .to-top{transform:translateY(-84px)}
 
 /* ============ 遐方坞：地球 / 地图 选项卡 ============ */
 .map-tabs{position:absolute;top:14px;right:14px;left:auto;z-index:6;display:flex;gap:6px;padding:5px;border-radius:14px;
@@ -2807,7 +2831,9 @@ input.search{margin-bottom:12px}
   /* 底部弹层与 toast：避开 home indicator */
   .backdrop{ padding-bottom: max(6vh, calc(env(safe-area-inset-bottom, 0px) + 12px)); }
   .toast{ bottom: calc(26px + env(safe-area-inset-bottom, 0px)); }
-  .ghstatus{ bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+  /* v96h：手机端同步状态只留那颗状态点（绿/红/灰），文字全省掉 */
+  .ghstatus{ bottom: calc(14px + env(safe-area-inset-bottom, 0px)); padding:8px; max-width:none; }
+  .ghstatus span{ display:none; }
   #dataTools{
     right: max(14px, calc(env(safe-area-inset-right, 0px) + 10px)) !important;
     bottom: calc(14px + env(safe-area-inset-bottom, 0px)) !important;

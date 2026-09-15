@@ -743,6 +743,35 @@ function bookAllSubCats(){
    只写有变动的分片（对比旧内容），避免每次全量重写几十个文件。 */
 async function storageSaveV2(snapshot){
   var idx = await fsReadIndex();
+  /* v96d：系列改名 → 旗下所有 collection 条目的「系列」字段跟着改（旧名 → 新名）。
+     此刻内存 store.series 已是新名，故旧名以「磁盘上的系列文件」为准（读 rows[0]['系列名称']）。
+     改写后由下面正常的分片写盘一并持久化，无需二次落盘。仅 localfile 模式（系列可改名）才执行。 */
+  if (_fsaHandle && snapshot.series && snapshot.series.length){
+    try {
+      var _oldSN = {};
+      var _sfiles = await entityExistingFiles('series');
+      for (var _s = 0; _s < _sfiles.length; _s++){
+        try {
+          var _so = await fsReadJSONAt(_sfiles[_s]);
+          if (_so && _so.rows && _so.rows[0]){
+            var _sid = String(_so.rows[0]._id || '');
+            if (_sid) _oldSN[_sid] = String(_so.rows[0]['系列名称'] || '').trim();
+          }
+        } catch(e){}
+      }
+      var _col = (store.collection && store.collection.rows) || [];
+      (snapshot.series || []).forEach(function(sr){
+        var _oid = String(sr._id || '');
+        var _old = _oldSN[_oid];
+        var _new = String(sr['系列名称'] || '').trim();
+        if (_old && _new && _old !== _new){
+          for (var _c = 0; _c < _col.length; _c++){
+            if (String(_col[_c]['系列'] || '').trim() === _old) _col[_c]['系列'] = _new;
+          }
+        }
+      });
+    } catch(e){}
+  }
   var buckets = {};        /* cat -> {module, rows} */
   var main = {};           /* 未分片记录 */
   Object.keys(snapshot || {}).forEach(function(mk){
@@ -2356,13 +2385,27 @@ var DT_ICONS = {
   data:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>'
 };
 function dtBtn(icon, txt, cls, act, id){ return '<button type="button"'+(act?' data-act="'+act+'"':'')+(id?' id="'+id+'"':'')+' class="btn ghost sm dt-btn'+(cls?' '+cls:'')+'">'+icon+(txt?'<span class="dt-txt">'+txt+'</span>':'')+'</button>'; }
+/* v96h：手机端「数据」向上展开导入/导出时，回到顶部按钮要让位上移（具体位移由 CSS .dt-open 控制） */
+function syncDtOpen(){
+  var g=$('dtGroup'), box=$('dataTools');
+  if (box) box.classList.toggle('dt-open', !!(g && g.classList.contains('open')));
+}
+/* v96h：仅当页面真的能上下滚动（出现纵向滚动条）时才显示「回到顶部」按钮 */
+function updateToTop(){
+  var t=$('toTop'); if (!t) return;
+  var de=document.documentElement, bd=document.body;
+  var vh=window.innerHeight || (de && de.clientHeight) || 0;
+  var sh=Math.max((de && de.scrollHeight) || 0, (bd && bd.scrollHeight) || 0);
+  t.classList.toggle('show', sh > vh + 8);
+}
 function addDataTools(){
   if ($('dataTools')) return;
   var box = document.createElement('div');
   box.id = 'dataTools';
   /* 手机端屏幕窄，用图标+短文案 / 图标为主，并把导出/导入收成「数据」折叠 */
+  var inner;
   if (IS_MOBILE){
-    box.innerHTML = dtBtn(DT_ICONS.folder, '目录', 'dt-dir', 'fsa', 'fsaPick') +
+    inner = dtBtn(DT_ICONS.folder, '目录', 'dt-dir', 'fsa', 'fsaPick') +
                     dtBtn(DT_ICONS.sync, '', 'dt-sync', 'sync') +
                     '<span class="dt-group" id="dtGroup">' +
                       '<span class="dt-sub" id="dtSub">' +
@@ -2372,13 +2415,27 @@ function addDataTools(){
                       dtBtn(DT_ICONS.data, '数据', 'dt-toggle', 'dtoggle', 'dtToggle') +
                     '</span>';
   } else {
-    box.innerHTML = '<button type="button" data-act="fsa" id="fsaPick" class="btn ghost sm dt-btn dt-dir">'+DT_ICONS.folder+'<span class="dt-txt">数据目录</span></button>' +
+    inner = '<button type="button" data-act="fsa" id="fsaPick" class="btn ghost sm dt-btn dt-dir">'+DT_ICONS.folder+'<span class="dt-txt">数据目录</span></button>' +
                     '<button type="button" data-act="sync" class="btn ghost sm dt-btn dt-sync">'+DT_ICONS.sync+'<span class="dt-txt">同步设置</span></button>' +
                     '<button type="button" data-act="export" class="btn ghost sm dt-btn">'+DT_ICONS.export+'<span class="dt-txt">导出数据</span></button>' +
                     '<button type="button" data-act="import" class="btn ghost sm dt-btn">'+DT_ICONS.import+'<span class="dt-txt">导入数据</span></button>';
   }
-  box.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:9999;display:flex;gap:8px';
+  /* v96h：回到顶部按钮——放在数据按钮行的正上方（桌面=导入数据上方；手机=数据按钮上方，
+     且手机端「数据」向上展开导入/导出时，按钮会自动再上移让位，见 .dt-open 规则） */
+  box.innerHTML =
+    '<button type="button" id="toTop" class="to-top" title="回到顶部" aria-label="回到顶部">'+
+      '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>'+
+    '</button>'+
+    '<div class="dt-row">'+inner+'</div>';
+  box.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:9999;display:flex;flex-direction:column;align-items:flex-end;gap:8px';
   document.body.appendChild(box);
+  var _tt = $('toTop');
+  if (_tt) _tt.onclick = function(){
+    try { window.scrollTo({top:0, behavior:'smooth'}); } catch(e){ window.scrollTo(0,0); }
+  };
+  updateToTop();
+  window.addEventListener('scroll', updateToTop, {passive:true});
+  window.addEventListener('resize', updateToTop);
   box.querySelector('[data-act="fsa"]').onclick = function(){
     if (MODE === 'localfile' && _fsaHandle){ toast('已连接数据目录：' + _fsaHandle.name); return; }
     reconnectFsaDir();
@@ -2393,9 +2450,11 @@ function addDataTools(){
     dtToggle.onclick = function(e){
       if (e && e.stopPropagation) e.stopPropagation();
       var g = $('dtGroup'); if (g) g.classList.toggle('open');
+      syncDtOpen();
     };
     document.addEventListener('click', function(){
       var g = $('dtGroup'); if (g) g.classList.remove('open');
+      syncDtOpen();
     });
   }
   refreshFsaButtons();
@@ -2408,28 +2467,49 @@ function addDataTools(){
     '<div class="sync-sec">' +
       '<div class="sync-hd" data-sync-toggle="syncBodyGh">GitHub 数据同步<span class="sync-arrow">▸</span></div>' +
       '<div class="sync-bd" id="syncBodyGh" style="display:none">' +
-    '<div style="font-size:11px;color:#666;margin:2px 0 6px">仓库已自动填好，你只需粘贴下方 Token：</div>' +
     /* 只有 owner 保留自动填充（用户要求）；其余全部关闭，避免 Chrome 把任意文本框当用户名去匹配已保存密码 */
-    '<label style="display:block;margin:4px 0">用户名(owner)<input id="ghOwner" readonly value="Ciaorz" autocomplete="username" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
-    '<label style="display:block;margin:4px 0">仓库名(repo)<input id="ghRepo" readonly value="life-desk" autocomplete="off" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
-    '<label style="display:block;margin:4px 0">分支(branch)<input id="ghBranch" readonly value="main" autocomplete="off" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
-    '<label style="display:block;margin:4px 0">数据文件路径<input id="ghPath" readonly value="data/lifedesk.json" autocomplete="off" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    /* v96c：用户名/仓库名同行、分支/数据文件路径同行；去掉字段名后的英文括号；按内容调宽；API代理地址去掉括号说明 */
+    '<div style="display:flex;gap:8px;margin:4px 0">'+
+      '<div style="flex:1 1 0;min-width:0"><label style="display:block;font-size:11px;color:#666;margin-bottom:2px">用户名</label><input id="ghOwner" readonly value="Ciaorz" autocomplete="username" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></div>'+
+      '<div style="flex:1.3 1 0;min-width:0"><label style="display:block;font-size:11px;color:#666;margin-bottom:2px">仓库名</label><input id="ghRepo" readonly value="life-desk" autocomplete="off" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></div>'+
+    '</div>'+
+    '<div style="display:flex;gap:8px;margin:4px 0">'+
+      '<div style="flex:1 1 0;min-width:0"><label style="display:block;font-size:11px;color:#666;margin-bottom:2px">分支</label><input id="ghBranch" readonly value="main" autocomplete="off" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></div>'+
+      '<div style="flex:1.6 1 0;min-width:0"><label style="display:block;font-size:11px;color:#666;margin-bottom:2px">数据文件路径</label><input id="ghPath" readonly value="data/lifedesk.json" autocomplete="off" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></div>'+
+    '</div>'+
     /* new-password：告诉浏览器这是新凭据，不要用已保存的密码来配对用户名，从而不再弹出「更新用户名」提示 */
     '<label style="display:block;margin:4px 0">Token（有 repo 权限，仅存本机）<input id="ghToken" type="password" autocomplete="new-password" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
-    '<label style="display:block;margin:4px 0">GitHub API 代理地址（国内手机访问 api.github.com 被墙时填，如 Cloudflare Worker 地址；留空=直连）<input id="ghApiBase" type="text" autocomplete="off" placeholder="https://你的worker.xxx.workers.dev" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    '<label style="display:block;margin:4px 0">GitHub API 代理地址<input id="ghApiBase" type="text" autocomplete="off" placeholder="https://你的worker.xxx.workers.dev" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+    /* 第一行：连接 / 上传 / 下载 / 拆分数据 */
     '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' +
-      '<button type="button" id="ghSave" style="padding:7px 12px;border:1px solid #4d3045;border-radius:7px;background:#4d3045;color:#fff;cursor:pointer;font-size:12px">保存并连接</button>' +
-      '<button type="button" id="ghUpload" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">上传本地数据</button>' +
-      '<button type="button" id="ghPull" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px;display:none">下载云端到本地</button>' +
-      '<button type="button" id="ghSplit" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">拆分数据文件</button>' +
-      '<button type="button" id="ghReadme" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">生成说明文件</button>' +
-      '<button type="button" id="ghRefresh" style="padding:7px 12px;border:1px solid #3b6fd4;border-radius:7px;background:#3b6fd4;color:#fff;cursor:pointer;font-size:12px">获取最新数据</button>' +
-      /* v95：把封面预下载到手机本地，之后浏览不联网、断网可用 */
-      '<button type="button" id="offlineWarm" style="padding:7px 12px;border:1px solid #2f7a5a;border-radius:7px;background:#2f7a5a;color:#fff;cursor:pointer;font-size:12px">离线下载封面</button>' +
+      '<button type="button" id="ghSave" style="padding:7px 12px;border:1px solid #4d3045;border-radius:7px;background:#4d3045;color:#fff;cursor:pointer;font-size:12px">连接</button>' +
+      '<button type="button" id="ghUpload" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">上传</button>' +
+      '<button type="button" id="ghPull" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px;display:none">下载</button>' +
+      '<button type="button" id="ghSplit" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">拆分数据</button>' +
     '</div>' +
-    '<div style="font-size:10px;color:#888;margin-top:6px;line-height:1.5">「获取最新数据」会清空本地与缓存的旧数据，重新从网站拉取。手机端拿不到最新内容时，点它即可（不必重装/清缓存）。</div>' +
-    '<div style="font-size:10px;color:#888;margin-top:4px;line-height:1.5">「离线下载封面」把所有封面存进手机本地（建议在 WiFi 下点一次）。存完之后浏览全程不联网、断网也能看。<b>提示：iPhone 上请先用 Safari「添加到主屏幕」，这样才是全屏 App，且本地数据不会被系统清理。</b></div>' +
-    '<div style="font-size:10px;color:#888;margin-top:4px;line-height:1.5">「上传本地数据」现在只上传<b>缩略图</b>（约 25MB）+ 数据文件，不再上传 132MB 原图（手机端用不到）。若想恢复上传原图，在控制台执行 localStorage.setItem(\'pushOriginals\',\'1\')。</div>' +
+    /* 第二行：最新 / 下载封面 / 生成说明 / 说明（折叠） */
+    '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
+      '<button type="button" id="ghRefresh" style="padding:7px 12px;border:1px solid #3b6fd4;border-radius:7px;background:#3b6fd4;color:#fff;cursor:pointer;font-size:12px">最新</button>' +
+      /* v95：把封面预下载到手机本地，之后浏览不联网、断网可用 */
+      '<button type="button" id="offlineWarm" style="padding:7px 12px;border:1px solid #2f7a5a;border-radius:7px;background:#2f7a5a;color:#fff;cursor:pointer;font-size:12px">下载封面</button>' +
+      '<button type="button" id="ghReadme" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">生成说明</button>' +
+      /* v96e：说明按钮改为信息图标（内联 SVG，参照圆环+衬线 i），固定 24px 紧凑方块，保证紧跟「生成说明」不换行 */
+      '<button type="button" id="ghHelpBtn" title="说明" aria-label="说明" style="width:24px;height:24px;padding:0;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;line-height:0">' +
+        '<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" style="display:block">' +
+          '<circle cx="12" cy="12" r="9.6" fill="none" stroke="currentColor" stroke-width="2.2"/>' +
+          '<circle cx="12" cy="7" r="1.6" fill="currentColor"/>' +
+          '<rect x="10.5" y="10.5" width="3" height="6.7" fill="currentColor"/>' +
+          '<rect x="8.3" y="17.2" width="7.4" height="1.9" fill="currentColor"/>' +
+          '<rect x="8.3" y="10.5" width="2.2" height="2.2" fill="currentColor"/>' +
+        '</svg>' +
+      '</button>' +
+    '</div>' +
+    /* v96d：原直接展示的三段说明，改为点「说明」按钮折叠/展开 */
+    '<div id="ghHelp" style="display:none;margin-top:8px;padding:8px 10px;background:#f7f5f1;border:1px solid #e3ddd2;border-radius:7px">' +
+      '<div style="font-size:10px;color:#888;line-height:1.6">「最新」会清空本地与缓存的旧数据，重新从网站拉取。手机端拿不到最新内容时，点它即可（不必重装/清缓存）。</div>' +
+      '<div style="font-size:10px;color:#888;margin-top:4px;line-height:1.6">「下载封面」把所有封面存进手机本地（建议在 WiFi 下点一次）。存完之后浏览全程不联网、断网也能看。<b>提示：iPhone 上请先用 Safari「添加到主屏幕」，这样才是全屏 App，且本地数据不会被系统清理。</b></div>' +
+      '<div style="font-size:10px;color:#888;margin-top:4px;line-height:1.6">「上传」现在只上传<b>缩略图</b>（约 25MB）+ 数据文件，不再上传 132MB 原图（手机端用不到）。若想恢复上传原图，在控制台执行 localStorage.setItem(\'pushOriginals\',\'1\')。</div>' +
+    '</div>' +
       '</div>' +
     '</div>' +
     /* ── 折叠 2：高德地图 ── */
@@ -2555,7 +2635,7 @@ function addDataTools(){
         return;
       }
       if (MODE === 'localfile'){
-        $('ghHint').textContent = '云端已连接！点「上传本地数据」即可把本地 data 文件夹覆盖推到 GitHub。';
+        $('ghHint').textContent = '云端已连接！点「上传」即可把本地 data 文件夹覆盖推到 GitHub。';
         setGhStatus('localfile');
         bootBanner();
       } else {
@@ -2609,6 +2689,12 @@ function addDataTools(){
     for (var c = 0; c < 6 && c < total; c++) step();
   }
   if ($('offlineWarm')) $('offlineWarm').onclick = function(){ warmOfflineCovers(); };
+  /* v96d：说明按钮 —— 折叠/展开原先的三段说明文字 */
+  if ($('ghHelpBtn')) $('ghHelpBtn').onclick = function(){
+    var h = $('ghHelp');
+    if (!h) return;
+    h.style.display = (h.style.display === 'none' || !h.style.display) ? 'block' : 'none';
+  };
   $('ghSplit').onclick = async function(){
     if (MODE !== 'localfile'){ $('ghHint').textContent = '请先在右下角点「📂 选择数据目录」连接本地文件夹'; return; }
     if (_shardMode){
@@ -2643,7 +2729,7 @@ function addDataTools(){
     }
   };
   $('ghUpload').onclick = async function(){
-    if (!GH || !GH.token){ $('ghHint').textContent = '请先在同步设置里保存并连接（粘贴有 repo 权限的 Token）'; return; }
+    if (!GH || !GH.token){ $('ghHint').textContent = '请先点「连接」（粘贴有 repo 权限的 Token）'; return; }
     if (_shardMode && MODE === 'localfile'){
       /* 分片模式：先统计要上传的文件，弹出人工审核清单，只有勾选的项才真正上传 */
       $('ghHint').textContent = '正在统计要上传的文件…';
@@ -2670,7 +2756,7 @@ function addDataTools(){
     });
   };
   $('ghPull').onclick = function(){
-    if (!GH || !GH.token){ $('ghHint').textContent = '请先保存并连接（粘贴 Token）再下载'; return; }
+    if (!GH || !GH.token){ $('ghHint').textContent = '请先点「连接」（粘贴 Token）再下载'; return; }
     $('ghHint').textContent = '从 GitHub 下载中…';
     ghGetAll(function(all, sha, err){
       if (all === null){ $('ghHint').textContent = '下载失败：' + (err || '检查 Token / 网络'); setGhStatus('failed'); return; }
@@ -2774,7 +2860,7 @@ function coverStyle(row,title){
   var u = coverImg(row);
   var vp = coverViewport(row);
   /* 用单引号包裹 URL：外部 HTML 的 style 属性使用双引号，内部若再用双引号会截断属性，导致封面整片空白 */
-  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-repeat:no-repeat;background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+Math.max(100,Math.round(vp.s*100))+"% auto";
+  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-repeat:no-repeat;background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+Math.max(50,Math.round(vp.s*100))+"% auto;background-color:#fff";
   var h = hue(title), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -4590,7 +4676,9 @@ function clearWanderWhenOwned(arr){
    非在库或已填过则按原值。用于详情卡展示、内联编辑、新增表单默认值。 */
 function effHold(r){
   if (r['持有']!=null && r['持有']!=='') return r['持有'];
-  return hasStatus(r,'在库') ? 1 : null;
+  if (hasStatus(r,'在库')) return 1;
+  if (hasStatus(r,'云游')) return 0;   /* v96d：云游（未入手、不在库）默认持有 0，而非「还没记」 */
+  return null;
 }
 /* 在库件数（按实物计）：只数「在库」的藏品，并把每件「持有」多出的数量累加进来。
    录入多少条记录无关，只看在库实物的总件数（某件持有=3 就当作 3 件）。 */
@@ -4709,13 +4797,7 @@ function renderOverview(){
         '<div class="stat"><u>累计投入</u><b>¥'+Math.round(allCost)+'</b></div>'+
       '</div>'+
     '</div>';
-  if (csRows.length){
-    h += '<div class="barlist" style="margin-top:18px">'+CATS.map(function(k){
-      if (!byCat[k]) return '';
-      return '<div class="barrow"><span>'+k+'</span><div class="track"><div class="fill" style="width:'+
-        Math.round(byCat[k]/maxC*100)+'%"></div></div><em>'+byCat[k]+'</em></div>';
-    }).join('')+'</div>';
-  } else {
+  if (!csRows.length){
     h += emptyHTML('还没有藏品','点「添加藏品」，从最近入手的那件开始。');
   }
   h += '</section>';
@@ -4790,13 +4872,6 @@ function collStats(){
       '<div class="stat"><u>'+spendLabel+'</u><b>¥'+Math.round(spend)+'</b></div>'+
     '</div>'+
     '</div>';
-  if (s.rows.length){
-    h += '<div class="barlist" style="margin-top:18px">'+CATS.map(function(k){
-      if (!byCat[k]) return '';
-      return '<div class="barrow"><span>'+k+'</span><div class="track"><div class="fill" style="width:'+
-        Math.round(byCat[k]/maxC*100)+'%"></div></div><em>'+byCat[k]+'</em></div>';
-    }).join('')+'</div>';
-  }
   return h;
 }
 /* v96：cols=2 / 3 —— 手机端固定每行列数并整体等比缩小（目前只有宝可梦系列详情传入） */
@@ -4892,6 +4967,7 @@ function renderCatMode(){
   h += '<div class="segline" style="margin-top:14px">'+
     '<div class="seg"><button type="button" data-act="view" data-v="wall" class="'+(f.view==='wall'?'on':'')+'">封面墙</button>'+
     '<button type="button" data-act="view" data-v="list" class="'+(f.view==='list'?'on':'')+'">列表</button></div>'+
+    '<button class="btn ghost sm" type="button" data-act="collhall">← 返回展厅</button>'+
     '<button class="btn ghost sm" type="button" data-act="locmgr">管理存储地点</button></div>';
   if (s.status==='loading'){ h += emptyHTML('正在读线上数据…','第一次打开会稍微等一下。'); return h+'</section>'; }
   if (s.status==='error'){ h += emptyHTML('没能读到数据','点上面的「重试」再拉一次。'); return h+'</section>'; }
@@ -6060,7 +6136,6 @@ function renderStudy(){
     return '<div class="study" data-act="edit" data-key="study" data-id="'+esc(r._id)+'" data-sp-bindable="database" data-sp-database-id="4rq1NhoGtp9NOnIWB2asLJ">'+
       (scov?'<div class="bthumb sm" style="'+coverStyle(r,'')+'"></div>':'')+
       '<div class="bmain"><div class="top"><h4>'+esc(r['计划']||'')+'</h4><span class="pct">'+p+'%</span></div>'+
-      '<div class="track2"><i style="width:'+p+'%"></i></div>'+
       '<div class="meta">'+statusPill(r['状态'])+'<span>'+esc(r['领域']||'')+'</span>'+meta.join('')+
       (r['备注']?'<span>'+esc(r['备注'])+'</span>':'')+'</div></div>';
   }).join('')+'</div>';
@@ -6879,6 +6954,8 @@ function renderSoon(){
   else setTimeout(run, 16);
 }
 function render(){
+  /* v96h：内容重排后重新判断是否需要「回到顶部」（异步，等 DOM 落定） */
+  setTimeout(updateToTop, 0);
   var key=ui.view, m=MODS[key];
   $('mEyebrow').textContent = m.eyebrow;
   $('mTitle').textContent = m.name;
@@ -7411,6 +7488,8 @@ document.addEventListener('click', function(ev){
     render(); return;
   }
   if (act==='batchclear'){ ui.collection.sel={}; render(); return; }
+  /* v96h：批量下载封面——把选中项里「还是外链」的封面一次性存进本地图库 */
+  if (act==='batchdlcover'){ batchDownloadCovers(); return; }
   if (act==='batchedit'){
     if (!Object.keys(ui.collection.sel).length){ toast('先选中至少一件'); return; }
     openBatchEdit(); return;
@@ -7790,10 +7869,26 @@ document.addEventListener('click', function(ev){
     return;
   }
 
-  if (act==='zone'){ ui.collection.cat=node.getAttribute('data-v'); ui.collection.sub=''; render(); return; }
+  /* v96g：六大类展柜（藏品馆主页入口图标）点击 → 直接进经典列表并带上对应大类筛选 */
+  if (act==='zone'){
+    ui.collection.classic=true;
+    ui.collection.mode='cat';
+    ui.collection.cat=node.getAttribute('data-v');
+    ui.collection.sub='';
+    ui.collection.seriesId=null;
+    ui.collection.ipId=null;
+    ui.collection.seriesWall='';
+    ui.collection.yearView=false;
+    ui.collection.inbox=false;
+    ui.collection.q='';
+    window.scrollTo(0,0);
+    render(); return;
+  }
   if (act==='cabinet'){ ui.collection.sub=node.getAttribute('data-v'); render(); return; }
   if (act==='mback'){ if (ui.collection.sub){ ui.collection.sub=''; } else { ui.collection.cat=''; } render(); return; }
   if (act==='collclassic'){ ui.collection.classic=true; render(); return; }
+  /* v96g：经典列表 → 返回 3D 展厅（清掉类目筛选，回到六大类入口） */
+  if (act==='collhall'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; ui.collection.seriesId=null; ui.collection.ipId=null; ui.collection.seriesWall=''; render(); return; }
   if (act==='musedit'){ ui.collection.editing=!ui.collection.editing; render(); return; }
   if (act==='musreset'){ MUSEUM_LAYOUT={}; saveMuseumLayout(); ui.collection.editing=false; render(); toast('已重置展厅布局'); return; }
   if (act==='avzone'){ ui.av.cat=node.getAttribute('data-v'); ui.av.sub=''; render(); return; }
@@ -7901,8 +7996,9 @@ document.addEventListener('click', function(ev){
     var fits=seriesItems(fse['系列名称']||'');
     var fsample=fits[0]||{};
     var fpf={'大类': fsample['大类']||'', '系列': fse['系列名称']||'', '编号': node.getAttribute('data-v')||''};
-    if (fsample['小类']) fpf['小类']=fsample['小类'];
-    if (fsample['IP']) fpf['IP']=fsample['IP'];
+    /* v96d：小类 / IP 从系列内「任意一件」取（而非仅第一件），避免首件恰好没填时漏带 */
+    var fsub=fits.filter(function(r){ return r['小类']; })[0]; if (fsub) fpf['小类']=fsub['小类'];
+    var fip=fits.filter(function(r){ return r['IP']; })[0]; if (fip) fpf['IP']=fip['IP'];
     openForm('collection', null, {prefill:fpf});
     return;
   }
@@ -8043,7 +8139,8 @@ function applyImgViewport(prev, k){
   if (!prev || !k) return;
   var vp = (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0};
   prev.style.backgroundPosition = (50+vp.x)+'% '+(50+vp.y)+'%';
-  prev.style.backgroundSize = Math.max(100, Math.round(vp.s*100))+'% auto';
+  prev.style.backgroundSize = (vp.s && vp.s>1) ? (Math.max(100,Math.round(vp.s*100))+'% auto')
+                          : (vp.s && vp.s<1) ? (Math.max(50,Math.round(vp.s*100))+'% auto') : 'contain';
 }
 /* ---------- 表单控件绑定（单个表单 / 批量表单共用） ---------- */
 function wireFormControls(host, saveDraft){
@@ -8355,14 +8452,24 @@ function wireFormControls(host, saveDraft){
     function setVp(o){
       if (!editing) return;
       editing.vals[k+'_vp']=o; applyImgViewport(prev, k);
+      var sl = prev.parentNode.querySelector('.imgvp-slider[data-img-zoomslider="'+k+'"]');
+      if (sl) sl.value = Math.max(0.5, Math.min(4, o.s||1));
+      var pc = prev.parentNode.querySelector('.imgvp-pct[data-img-pct="'+k+'"]');
+      if (pc) pc.textContent = Math.round((o.s||1)*100)+'%';
       if (saveDraft) saveDraft();
     }
     var zbar = prev.parentNode.querySelector('.imgvp-bar');
     if (zbar){
       zbar.querySelectorAll('[data-img-zoom]').forEach(function(btn){
         btn.onclick=function(){
-          var o=vp(); o.s=Math.max(1, Math.min(4, o.s+parseFloat(btn.getAttribute('data-d')))); setVp(o);
+          var o=vp(); o.s=Math.max(0.5, Math.min(4, o.s+parseFloat(btn.getAttribute('data-d')))); setVp(o);
         };
+      });
+      /* v96h：拖动滑杆 → 无级缩放，setVp 会同步回显百分比与滑杆位置 */
+      zbar.querySelectorAll('[data-img-zoomslider]').forEach(function(sl){
+        sl.addEventListener('input', function(){
+          var o=vp(); o.s=Math.max(0.5, Math.min(4, parseFloat(sl.value))); setVp(o);
+        });
       });
       zbar.querySelectorAll('[data-img-pan]').forEach(function(btn){
         btn.onclick=function(){
@@ -8382,7 +8489,7 @@ function wireFormControls(host, saveDraft){
     prev.onwheel=function(e){
       if (!prev.style.backgroundImage) return;
       e.preventDefault();
-      var o=vp(); o.s=Math.max(1, Math.min(4, o.s+(e.deltaY<0?0.1:-0.1))); setVp(o);
+      var o=vp(); o.s=Math.max(0.5, Math.min(4, o.s+(e.deltaY<0?0.1:-0.1))); setVp(o);
     };
     /* 键盘方向键微调（焦点在预览框时） */
     prev.addEventListener('keydown', function(e){
@@ -8630,8 +8737,7 @@ function renderSeriesMode(){
       '<div class="bd"><strong>'+esc(name)+'</strong>'+
         '<span>'+esc(se['所属IP']||'未绑 IP')+'</span>'+
         (target
-          ? '<div class="track2" style="margin-top:8px"><i style="width:'+pct+'%"></i></div>'+
-            '<span>'+owned+' / '+target+' · 还差 '+Math.max(0,target-owned)+'</span>'
+          ? '<span>'+owned+' / '+target+'</span>'
           : '<span>'+owned+' 件</span>')+
       '</div></div>';
   }).join('')+
@@ -8855,11 +8961,8 @@ function renderPkIndex(){
     '</span></div>'+
     '<div style="margin-bottom:14px"><button class="btn link" type="button" data-act="pkindexback">← 返回系列</button></div>';
   h += '<div class="buybox pkidx-head"><h4>收集进度</h4>'+
-    '<div class="track2" style="margin-bottom:11px"><i style="width:'+pct+'%"></i></div>'+
     '<div class="pkidx-stats">'+
       '<span>已收 <b style="color:var(--ink)">'+ownedBase+'</b> / '+target+'</span>'+
-      '<span>还差 <b style="color:var(--ink)">'+miss+'</b></span>'+
-      '<span>完成度 <b style="color:var(--ink)">'+pct+'%</b></span>'+
     '</div>'+
     '<div class="pkidx-acts">'+
       '<button class="btn ghost xs" type="button" data-act="pkgenall" data-v="1">全部展开</button>'+
@@ -8928,11 +9031,8 @@ function renderSeriesDetail(){
   if (isPk) h += pkToolsBar();
   if (target){
     h += '<div class="buybox" style="margin-bottom:20px"><h4>收集进度</h4>'+
-      '<div class="track2" style="margin-bottom:11px"><i style="width:'+pct+'%"></i></div>'+
       '<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)">'+
         '<span>已有 <b style="color:var(--ink)">'+cntAll+'</b> / '+target+'</span>'+
-        '<span>还差 <b style="color:var(--ink)">'+miss.length+'</b> 个</span>'+
-        '<span>完成度 <b style="color:var(--ink)">'+pct+'%</b></span>'+
       '</div>';
     if (miss.length){
       /* v59：缺失编号默认只显示前 8 个，其余收进「…还有 N 个」（点击展开）；
@@ -8995,9 +9095,10 @@ function renderSeriesDetail(){
   /* v96：手机端卡片密度（一排 2 / 3 个），默认 3；仅宝可梦系列传，其余页面保持原自适应 */
   var pkCols = isPk ? (((ui.collection.pk && ui.collection.pk.cols) || 3)) : 0;
   /* v96：分页。这个系列有 1324 件，一次性渲染 1324 张带封面的卡片，手机上每次点筛选都要卡好几秒。
-     改成先渲染 PK_PAGE 张，剩下的点「加载更多」追加。 */
+     改成先渲染 PK_PAGE 张，剩下的点「加载更多」追加。
+     v96i：桌面端性能好，不需要分页——一次全渲染（IS_MOBILE 时才切片），手机端维持分页不变。 */
   var totalFiltered = items.length;
-  if (isPk){
+  if (isPk && IS_MOBILE){
     var pkLim = (ui.collection.pkShown && ui.collection.pkShown > 0) ? ui.collection.pkShown : PK_PAGE;
     if (pkLim < PK_PAGE) pkLim = PK_PAGE;
     if (pkLim < totalFiltered) items = items.slice(0, pkLim);
@@ -9231,9 +9332,11 @@ function openForm(key, id, opts){
     }
   } catch(e){}
 
-  /* 持有默认：新藏品默认状态是在库，没填过持有则默认 1（手里至少这一件） */
-  if (key==='collection' && !id && (editing.vals['持有']==null||editing.vals['持有']==='') && hasStatus(editing.vals,'在库')){
-    editing.vals['持有']=1;
+  /* 持有默认：新藏品默认状态是在库，没填过持有则默认 1（手里至少这一件）；
+     v96d：云游（未入手）状态的新藏品默认持有 0，而不是留空。 */
+  if (key==='collection' && !id && (editing.vals['持有']==null||editing.vals['持有']==='')){
+    if (hasStatus(editing.vals,'在库')) editing.vals['持有']=1;
+    else if (hasStatus(editing.vals,'云游')) editing.vals['持有']=0;
   }
 
   var host=$('sheetHost');
@@ -9247,7 +9350,10 @@ function openForm(key, id, opts){
   if (key==='collection' && editing.vals['大类'] === '杂志') eyebrowName = 'Periodical';
   var h='<div class="sheet"><div class="sheet-head"><div>'+
     '<p>'+esc(eyebrowName)+'</p><h2>'+(id?'编辑':'添加')+' · '+esc(titleName)+'</h2></div>'+
-    '<button class="x" type="button" data-x="1" aria-label="关闭">×</button></div>'+
+    '<div class="sheet-head-acts">'+
+      '<button class="guiwei" type="button" data-act="guiwei" title="清空所有已填信息，归位到默认">归位</button>'+
+      '<button class="x" type="button" data-x="1" aria-label="关闭">×</button>'+
+    '</div></div>'+
     '<div class="fgrid">'+activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('')+'</div>'+
     '<div class="sheet-actions">'+
     (id?'<button class="btn ghost" type="button" id="delBtn" style="margin-right:auto;color:var(--red)">删除</button>':'')+
@@ -9256,6 +9362,24 @@ function openForm(key, id, opts){
   host.innerHTML=h; host.hidden=false;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
   bindSheetBackdrop(host);
+  /* v96d：归位按钮 —— 点击后清空所有已填信息：新建时归位到空白默认，编辑时还原为原始记录 */
+  var _guiwei = host.querySelector('[data-act="guiwei"]');
+  if (_guiwei){
+    _guiwei.onclick = function(){
+      editing.vals = {};
+      var base = (!id && !row) ? {} : (row || {});
+      activeFields(key, base).forEach(function(f){ editing.vals[f.k] = fieldVal(base, f); });
+      /* 大类不在电影/留声机/书籍/杂志专用表单里渲染，但分片与筛选全靠它，必须带回 vals */
+      if ((key==='av' || key==='collection') && base['大类']!=null && editing.vals['大类']==null){
+        editing.vals['大类']=base['大类'];
+      }
+      var fg = host.querySelector('.fgrid');
+      if (fg) fg.innerHTML = activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('');
+      wireFormControls(host, function(){ try { localStorage.setItem(draftKey, JSON.stringify(editing.vals)); } catch(e){} });
+      try { localStorage.removeItem(draftKey); } catch(e){}
+      toast('已归位');
+    };
+  }
   /* v58：杂志表单的「刊名」输入框挂 datalist——下拉列出数据库里已有的杂志刊名 */
   if (key==='collection' && editing.vals['大类']==='杂志'){
     var nameInp=host.querySelector('[data-f="名称"]');
@@ -9413,25 +9537,33 @@ function fieldHTML(f, v){
       '</div>';
   } else if (f.t==='img'){
     var vp = (editing && editing.vals && editing.vals[f.k+'_vp']) || {s:1,x:0,y:0};
-    var prevStyle = v ? ("background-image:url('"+resolveImgUrl(v).replace(/[\"'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+Math.max(100,Math.round(vp.s*100))+"% auto") : '';
+    /* v96f→v96g：默认 contain（整图完整显示、四周白色补边）；用户放大（s>1）按比例放大；
+       用户缩小（s<1）按比例缩小、最低 50%（Math.max(50,...) 兜底），不再强制 contain 以免无法缩小 */
+    var bgSize = (vp.s && vp.s>1) ? (Math.max(100,Math.round(vp.s*100))+"% auto")
+                : (vp.s && vp.s<1) ? (Math.max(50,Math.round(vp.s*100))+"% auto") : "contain";
+    var prevStyle = v ? ("background-image:url('"+resolveImgUrl(v).replace(/[\"'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+bgSize) : '';
     var hasV = !!v;
     body='<div class="imgwrap" data-k="'+f.k+'" data-has-img="'+(hasV?1:0)+'">'+
       '<div class="imgprev" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
       /* v75fix：封面框右上角「✕」——一键清掉当前这张图 */
       (v?'<button type="button" class="imgdel" data-act="imgdel" data-k="'+esc(f.k)+'" title="清除这张图片">✕</button>':'')+
-      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动 · 滚轮缩放 · 方向键微调 · 双击重置</div>'+
+      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动 · 滑杆/滚轮缩放 · 方向键微调 · 双击重置</div>'+
       '</div>'+
       '<div class="imgvp-bar" '+(v?'':'hidden')+'>'+
-      '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="-0.15">−</button>'+
-      '<span>缩放</span>'+
-      '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="0.15">+</button>'+
-      '<span class="imgvp-sp"></span>'+
-      '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dx="-2" title="左移">←</button>'+
-      '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dx="2" title="右移">→</button>'+
-      '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dy="-2" title="上移">↑</button>'+
-      '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dy="2" title="下移">↓</button>'+
-      '<span class="imgvp-sp"></span>'+
-      '<button type="button" class="btn ghost xs" data-img-reset="'+f.k+'">重置</button>'+
+        '<div class="imgvp-sliderwrap">'+
+          '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="-0.15">−</button>'+
+          '<input type="range" class="imgvp-slider" data-img-zoomslider="'+f.k+'" min="0.5" max="4" step="0.01" value="'+Math.max(0.5,Math.min(4,vp.s||1))+'" title="拖动无级缩放（50%–400%）">'+
+          '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="0.15">+</button>'+
+          '<span class="imgvp-pct" data-img-pct="'+f.k+'">'+(Math.round((vp.s||1)*100))+'%</span>'+
+        '</div>'+
+        '<div class="imgvp-btns">'+
+          '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dx="-2" title="左移">←</button>'+
+          '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dx="2" title="右移">→</button>'+
+          '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dy="-2" title="上移">↑</button>'+
+          '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dy="2" title="下移">↓</button>'+
+          '<span class="imgvp-sp"></span>'+
+          '<button type="button" class="btn ghost xs" data-img-reset="'+f.k+'">重置</button>'+
+        '</div>'+
       '</div>'+
       /* v75fix：下载按钮挪进这一行，夹在「链接输入框」和「上传」之间 */
       '<div class="imgrow"><input data-f="'+f.k+'" type="text" value="'+esc(v)+'" placeholder="'+esc(f.ph||'图片链接')+'" autocomplete="off">'+
@@ -10653,7 +10785,20 @@ function renderBatchSel(){
     '<span class="bbcnt">已选 <b>'+ids.length+'</b> 件</span>'+
     '<button class="btn ghost sm" type="button" data-act="batchselall">全选当前结果 ('+total+')</button>'+
     '<button class="btn ghost sm" type="button" data-act="batchclear"'+(ids.length?'':' disabled')+'>清空</button>'+
+    '<button class="btn ghost sm" type="button" data-act="batchdlcover"'+(ids.length?'':' disabled')+'>下载封面</button>'+
     '<button class="btn primary" type="button" data-act="batchedit"'+(ids.length?'':' disabled')+'>批量编辑 ('+ids.length+')</button>';
+}
+/* v96h：批量下载封面——把选中项里「还是外链」的封面一次性下载并存进本地图库。
+   已存在本地的会自动跳过（图库查重），下载完自动刷新界面。 */
+function batchDownloadCovers(){
+  var ids=selectedIds();
+  if (!ids.length){ toast('先选中至少一件'); return; }
+  if (!_fsaHandle){ toast('下载封面需要连接本地数据目录', '选择目录', function(){ pickFsaDirAndConnect(); }); return; }
+  var set={}; ids.forEach(function(id){ set[String(id)]=true; });
+  var rows=(store.collection.rows||[]).filter(function(r){ return set[String(r._id)]; });
+  if (!rows.length){ toast('没找到选中的藏品'); return; }
+  toast('开始下载 '+rows.length+' 件的封面…');
+  downloadAllRemoteCovers('collection', rows, null, function(){ render(); });
 }
 /* 单行字段（勾选 + 输入） */
 function batchRow(k, type, ph){
@@ -10676,6 +10821,7 @@ function openBatchEdit(){
       batchRow('购入日期','text','2026 或 2026-03-05')+
     '</div>'+
     '<div class="sheet-actions">'+
+      '<button class="btn ghost" type="button" data-act="batchexit">退出批量编辑</button>'+
       '<button class="btn ghost" type="button" data-x="1">取消</button>'+
       '<button class="btn primary" type="button" id="batchApply">应用写入 '+ids.length+' 件</button>'+
     '</div></div>';
@@ -10683,6 +10829,9 @@ function openBatchEdit(){
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
   bindSheetBackdrop(host);
   $('batchApply').onclick=applyBatchEdit;
+  /* v96h：「退出批量编辑」——直接关掉面板并退出选择模式，长页面不必滚到顶部再点 */
+  var bexit=host.querySelector('[data-act="batchexit"]');
+  if (bexit) bexit.onclick=function(){ ui.collection.selMode=false; ui.collection.sel={}; closeSheet(); render(); };
 }
 /* 应用：把勾选字段合并写入每一个选中项 */
 function applyBatchEdit(){
@@ -12230,12 +12379,14 @@ function _avCase(cat, side, depth, cnt){
          '<div class="mcase-nameplate">'+esc(cat)+' <em>'+cnt+'</em></div>'+
          '</div>';
 }
-function _renderPerspectiveCases(items, cats, sidePrefix, fn){
+function _renderPerspectiveCases(items, cats, sidePrefix, fn, countFn){
   var html = '';
   cats.forEach(function(cat, i){
     var arr = items.filter(function(r){ return r['大类']===cat; });
     var depth = 2 - i;   /* 越靠前（i 越小）depth 越大 */
-    html += fn(cat, sidePrefix, depth, ownedCount(arr));
+    /* countFn 缺省走 ownedCount（藏品馆「在库件数」）；影音厅没有「在库」状态，应直接数条目数 */
+    var cnt = countFn ? countFn(arr) : ownedCount(arr);
+    html += fn(cat, sidePrefix, depth, cnt);
   });
   return html;
 }
@@ -12603,10 +12754,10 @@ function renderAVHall(){
       '</div>'+
       '<div class="museum-floor">'+
         '<div class="museum-side left">'+
-          _renderPerspectiveCases(s.rows, leftCats, 'left', _avCase)+
+          _renderPerspectiveCases(s.rows, leftCats, 'left', _avCase, function(a){ return a.length; })+
         '</div>'+
         '<div class="museum-side right">'+
-          _renderPerspectiveCases(s.rows, rightCats, 'right', _avCase)+
+          _renderPerspectiveCases(s.rows, rightCats, 'right', _avCase, function(a){ return a.length; })+
         '</div>'+
       '</div>'+
       '</div>';
@@ -14128,7 +14279,6 @@ function showStudyBook(id){
       '<div class="bd-pages">'+
         '<div class="bd-meta">'+statusPill(r['状态'])+'<span>'+esc(r['领域']||'')+'</span>'+
           (r['每日分钟']?'<span>每天 '+num(r['每日分钟'])+' 分钟</span>':'')+'</div>'+
-        '<div class="track2"><i style="width:'+p+'%"></i></div>'+
         '<div class="bd-prog">进度 '+p+'%</div>'+
         (r['开始日期']?'<div class="bd-line">开始：'+esc(dstr(r['开始日期']))+'</div>':'')+
         (r['目标日期']?'<div class="bd-line">目标：'+esc(dstr(r['目标日期']))+'</div>':'')+
