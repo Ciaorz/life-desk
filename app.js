@@ -1387,6 +1387,50 @@ async function blobToBytes(b){
 /* v67：核心入库函数——把一张图存进图库（带查重），返回 {rel, reused} 或 null。
    cat 决定落在 images/{cat}-封面/ 哪个文件夹；opt.src 记来源外链便于再次查重；
    opt.bytes 可直接传字节（上传本地文件时用）；opt.baseName 决定文件名里的条目名。 */
+/* v96m：浏览器内把原图压成 WebP 缩略图（长边 maxSide，质量 q）。
+   失败返回 null —— 绝不阻断录入主流程（事后可用 tools/gen_thumbs.py 补）。 */
+async function makeWebpThumb(bytes, maxSide, q){
+  try {
+    if (typeof createImageBitmap !== 'function') return null;
+    var blob = new Blob([bytes], { type: 'image/*' });
+    var bmp = await createImageBitmap(blob);
+    var sc = Math.min(1, (maxSide || 400) / Math.max(bmp.width, bmp.height));
+    var w = Math.max(1, Math.round(bmp.width * sc)), h = Math.max(1, Math.round(bmp.height * sc));
+    var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    var ctx = cv.getContext('2d'); ctx.drawImage(bmp, 0, 0, w, h);
+    if (typeof bmp.close === 'function') bmp.close();
+    var out = await new Promise(function(res){
+      try { cv.toBlob(res, 'image/webp', q || 0.82); } catch(e){ res(null); }
+    });
+    if (!out) return null;
+    return new Uint8Array(await out.arrayBuffer());
+  } catch(e){ return null; }
+}
+/* v96m：给刚入库的封面补一份 data/thumbs/ 下的 WebP 缩略图（平行目录、同名 .webp）。
+   为什么必须做：手机端 USE_THUMBS 恒为 true，只读取 data/thumbs —— 原图在 data/images
+   但没有缩略图时，手机端拿到的就是 404 白板。以前只能靠手动跑 tools/gen_thumbs.py，
+   现在录入即生成，之后点「上传」手机端立即可见。幂等：已存在则跳过。 */
+async function writeThumbFor(rel, bytes){
+  try {
+    if (!_fsaHandle || !rel || !bytes || !bytes.length) return;
+    var key = DATA_PREFIX + '/' + IMG_DIR + '/';
+    var i = String(rel).indexOf(key);
+    if (i < 0) return;                                  /* 只处理落在 data/images 下的图 */
+    var rest = String(rel).slice(i + key.length);
+    var dot = rest.lastIndexOf('.');
+    var base = dot >= 0 ? rest.slice(0, dot) : rest;
+    var tparts = base.split('/').filter(Boolean);
+    if (!tparts.length) return;
+    var tname = tparts.pop() + '.webp';
+    var exists = await fsGetFileHandleAt(THUMB_DIR + '/' + tparts.concat([tname]).join('/'), false);
+    if (exists) return;                                 /* 已有缩略图，跳过 */
+    var webp = await makeWebpThumb(bytes, 400, 0.82);   /* 与 gen_thumbs.py 同参数 */
+    if (!webp || !webp.length) return;
+    var tdir = await _fsaGetDir([THUMB_DIR].concat(tparts), true);
+    if (!tdir) return;
+    await _fsaWriteBinary([THUMB_DIR].concat(tparts), tname, webp);
+  } catch(e){}
+}
 async function ingestImageToLib(cat, opt){
   opt = opt || {};
   if (!_fsaHandle){ toast('还没连接本地数据目录，图片存不下来'); return null; }
@@ -1402,7 +1446,8 @@ async function ingestImageToLib(cat, opt){
   var hash = hashBytes(bytes);
   /* —— 查重：同一张图只存第一次，后面全部引用第一次那份 —— */
   var hit = imgIndexHit(src, hash);
-  if (hit){ return { rel: hit, reused: true }; }
+  /* v96m：查重命中也补一次缩略图——老图可能入库时还没这套机制，data/thumbs 里是空的 */
+  if (hit){ await writeThumbFor(hit, bytes); return { rel: hit, reused: true }; }
   var parts;
   if (opt.coverDir){
     parts = splitRelPath(opt.coverDir);            /* 实体(IP/系列)封面：维持原单文件夹行为 */
@@ -1427,6 +1472,8 @@ async function ingestImageToLib(cat, opt){
     seq--; break;
   }
   if (!ok || !rel) return null;
+  /* v96m：原图写盘成功 → 立刻生成缩略图，保证之后「上传」能把手机端要读的 webp 一起带上 */
+  await writeThumbFor(rel, bytes);
   imgIndexPut(rel, hash, src, bytes.length, ext);
   _imgUrlCache[rel] = src || URL.createObjectURL(new Blob([bytes]));
   await saveImgIndex();
@@ -4786,7 +4833,7 @@ function renderOverview(){
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+yearLabel+'</h2>'+
     '<div class="hint">按购入日期统计'+(noDateCost.length ? ' · '+noDateCost.length+' 件没填「购入日期」未计入当年投入' : '')+'</div></div>'+ysel+'</div>'+
-    '<div class="statgrid">'+
+    '<div class="statgrid ovstat">'+
       '<div class="stat"><u>在库</u><b>'+ownedCnt+'</b><i>件</i></div>'+
       '<div class="stat"><u>'+entriesLabel+'</u><b>'+totalEntries+'</b><i>条</i></div>'+
       '<div class="stat"><u>IP 数</u><b>'+store.ip.rows.length+'</b><i>个</i></div>'+
@@ -4876,7 +4923,8 @@ function collStats(){
 }
 /* v96：cols=2 / 3 —— 手机端固定每行列数并整体等比缩小（目前只有宝可梦系列详情传入） */
 function collectionWall(rows, cols){
-  return '<div class="wall'+(cols?' wall-c'+cols:'')+'">'+rows.map(function(r){
+  /* v96k：内联写 --cs，首帧就是用户上次的卡片大小，不等 JS 再赋值（避免闪一下） */
+  return '<div class="wall'+(cols?' wall-c'+cols:'')+'" style="--cs:'+csGet()+'">'+rows.map(function(r){
     var t=r['名称']||'未命名';
     var sub=(r['小类']||'')+(r['IP']?' · '+r['IP']:'');
     var no=String(r['编号']||'');
@@ -4907,11 +4955,15 @@ function collectionList(rows){
       statusPill(r['状态'])+'</div>';
   }).join('')+'</div>';
 }
-function modeSeg(){
+/* v96k：withScale=true 时附带展示卡缩放滑杆 —— 桌面端放「按类别」按钮左边，手机端放「按系列」按钮右边 */
+function modeSeg(withScale){
   var cur=ui.collection.mode;
-  return '<div class="seg">'+[['cat','按类别'],['ip','按 IP'],['series','按系列']].map(function(o){
+  var seg='<div class="seg">'+[['cat','按类别'],['ip','按 IP'],['series','按系列']].map(function(o){
     return '<button type="button" data-act="cmode" data-v="'+o[0]+'" class="'+(cur===o[0]?'on':'')+'">'+o[1]+'</button>';
   }).join('')+'</div>';
+  if (!withScale) return seg;
+  var sl=cardScaleHTML('cslider-seg');
+  return IS_MOBILE ? (seg+sl) : (sl+seg);
 }
 function renderCollection(){
   var s=store.collection;
@@ -4968,7 +5020,9 @@ function renderCatMode(){
     '<div class="seg"><button type="button" data-act="view" data-v="wall" class="'+(f.view==='wall'?'on':'')+'">封面墙</button>'+
     '<button type="button" data-act="view" data-v="list" class="'+(f.view==='list'?'on':'')+'">列表</button></div>'+
     '<button class="btn ghost sm" type="button" data-act="collhall">← 返回展厅</button>'+
-    '<button class="btn ghost sm" type="button" data-act="locmgr">管理存储地点</button></div>';
+    '<button class="btn ghost sm" type="button" data-act="locmgr">管理存储地点</button>'+
+    /* v96k：展示卡缩放滑杆，桌面端接在「管理存储地点」后面；手机端由 CSS 换行到下方靠右、占容器一半 */
+    cardScaleHTML('cslider-cat')+'</div>';
   if (s.status==='loading'){ h += emptyHTML('正在读线上数据…','第一次打开会稍微等一下。'); return h+'</section>'; }
   if (s.status==='error'){ h += emptyHTML('没能读到数据','点上面的「重试」再拉一次。'); return h+'</section>'; }
   if (!rows.length){
@@ -4989,7 +5043,7 @@ function renderCatMode(){
 
     /* 系列卡片（点击进入系列详情） */
     if (sOrder.length){
-      h += '<div class="grp"><h4>系列 <i>'+sOrder.length+'</i></h4><div class="ipseries-grid">';
+      h += '<div class="grp"><h4>系列 <i>'+sOrder.length+'</i></h4><div class="ipseries-grid" style="--cs:'+csGet()+'">';
       sOrder.forEach(function(sn){
         var srows = seriesMap[sn];
         var se = store.series.rows.filter(function(r){ return r['系列名称']===sn; })[0];
@@ -5059,10 +5113,10 @@ function renderIpMode(){
   var s=store.ip, c=store.collection;
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>IP 库</h2>'+
-    '<div class="hint">同一个 IP 下的手办、毛绒、居陈、周边都归在一起</div></div>'+modeSeg()+'</div>';
+    '<div class="hint">同一个 IP 下的手办、毛绒、居陈、周边都归在一起</div></div>'+modeSeg(true)+'</div>';
   if (s.status==='loading'){ h += emptyHTML('正在读线上数据…',''); return h+'</section>'; }
   if (s.status==='error'){ h += emptyHTML('没能读到 IP 库','点上面的「重试」再拉一次。'); return h+'</section>'; }
-  h += '<div class="ipgrid">'+s.rows.map(function(ip){
+  h += '<div class="ipgrid" style="--cs:'+csGet()+'">'+s.rows.map(function(ip){
     var name=ip['IP名称']||'未命名';
     /* 每种 IP：只统计在库实物件数（按持有累加）；书籍/杂志已归文渊斋，不计入 IP */
     var items=c.rows.filter(function(r){ return r['IP']===name && LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
@@ -5092,7 +5146,7 @@ function renderIpDetail(){
   var items=store.collection.rows.filter(function(r){ return r['IP']===name && LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+esc(name)+'</h2>'+
-    '<div class="hint">这个 IP 下的全部东西</div></div>'+modeSeg()+'</div>'+
+    '<div class="hint">这个 IP 下的全部东西</div></div>'+modeSeg(true)+'</div>'+
     '<div style="margin-bottom:14px"><button class="btn link" type="button" data-act="ipback">← 返回 IP 库</button></div>'+
     '<div class="iphero">'+
       '<div class="ph" style="'+coverStyle(ip,name)+'">'+(hasCover(ip)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
@@ -5120,7 +5174,7 @@ function renderIpDetail(){
 
   /* 系列卡片：每个系列一张卡片，点击进入系列详情 */
   if (order.length){
-    h += '<div class="grp"><h4>系列 <i>'+order.length+'</i></h4><div class="ipseries-grid">';
+    h += '<div class="grp"><h4>系列 <i>'+order.length+'</i></h4><div class="ipseries-grid" style="--cs:'+csGet()+'">';
     order.forEach(function(sn){
       var srows = seriesMap[sn];
       var se = store.series.rows.filter(function(r){ return r['系列名称']===sn; })[0];
@@ -7089,6 +7143,55 @@ function renderNav(){
   nav.innerHTML=a; tb.innerHTML=b;
 }
 
+/* ---------- v96k：展示卡缩放滑杆（藏品页 / IP库 / 系列页 / 系列详情 共用） ----------
+   .wall 上的 --cs 是缩放系数；卡内所有尺寸已改成 em（基准 = .wall 字号 = 14px × --cs），
+   所以整张卡（封面圆角、徽标、标题、副标题、宝可梦角标）等比缩放，排版关系不变。
+   桌面端 50%–100%（100% = 现在的尺寸）；手机端 0.7–1.5，对应竖屏 一排4 ~ 一排2。 */
+var CS_KEY = 'lifedesk_wall_cs';
+/* 手机端基准（与 style.css 里 .wall 的 minmax/gap 一致）：列宽 112px、间距 14px。
+   要让 n 列刚好填满墙宽 W：n*112*cs + (n-1)*14*cs = W  →  cs = W / (n*112 + (n-1)*14)。
+   滑杆两端取 4 列 / 2 列 对应的 cs，就正好是「最小一排 4、最大一排 2」。 */
+function csForCols(n, W){ return W / (n*112 + (n-1)*14); }
+function csRange(){
+  if (!IS_MOBILE) return {min:0.5, max:1, def:1};           /* 桌面：50% ~ 100%（100% = 现在尺寸） */
+  var W = Math.max(260, (window.innerWidth||390) - 64);      /* 扣掉 main + panel 的左右内边距 */
+  /* ×0.97 留一点余量：正好等于「n 列刚好填满」的 cs 会因为浮点/内边距误差而少放一列 */
+  var c4 = csForCols(4, W)*0.97, c3 = csForCols(3, W)*0.97, c2 = csForCols(2, W)*0.97;
+  if (!(c2 > c3 && c3 > c4)){ c4=0.58; c3=0.82; c2=1.26; }
+  return {min:c4, max:c2, def:c3};                           /* 手机端默认一排 3 */
+}
+function csGet(){
+  var r=csRange();
+  var v=parseFloat((function(){ try{ return localStorage.getItem(CS_KEY); }catch(e){ return null; } })());
+  if (!isFinite(v)) v=r.def;
+  return Math.max(r.min, Math.min(r.max, v));
+}
+function applyWallScale(cs){
+  /* v96k：同时作用于 item 卡墙（.wall）与 系列卡 / IP 卡网格（.ipgrid / .ipseries-grid） */
+  document.querySelectorAll('.wall, .ipgrid, .ipseries-grid').forEach(function(w){
+    w.style.setProperty('--cs', String(cs));
+  });
+}
+function cardScaleHTML(cls){
+  var r=csRange(), v=csGet();
+  return '<span class="cslider'+(cls?' '+cls:'')+'">'+
+    '<span class="csl-label">卡片大小</span>'+
+    '<input type="range" class="csl" min="'+r.min+'" max="'+r.max+'" step="0.01" value="'+v+
+      '" title="拖动调整展示卡大小（左小右大）" aria-label="展示卡大小">'+
+  '</span>';
+}
+function bindCardScalers(root){
+  (root||document).querySelectorAll('.cslider .csl').forEach(function(inp){
+    if (inp._csBound) return; inp._csBound=true;
+    inp.addEventListener('input', function(){
+      var v=parseFloat(inp.value); if (!isFinite(v)) return;
+      applyWallScale(v);
+      try{ localStorage.setItem(CS_KEY, String(v)); }catch(e){}
+      /* 页面内可能有多根滑杆（不同区块），保持彼此同步 */
+      document.querySelectorAll('.cslider .csl').forEach(function(o){ if (o!==inp) o.value=String(v); });
+    });
+  });
+}
 function bindStage(){
   var stage=$('stage');
   /* v58：给所有搜索框加「×」一键清空按钮（自动包裹，无需每个页面单独处理）
@@ -7171,6 +7274,9 @@ plus.addEventListener('click', function(e) {
   inp.dispatchEvent(new Event('input', { bubbles: true }));
 	});
   }
+  /* v96k：经典列表各页面的展示卡缩放滑杆 —— 绑定事件，并把保存的 --cs 应用到本页所有 .wall */
+  bindCardScalers(stage);
+  applyWallScale(csGet());
   /* v67：图库管理页——读完盘再填内容（读盘是异步的，不能塞在 render 的同步 HTML 里） */
   if (ui.view === 'library'){ fillLibrary(); }
   ['yearSel'].forEach(function(id){
@@ -7494,6 +7600,8 @@ document.addEventListener('click', function(ev){
     if (!Object.keys(ui.collection.sel).length){ toast('先选中至少一件'); return; }
     openBatchEdit(); return;
   }
+  /* v96k：「退出批量编辑」——按钮在底部批量操作条最右边；关掉可能开着的弹窗并退出选择模式 */
+  if (act==='batchexit'){ ui.collection.selMode=false; ui.collection.sel={}; closeSheet(); render(); return; }
   if (act==='brand'){ openBrand(); return; }
   if (act==='togglecharge'){ ui.showCharge = !ui.showCharge; render(); return; }
   if (act==='toggleinvest'){ ui.showInvest = !ui.showInvest; render(); return; }
@@ -7569,8 +7677,7 @@ document.addEventListener('click', function(ev){
   }
   if (act==='seriessort'){ ui.collection.seriesSort=node.getAttribute('data-v')||'no'; render(); return; }
   /* v77：宝可梦冰箱贴 —— 号码索引 / 属性筛选 / 三维筛选 / 图标形状 */
-  if (act==='pkindex'){ ui.collection.pkIndex=true; render(); return; }
-  if (act==='pkindexback'){ ui.collection.pkIndex=false; render(); return; }
+  /* v96k：号码索引已取消，pkindex / pkindexback 两个动作一并移除 */
   if (act==='pkshape'){ pkSetShape(node.getAttribute('data-v')); render(); return; }
   /* v94：属性支持多选——单击选中（可同时选多个），再点一次取消；「全部」清空 */
   if (act==='pktype'){
@@ -7597,11 +7704,7 @@ document.addEventListener('click', function(ev){
     render(); return;
   }
   /* v96：手机端卡片密度 —— 一排 2 / 一排 3 */
-  if (act==='pkcols'){
-    var pkw = ui.collection.pk || (ui.collection.pk = { types:[], both:false, form:'', region:'', group:'', gen:'' });
-    pkw.cols = (parseInt(node.getAttribute('data-v'),10)===2) ? 2 : 3;
-    render(); return;
-  }
+  /* v96k：一排 2 / 一排 3 已由缩放滑杆取代，pkcols 动作移除 */
   /* v77：所有维度按钮都是开关——点一次选中，再点一次取消（清回空 = 全部） */
   if (act==='pkfilt'){
     var pfk = node.getAttribute('data-f');
@@ -8453,22 +8556,27 @@ function wireFormControls(host, saveDraft){
       if (!editing) return;
       editing.vals[k+'_vp']=o; applyImgViewport(prev, k);
       var sl = prev.parentNode.querySelector('.imgvp-slider[data-img-zoomslider="'+k+'"]');
-      if (sl) sl.value = Math.max(0.5, Math.min(4, o.s||1));
+      if (sl) sl.value = Math.max(VP_ZMIN, Math.min(VP_ZMAX, o.s||1));
       var pc = prev.parentNode.querySelector('.imgvp-pct[data-img-pct="'+k+'"]');
       if (pc) pc.textContent = Math.round((o.s||1)*100)+'%';
+      /* v96i：左右 / 上下滑杆同步（按钮、拖拽、方向键改动时也要跟着动） */
+      var sx = prev.parentNode.querySelector('.imgvp-pan[data-img-panslider-x="'+k+'"]');
+      if (sx) sx.value = Math.max(-VP_PAN, Math.min(VP_PAN, o.x||0));
+      var sy = prev.parentNode.querySelector('.imgvp-pan[data-img-panslider-y="'+k+'"]');
+      if (sy) sy.value = Math.max(-VP_PAN, Math.min(VP_PAN, o.y||0));
       if (saveDraft) saveDraft();
     }
     var zbar = prev.parentNode.querySelector('.imgvp-bar');
     if (zbar){
       zbar.querySelectorAll('[data-img-zoom]').forEach(function(btn){
         btn.onclick=function(){
-          var o=vp(); o.s=Math.max(0.5, Math.min(4, o.s+parseFloat(btn.getAttribute('data-d')))); setVp(o);
+          var o=vp(); o.s=Math.max(VP_ZMIN, Math.min(VP_ZMAX, o.s+parseFloat(btn.getAttribute('data-d')))); setVp(o);
         };
       });
       /* v96h：拖动滑杆 → 无级缩放，setVp 会同步回显百分比与滑杆位置 */
       zbar.querySelectorAll('[data-img-zoomslider]').forEach(function(sl){
         sl.addEventListener('input', function(){
-          var o=vp(); o.s=Math.max(0.5, Math.min(4, parseFloat(sl.value))); setVp(o);
+          var o=vp(); o.s=Math.max(VP_ZMIN, Math.min(VP_ZMAX, parseFloat(sl.value))); setVp(o);
         });
       });
       zbar.querySelectorAll('[data-img-pan]').forEach(function(btn){
@@ -8476,10 +8584,21 @@ function wireFormControls(host, saveDraft){
           var o=vp();
           var dx=parseFloat(btn.getAttribute('data-dx')||0);
           var dy=parseFloat(btn.getAttribute('data-dy')||0);
-          if (dx) o.x = Math.max(-80, Math.min(80, o.x+dx));
-          if (dy) o.y = Math.max(-80, Math.min(80, o.y+dy));
+          if (dx) o.x = Math.max(-VP_PAN, Math.min(VP_PAN, o.x+dx));
+          if (dy) o.y = Math.max(-VP_PAN, Math.min(VP_PAN, o.y+dy));
           setVp(o);
         };
+      });
+      /* v96i：左右 / 上下位置滑杆（短杆，与方向按钮同一行） */
+      zbar.querySelectorAll('[data-img-panslider-x]').forEach(function(sl){
+        sl.addEventListener('input', function(){
+          var o=vp(); o.x=Math.max(-VP_PAN, Math.min(VP_PAN, parseFloat(sl.value))); setVp(o);
+        });
+      });
+      zbar.querySelectorAll('[data-img-panslider-y]').forEach(function(sl){
+        sl.addEventListener('input', function(){
+          var o=vp(); o.y=Math.max(-VP_PAN, Math.min(VP_PAN, parseFloat(sl.value))); setVp(o);
+        });
       });
       zbar.querySelectorAll('[data-img-reset]').forEach(function(btn){
         btn.onclick=function(){ setVp({s:1,x:0,y:0}); };
@@ -8489,7 +8608,7 @@ function wireFormControls(host, saveDraft){
     prev.onwheel=function(e){
       if (!prev.style.backgroundImage) return;
       e.preventDefault();
-      var o=vp(); o.s=Math.max(0.5, Math.min(4, o.s+(e.deltaY<0?0.1:-0.1))); setVp(o);
+      var o=vp(); o.s=Math.max(VP_ZMIN, Math.min(VP_ZMAX, o.s+(e.deltaY<0?0.1:-0.1))); setVp(o);
     };
     /* 键盘方向键微调（焦点在预览框时） */
     prev.addEventListener('keydown', function(e){
@@ -8579,6 +8698,8 @@ var PK_TYPES = ['一般','火','水','电','草','冰','格斗','毒','地面','
 /* v96：分页大小。30周年冰箱贴有 1324 件，一次性渲染 1324 张带封面/阴影/圆角的卡片
    会让手机每次点击筛选都卡好几秒；改成先渲染 60 张，点「加载更多」再追加。 */
 var PK_PAGE = 60;
+/* v96i：封面编辑的视口范围常量。缩放 50%–150%（上限从 400% 收到 150%），平移 ±80（与拖拽/方向键同一范围）。 */
+var VP_ZMIN = 0.5, VP_ZMAX = 1.5, VP_PAN = 80;
 var PK_FORMS = ['常规图鉴','超级进化','地区形态','超极巨化','原始回归','无极巨化'];
 var PK_GROUPS = ['传说宝可梦','幻之宝可梦','究极异兽','初始的伙伴'];
 /* v77：地区形态的下级选项——只有「特殊形态 = 地区形态」时才显示这一行 */
@@ -8718,14 +8839,15 @@ function missingNos(items, target){
   return miss;
 }
 function renderSeriesMode(){
-  if (ui.collection.seriesId) return ui.collection.pkIndex ? renderPkIndex() : renderSeriesDetail();
+  /* v96k：号码索引已取消，进系列一律直接渲染系列详情 */
+  if (ui.collection.seriesId) return renderSeriesDetail();
   var s=store.series, c=store.collection;
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>系列</h2>'+
-    '<div class="hint">成套的东西按套记，还差哪几个一眼看到</div></div>'+modeSeg()+'</div>';
+    '<div class="hint">成套的东西按套记，还差哪几个一眼看到</div></div>'+modeSeg(true)+'</div>';
   if (s.status==='loading'){ h += emptyHTML('正在读线上数据…',''); return h+'</section>'; }
   if (s.status==='error'){ h += emptyHTML('没能读到系列','点上面的「重试」再拉一次。'); return h+'</section>'; }
-  h += '<div class="ipgrid">'+s.rows.map(function(se){
+  h += '<div class="ipgrid" style="--cs:'+csGet()+'">'+s.rows.map(function(se){
     var name=se['系列名称']||'未命名';
     var target=num(se['目标数量']);
     var items=seriesItems(name);
@@ -8755,7 +8877,8 @@ function renderSeriesMode(){
 /* 系列详情·云游视图专用墙：每张卡带「点击想要」标签；点过则显示「已想要」
    （云游状态仍在，想收叠加共存，不再显示「云游（心愿）」合并字样） */
 function seriesCloudWall(rows, cols){
-  return '<div class="wall'+(cols?' wall-c'+cols:'')+'">'+rows.map(function(r){
+  /* v96k：同上，内联 --cs */
+  return '<div class="wall'+(cols?' wall-c'+cols:'')+'" style="--cs:'+csGet()+'">'+rows.map(function(r){
     var t=r['名称']||'未命名';
     var sub=(r['小类']||'')+(r['IP']?' · '+r['IP']:'');
     var no=String(r['编号']||'');
@@ -8777,26 +8900,15 @@ function seriesCloudWall(rows, cols){
       '<h4>'+esc(t)+'</h4><p>'+esc(sub||'—')+'</p></div>';
   }).join('')+'</div>';
 }
-/* v77：系列详情右上工具条 —— 号码索引入口 + 属性图标形状开关 */
-function pkToolsBar(){
+/* v96k：原右上角「号码索引入口 + 圆形/方形开关 + 一排2/3」工具条已整体移除 ——
+   ① 号码索引功能取消；② 圆形/方形开关移到属性行（第一属性 / 两者皆可 右边）；
+   ③ 卡片密度改由「全部子项」旁的缩放滑杆控制。 */
+function pkShapeSeg(){
   var sh = pkShape();
-  /* v96：手机端卡片密度（一排 2 / 3 个）。CSS 只在手机端生效，所以桌面端不显示这个开关。 */
-  var cols = (ui.collection.pk && ui.collection.pk.cols) || 3;
-  var colsHTML = IS_MOBILE ? (
-    '<span class="pkseg pkseg-sm">'+
-      '<button type="button" data-act="pkcols" data-v="2" class="'+(cols==2?'on':'')+'">一排 2</button>'+
-      '<button type="button" data-act="pkcols" data-v="3" class="'+(cols==3?'on':'')+'">一排 3</button>'+
-    '</span><span class="pkhint">卡片密度</span>'
-  ) : '';
-  return '<div class="pktools">'+
-    '<button class="btn ghost sm" type="button" data-act="pkindex">号码索引</button>'+
-    '<span class="pkseg pkseg-sm">'+
-      '<button type="button" data-act="pkshape" data-v="circle" class="'+(sh==='circle'?'on':'')+'">圆形</button>'+
-      '<button type="button" data-act="pkshape" data-v="square" class="'+(sh==='square'?'on':'')+'">方形</button>'+
-    '</span>'+
-    '<span class="pkhint">属性图标形状</span>'+
-    colsHTML+
-  '</div>';
+  return '<span class="pkseg pkseg-sm pkshape-seg">'+
+    '<button type="button" data-act="pkshape" data-v="circle" class="'+(sh==='circle'?'on':'')+'">圆形</button>'+
+    '<button type="button" data-act="pkshape" data-v="square" class="'+(sh==='square'?'on':'')+'">方形</button>'+
+  '</span>';
 }
 var PK_FIELD_OF = { form:'特殊形态', group:'图鉴组', gen:'世代组', region:'地区' };
 /* v94：属性改为「多选」——types 是数组；老的单选字符串 type 自动迁移进来。 */
@@ -8867,6 +8979,7 @@ function pkFilterBar(rows){
           '<button type="button" data-act="pkboth" data-v="first" class="'+(p.both?'':' on')+'">第一属性</button>'+
           '<button type="button" data-act="pkboth" data-v="both" class="'+(p.both?' on':'')+'">两者皆可</button>'+
         '</span>'+
+        pkShapeSeg()+
       '</div>'+
       '<div class="pktypegrid">'+typeIconsHTML()+'</div>');
     /* 特殊形态（选中「地区形态」时下面多出地区子项） */
@@ -8886,7 +8999,7 @@ function pkFilterBar(rows){
     '<span class="pkseg pkseg-sm">'+
       '<button type="button" data-act="pkboth" data-v="first" class="'+(p.both?'':' on')+'">第一属性</button>'+
       '<button type="button" data-act="pkboth" data-v="both" class="'+(p.both?' on':'')+'">两者皆可</button>'+
-    '</span></div></div>';
+    '</span>'+pkShapeSeg()+'</div></div>';
   h += '<div class="pkrow"><u>特殊形态</u><div class="pkchips">'+chipsHTML('form',PK_FORMS)+'</div></div>';
   if (p.form === '地区形态') h += '<div class="pkrow pkrow-sub"><u>地区</u><div class="pkchips">'+chipsHTML('region',PK_REGIONS)+'</div></div>';
   h += '<div class="pkrow"><u>图鉴组</u><div class="pkchips">'+chipsHTML('group',PK_GROUPS)+'</div></div>';
@@ -8930,69 +9043,7 @@ function pkSortItems(items){
 function pkSortedItems(){
   return pkSortItems(seriesItems(PK_SERIES).filter(pkIsPkm));
 }
-/* v77：一张号码卡：4 位编号 + 形态幂次上标，底色按世代 */
-function pkCardHTML(r, g){
-  var no = String(r['编号']||'');
-  var fc = String(r.formCode||'');
-  var owned = hasStatus(r,'在库'), wish = hasStatus(r,'想收');
-  return '<button type="button" class="pkno'+(owned?' owned':'')+(wish?' wish':'')+'"'+
-    ' data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
-    ' style="background:'+g.bg+';border-color:'+g.bd+';color:'+g.fg+'"'+
-    ' title="'+esc((r['名称']||'')+(owned?' · 已收':''))+'">'+esc(no)+(fc?'<sup>'+esc(fc)+'</sup>':'')+'</button>';
-}
-function renderPkIndex(){
-  var se = store.series.rows.filter(function(r){
-    return (r['系列名称']||'')===PK_SERIES && (r['所属IP']||'')===PK_IP;
-  })[0];
-  var target = se ? num(se['目标数量']) : 0;
-  var items = pkSortedItems();
-  var base = items.filter(function(r){ return !String(r.formCode||''); });
-  var ownedBase = base.filter(function(r){ return hasStatus(r,'在库'); }).length;
-  var miss = target ? Math.max(0, target-ownedBase) : 0;
-  var pct = target ? Math.min(100, Math.round(ownedBase/target*100)) : 0;
-  var open = ui.collection.pkGenOpen || (ui.collection.pkGenOpen = {});
-  var sh = pkShape();
-  var h = '<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-    '<div class="panel-head"><div><h2>号码索引</h2>'+
-    '<div class="hint">'+items.length+' 张卡牌（基础 '+base.length+' + 形态 '+(items.length-base.length)+'）· 点编号打开展示卡</div></div>'+
-    '<span class="pkseg pkseg-sm">'+
-      '<button type="button" data-act="pkshape" data-v="circle" class="'+(sh==='circle'?'on':'')+'">圆形</button>'+
-      '<button type="button" data-act="pkshape" data-v="square" class="'+(sh==='square'?'on':'')+'">方形</button>'+
-    '</span></div>'+
-    '<div style="margin-bottom:14px"><button class="btn link" type="button" data-act="pkindexback">← 返回系列</button></div>';
-  h += '<div class="buybox pkidx-head"><h4>收集进度</h4>'+
-    '<div class="pkidx-stats">'+
-      '<span>已收 <b style="color:var(--ink)">'+ownedBase+'</b> / '+target+'</span>'+
-    '</div>'+
-    '<div class="pkidx-acts">'+
-      '<button class="btn ghost xs" type="button" data-act="pkgenall" data-v="1">全部展开</button>'+
-      '<button class="btn ghost xs" type="button" data-act="pkgenall" data-v="0">全部折叠</button>'+
-    '</div></div>';
-  var gensHTML = '', expHTML = '';
-  PK_GENS.forEach(function(g){
-    var rows = items.filter(function(r){ return pkGenOf(r['编号']).n === g.n; });
-    if (!rows.length) return;
-    var isOpen = !!open[g.n];
-    gensHTML += '<div class="pkgen'+(isOpen?' open':'')+'">'+
-      '<button type="button" class="pkgenbtn" data-act="pkgen" data-v="'+esc(g.n)+'"'+
-        ' style="background:'+g.bg+';border-color:'+g.bd+';color:'+g.fg+'">'+esc(g.n)+'<i>'+rows.length+'</i></button>';
-    if (!isOpen){
-      var first = rows[0], last = rows[rows.length-1];
-      gensHTML += '<div class="pkgen-peek">'+pkCardHTML(first,g)+
-        '<button type="button" class="pkno ellipsis" data-act="pkgen" data-v="'+esc(g.n)+'"'+
-          ' style="border-color:'+g.bd+';color:'+g.fg+'" title="展开 '+esc(g.n)+'">…</button>'+
-        pkCardHTML(last,g)+'</div>';
-    }
-    gensHTML += '</div>';
-    if (isOpen){
-      expHTML += '<div class="grp pkgenblock"><h4>'+esc(g.n)+' <i>'+rows.length+' 张</i></h4>'+
-        '<div class="pkcards">'+rows.map(function(r){ return pkCardHTML(r,g); }).join('')+'</div></div>';
-    }
-  });
-  h += '<div class="pkidx-gens">'+gensHTML+'</div>' + expHTML;
-  if (!items.length) h += emptyHTML('这个系列还没有子项','先回到系列页录入几件再看索引。');
-  return h+'</section>';
-}
+/* v96k：号码索引功能已取消 —— 原 pkCardHTML / renderPkIndex 整段移除（入口按钮、动作分支、页面均删除）。 */
 function renderSeriesDetail(){
   var se=store.series.rows.filter(function(r){ return String(r._id)===String(ui.collection.seriesId); })[0];
   if (!se){ ui.collection.seriesId=null; return renderSeriesMode(); }
@@ -9027,12 +9078,13 @@ function renderSeriesDetail(){
         '<button class="btn ghost sm" type="button" data-act="edit" data-key="series" data-id="'+esc(se._id)+'">编辑系列</button>'+
         '<button class="btn ghost sm" type="button" data-act="delseries" data-id="'+esc(se._id)+'" style="color:var(--red)">删除系列</button>'+
       '</div></div></div>';
-  /* v77：宝可梦冰箱贴 —— 右上角「号码索引」入口 + 圆形/方形属性图标开关 */
-  if (isPk) h += pkToolsBar();
+  /* v96k：右上角「号码索引」入口已移除（该功能取消）；圆形/方形开关移入下方属性行 */
   if (target){
-    h += '<div class="buybox" style="margin-bottom:20px"><h4>收集进度</h4>'+
-      '<div style="display:flex;gap:20px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)">'+
-        '<span>已有 <b style="color:var(--ink)">'+cntAll+'</b> / '+target+'</span>'+
+    /* v96k：标题与统计放同一行（.procline），不再各占一行 */
+    h += '<div class="buybox" style="margin-bottom:20px">'+
+      '<div class="procline">'+
+        '<h4>收集进度</h4>'+
+        '<span style="font-size:12.5px;color:var(--muted)">已有 <b style="color:var(--ink)">'+cntAll+'</b> / '+target+'</span>'+
       '</div>';
     if (miss.length){
       /* v59：缺失编号默认只显示前 8 个，其余收进「…还有 N 个」（点击展开）；
@@ -9092,8 +9144,9 @@ function renderSeriesDetail(){
     });
   }
   var showHdr = sf==='全部' ? '全部子项' : sf==='在库' ? '在库子项' : sf==='云游' ? '云游子项' : '想收子项';
-  /* v96：手机端卡片密度（一排 2 / 3 个），默认 3；仅宝可梦系列传，其余页面保持原自适应 */
-  var pkCols = isPk ? (((ui.collection.pk && ui.collection.pk.cols) || 3)) : 0;
+  /* v96k：原「一排 2 / 一排 3」固定列数已废弃 —— 改由「全部子项」旁的缩放滑杆（--cs）等比控制，
+     所以这里不再传固定列数，卡片大小完全跟随滑杆。 */
+  var pkCols = 0;
   /* v96：分页。这个系列有 1324 件，一次性渲染 1324 张带封面的卡片，手机上每次点筛选都要卡好几秒。
      改成先渲染 PK_PAGE 张，剩下的点「加载更多」追加。
      v96i：桌面端性能好，不需要分页——一次全渲染（IS_MOBILE 时才切片），手机端维持分页不变。 */
@@ -9112,14 +9165,16 @@ function renderSeriesDetail(){
                   : '把状态标记为「云游」就会显示在这里。');
     return h+'</section>';
   }
+  /* v96k：展示卡缩放滑杆放在「全部子项」标题旁边（手机端同样如此，替代原一排 2 / 一排 3 按钮） */
+  var hdrScale = cardScaleHTML('cslider-grp');
   /* 云游/想收视图：加「按想收排列」切换 + 每张卡「点击想要」标签；其余视图普通墙 */
   if (sf==='云游' || sf==='想收'){
     h += '<div class="segline" style="margin:-2px 0 14px"><div class="seg seriessort">'+
       '<button type="button" data-act="seriessort" data-v="no" class="'+(ui.collection.seriesSort!=='wish'?'on':'')+'">按序号</button>'+
       '<button type="button" data-act="seriessort" data-v="wish" class="'+(ui.collection.seriesSort==='wish'?'on':'')+'">按想收排列</button></div></div>'+
-      '<div class="grp"><h4>'+showHdr+' <i>'+hdrCnt+'</i></h4>'+seriesCloudWall(items, pkCols)+'</div>';
+      '<div class="grp"><h4>'+showHdr+' <i>'+hdrCnt+'</i>'+hdrScale+'</h4>'+seriesCloudWall(items, pkCols)+'</div>';
   } else {
-    h += '<div class="grp"><h4>'+showHdr+' <i>'+hdrCnt+'</i></h4>'+collectionWall(items, pkCols)+'</div>';
+    h += '<div class="grp"><h4>'+showHdr+' <i>'+hdrCnt+'</i>'+hdrScale+'</h4>'+collectionWall(items, pkCols)+'</div>';
   }
   /* v96：分页 —— 还没显示完时给「加载更多」 */
   if (isPk && items.length < totalFiltered){
@@ -9552,14 +9607,17 @@ function fieldHTML(f, v){
       '<div class="imgvp-bar" '+(v?'':'hidden')+'>'+
         '<div class="imgvp-sliderwrap">'+
           '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="-0.15">−</button>'+
-          '<input type="range" class="imgvp-slider" data-img-zoomslider="'+f.k+'" min="0.5" max="4" step="0.01" value="'+Math.max(0.5,Math.min(4,vp.s||1))+'" title="拖动无级缩放（50%–400%）">'+
+          '<input type="range" class="imgvp-slider" data-img-zoomslider="'+f.k+'" min="'+VP_ZMIN+'" max="'+VP_ZMAX+'" step="0.01" value="'+Math.max(VP_ZMIN,Math.min(VP_ZMAX,vp.s||1))+'" title="拖动无级缩放（'+Math.round(VP_ZMIN*100)+'%-'+Math.round(VP_ZMAX*100)+'%）">'+
           '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="0.15">+</button>'+
           '<span class="imgvp-pct" data-img-pct="'+f.k+'">'+(Math.round((vp.s||1)*100))+'%</span>'+
         '</div>'+
         '<div class="imgvp-btns">'+
           '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dx="-2" title="左移">←</button>'+
+          '<input type="range" class="imgvp-pan" data-img-panslider-x="'+f.k+'" min="'+(-VP_PAN)+'" max="'+VP_PAN+'" step="1" value="'+Math.max(-VP_PAN,Math.min(VP_PAN,vp.x||0))+'" title="左右位置（拖动微调）">'+
           '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dx="2" title="右移">→</button>'+
+          '<span class="imgvp-sp"></span>'+
           '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dy="-2" title="上移">↑</button>'+
+          '<input type="range" class="imgvp-pan" data-img-panslider-y="'+f.k+'" min="'+(-VP_PAN)+'" max="'+VP_PAN+'" step="1" value="'+Math.max(-VP_PAN,Math.min(VP_PAN,vp.y||0))+'" title="上下位置（拖动微调）">'+
           '<button type="button" class="btn ghost xs" data-img-pan="'+f.k+'" data-dy="2" title="下移">↓</button>'+
           '<span class="imgvp-sp"></span>'+
           '<button type="button" class="btn ghost xs" data-img-reset="'+f.k+'">重置</button>'+
@@ -10786,7 +10844,9 @@ function renderBatchSel(){
     '<button class="btn ghost sm" type="button" data-act="batchselall">全选当前结果 ('+total+')</button>'+
     '<button class="btn ghost sm" type="button" data-act="batchclear"'+(ids.length?'':' disabled')+'>清空</button>'+
     '<button class="btn ghost sm" type="button" data-act="batchdlcover"'+(ids.length?'':' disabled')+'>下载封面</button>'+
-    '<button class="btn primary" type="button" data-act="batchedit"'+(ids.length?'':' disabled')+'>批量编辑 ('+ids.length+')</button>';
+    '<button class="btn primary" type="button" data-act="batchedit"'+(ids.length?'':' disabled')+'>批量编辑 ('+ids.length+')</button>'+
+    /* v96k：退出批量编辑放在这一排的最右边（原本错放在批量编辑弹窗里） */
+    '<button class="btn ghost sm" type="button" data-act="batchexit">退出批量编辑</button>';
 }
 /* v96h：批量下载封面——把选中项里「还是外链」的封面一次性下载并存进本地图库。
    已存在本地的会自动跳过（图库查重），下载完自动刷新界面。 */
@@ -10821,7 +10881,6 @@ function openBatchEdit(){
       batchRow('购入日期','text','2026 或 2026-03-05')+
     '</div>'+
     '<div class="sheet-actions">'+
-      '<button class="btn ghost" type="button" data-act="batchexit">退出批量编辑</button>'+
       '<button class="btn ghost" type="button" data-x="1">取消</button>'+
       '<button class="btn primary" type="button" id="batchApply">应用写入 '+ids.length+' 件</button>'+
     '</div></div>';
@@ -10829,9 +10888,6 @@ function openBatchEdit(){
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
   bindSheetBackdrop(host);
   $('batchApply').onclick=applyBatchEdit;
-  /* v96h：「退出批量编辑」——直接关掉面板并退出选择模式，长页面不必滚到顶部再点 */
-  var bexit=host.querySelector('[data-act="batchexit"]');
-  if (bexit) bexit.onclick=function(){ ui.collection.selMode=false; ui.collection.sel={}; closeSheet(); render(); };
 }
 /* 应用：把勾选字段合并写入每一个选中项 */
 function applyBatchEdit(){

@@ -140,8 +140,9 @@ input,select,textarea{font:inherit;color:inherit}
 .seg.seriesfilt button.on i.fbsub{color:rgba(255,255,255,.75)}
 .seg.seriessort button{min-height:32px;padding:0 14px;font-size:12px}
 /* 云游卡片上的「点击想要」/「已想要」标签（已想要可再点取消，云游状态仍在，想收叠加） */
-.wish-tag{display:inline-block;margin:6px 0 2px;padding:3px 10px;border-radius:999px;
-  font-size:11px;font-weight:700;letter-spacing:.06em;cursor:pointer;transition:.18s;
+/* v96k：改 em，随 .wall 的 --cs 等比缩放（基准 1em = 14px × --cs） */
+.wish-tag{display:inline-block;margin:.429em 0 .143em;padding:.214em .714em;border-radius:999px;
+  font-size:.786em;font-weight:700;letter-spacing:.06em;cursor:pointer;transition:.18s;
   border:1.5px dashed var(--accent);color:var(--accent);background:transparent;
   user-select:none}
 .wish-tag:hover{background:var(--accent-soft)}
@@ -303,22 +304,30 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .monthbars .m u{text-decoration:none;font-size:9.5px;color:var(--muted);letter-spacing:.02em}
 
 /* ---------- media wall ---------- */
-.wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:18px}
+/* v96k：展示卡统一等比缩放 —— .wall 上的 --cs 为缩放系数（JS 滑杆写入）。
+   grid 列宽/间距 与 卡内所有尺寸 共用同一系数；卡内尺寸全用 em（基准 = .wall 的 font-size = 14px × --cs），
+   所以整张卡（封面圆角、徽标、标题、副标题、宝可梦角标）会等比缩放，排版关系不变。 */
+.wall{--cs:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(calc(148px * var(--cs)),1fr));
+  gap:calc(18px * var(--cs));font-size:calc(14px * var(--cs))}
 .poster{cursor:pointer;transition:transform .2s}
 .poster:hover{transform:translateY(-3px)}
-.poster .cover{position:relative;aspect-ratio:3/4.2;border-radius:12px;overflow:hidden;
-  box-shadow:0 10px 24px rgba(63,48,36,.14);background-size:cover;background-position:center}
+.poster .cover{position:relative;aspect-ratio:3/4.2;border-radius:.857em;overflow:hidden;
+  box-shadow:0 .714em 1.714em rgba(63,48,36,.14);background-size:cover;background-position:center}
 .poster .cover.noimg{display:flex;align-items:center;justify-content:center}
-.poster .cover.noimg b{font:700 40px/1 "Songti SC",serif;color:rgba(255,255,255,.9);letter-spacing:.04em}
-.poster .cover .tag{position:absolute;left:8px;top:8px;padding:3px 8px;border-radius:7px;
-  background:rgba(255,255,255,.9);font-size:9.5px;font-weight:700;letter-spacing:.06em}
-.poster .cover .no{position:absolute;right:8px;top:8px;padding:3px 7px;border-radius:7px;
-  background:rgba(41,37,31,.62);color:#fff;font-size:9.5px;letter-spacing:.08em;font-weight:700}
-.poster .cover .score{position:absolute;right:8px;bottom:8px;padding:3px 8px;border-radius:7px;
-  background:rgba(41,37,31,.72);color:#fff;font-size:10px;letter-spacing:.06em}
-.poster h4{margin-top:10px;font-size:13px;font-weight:650;line-height:1.4;
+.poster .cover.noimg b{font:700 2.857em/1 "Songti SC",serif;color:rgba(255,255,255,.9);letter-spacing:.04em}
+.poster .cover .tag{position:absolute;left:.571em;top:.571em;padding:.214em .571em;border-radius:.5em;
+  background:rgba(255,255,255,.9);font-size:.679em;font-weight:700;letter-spacing:.06em}
+.poster .cover .no{position:absolute;right:.571em;top:.571em;padding:.214em .5em;border-radius:.5em;
+  background:rgba(41,37,31,.62);color:#fff;font-size:.679em;letter-spacing:.08em;font-weight:700}
+.poster .cover .score{position:absolute;right:.571em;bottom:.571em;padding:.214em .571em;border-radius:.5em;
+  background:rgba(41,37,31,.72);color:#fff;font-size:.714em;letter-spacing:.06em}
+/* v96k 修正：改用 .wall .poster h4（特异性 0,0,2,1）——
+   原来的 .poster h4（0,0,1,1）被后面的 .grp h4{font:700 14px...} 覆盖了，
+   导致卡片缩小时标题字号纹丝不动。同时清掉 .grp h4 带来的下边距。 */
+.wall .poster h4{margin:.714em 0 0;font-size:.929em;font-weight:650;line-height:1.4;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.poster p{color:var(--muted);font-size:11px;margin-top:2px;letter-spacing:.03em}
+/* v96k：卡片下方的「小类 · IP」副标题不再显示 */
+.poster p{display:none}
 
 /* ---------- media list ---------- */
 .rows{display:flex;flex-direction:column}
@@ -568,8 +577,18 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .crow .t span{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
 .crow .t em{display:block;color:#8d8275;font-size:11.5px;margin-top:3px;font-style:normal}
 .crow .loc{font-size:11.5px;color:var(--muted);white-space:nowrap}
-.ipgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:16px}
-.ipseries-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:16px;margin-top:8px}
+/* v96k：系列卡 / IP 卡也跟随同一个 --cs 等比缩放（与 .wall 同一套机制） */
+.ipgrid,.ipseries-grid{--cs:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(calc(158px * var(--cs)),1fr));
+  gap:calc(16px * var(--cs));font-size:calc(14px * var(--cs))}
+.ipseries-grid{margin-top:8px}
+.ipgrid .ipcard,.ipseries-grid .ipcard{border-radius:1.286em}
+.ipgrid .ipcard .ph b,.ipseries-grid .ipcard .ph b{font-size:2.429em}
+.ipgrid .ipcard .bd,.ipseries-grid .ipcard .bd{padding:.786em .929em .929em}
+.ipgrid .ipcard .bd strong,.ipseries-grid .ipcard .bd strong{font-size:.964em}
+.ipgrid .ipcard .bd span,.ipseries-grid .ipcard .bd span{margin-top:.357em;font-size:.786em}
+.ipgrid .ipcard.add .ph,.ipseries-grid .ipcard.add .ph{font-size:2.143em}
+.ipgrid .ipcard.cand .tick,.ipseries-grid .ipcard.cand .tick{right:.571em;top:.571em;
+  width:1.714em;height:1.714em;font-size:.929em}
 .ipcard{padding:0;border-radius:18px;background:#fbf7f1;border:1px solid rgba(111,89,67,.08);
   overflow:hidden;cursor:pointer;transition:.2s;text-align:left}
 .ipcard:hover{transform:translateY(-2px);box-shadow:0 12px 26px rgba(63,48,36,.08)}
@@ -614,6 +633,9 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .dtop .meta{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .buybox{padding:15px 16px;border-radius:16px;background:#f7f2ea;border:1px solid rgba(111,89,67,.1)}
 .buybox h4{margin:0 0 12px;font:700 13px/1 "Songti SC",serif;letter-spacing:.06em}
+/* v96k：收集进度 —— 标题与统计同一行（去掉 h4 的下边距造成的换行） */
+.procline{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.procline h4{margin:0}
 .buygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
 .buygrid div u{display:block;text-decoration:none;color:var(--muted);font-size:10.5px;
   letter-spacing:.12em;margin-bottom:4px}
@@ -640,6 +662,26 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .imgvp-slider{flex:1;min-width:0;height:22px;cursor:pointer;accent-color:#4d3045}
 .imgvp-pct{font-size:11px;color:var(--muted);min-width:44px;text-align:right;font-variant-numeric:tabular-nums}
 .imgvp-btns{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+/* v96i：左右 / 上下位置滑杆——与方向键同一行；v96k：按用户要求缩短到原来的 35%（62px → 22px） */
+.imgvp-pan{width:22px;flex:0 0 auto;height:22px;cursor:pointer;accent-color:#4d3045;padding:0}
+
+/* ---------- v96k：展示卡缩放滑杆（藏品页 / IP库 / 系列页 / 系列详情 共用） ---------- */
+.cslider{display:inline-flex;align-items:center;gap:7px;vertical-align:middle}
+.cslider .csl-label{font-size:11px;color:var(--muted);white-space:nowrap}
+.cslider .csl{width:120px;height:22px;cursor:pointer;accent-color:#4d3045;padding:0;margin:0}
+/* 系列详情「全部子项」标题旁：贴着计数，稍短一点 */
+.cslider-grp{margin-left:10px}
+.cslider-grp .csl{width:104px}
+@media (max-width:960px){
+  /* 藏品页：滑杆换到「管理存储地点」下方、靠右、只占容器一半宽 */
+  .cslider-cat{order:99;width:50%;margin-left:auto;justify-content:flex-end}
+  .cslider-cat .csl{width:100%}
+  .cslider .csl-label{display:none}
+  /* 手机端滑杆框更矮一点，不占垂直空间 */
+  .cslider .csl{height:16px}
+  .cslider-grp{margin-left:6px}
+  .cslider-grp .csl{width:92px}
+}
 .imgrow{display:flex;gap:8px;align-items:center}
 .imgrow input{flex:1;min-width:0}
 /* v75fix：封面框右上角的「✕」清除按钮 */
@@ -692,14 +734,22 @@ input.search:focus{border-color:var(--accent);background:#fff}
 }
 @media (max-width:560px){
   .notes{columns:1}
-  .wall{grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:14px}
-  .ipgrid{grid-template-columns:repeat(auto-fill,minmax(126px,1fr));gap:12px}
+  /* v96k：手机端基准列宽 112px / 间距 14px，同样按 --cs 等比缩放 */
+  .wall{grid-template-columns:repeat(auto-fill,minmax(calc(112px * var(--cs)),1fr));gap:calc(14px * var(--cs))}
+  /* v96k：手机端基准 126px / 12px，同样按 --cs 缩放（系列卡 / IP 卡） */
+  .ipgrid,.ipseries-grid{grid-template-columns:repeat(auto-fill,minmax(calc(126px * var(--cs)),1fr));gap:calc(12px * var(--cs))}
   .dtop{grid-template-columns:86px 1fr;gap:12px}
   .iphero{grid-template-columns:64px 1fr;gap:12px}
   .iphero .ph{width:64px;height:64px;border-radius:14px}
   .buygrid{grid-template-columns:1fr 1fr}
   .crow{grid-template-columns:1fr auto;row-gap:6px}
   .statgrid{grid-template-columns:1fr 1fr}
+  /* v96l：概览的三个统计框（在库 / 总条目 / IP 数）缩窄，手机端强制一排 3 个，不再折成 2+1 两行 */
+  .statgrid.ovstat{grid-template-columns:repeat(3,1fr);gap:8px}
+  .statgrid.ovstat .stat{padding:11px 8px;border-radius:13px;text-align:center}
+  .statgrid.ovstat .stat u{font-size:9px;letter-spacing:.05em;margin-bottom:5px}
+  .statgrid.ovstat .stat b{font-size:19px}
+  .statgrid.ovstat .stat i{font-size:10px}
   .row{grid-template-columns:1fr auto;row-gap:6px}
   .fitem{grid-template-columns:1fr;gap:9px}
   .fitem .r{align-items:flex-start;text-align:left}
@@ -3470,19 +3520,20 @@ input.search{margin-bottom:12px}
 .pktbtn.pktxt.on{ background:var(--ink); color:#fff; }
 
 /* 展示卡左下角快速按钮：在库 / 想收（点一次写入，再点一次取消） */
-.pkquick{ position:absolute; left:7px; bottom:7px; display:flex; gap:4px; z-index:3; }
+/* v96k：改 em，随 .wall 的 --cs 等比缩放（基准 1em = 14px × --cs） */
+.pkquick{ position:absolute; left:.5em; bottom:.5em; display:flex; gap:.286em; z-index:3; }
 .pkq{ border:1px solid rgba(255,255,255,.6); background:rgba(255,255,255,.85); color:#5b554c;
-  font-size:10px; line-height:1; padding:4px 6px; border-radius:6px; cursor:pointer;
+  font-size:.714em; line-height:1; padding:.286em .429em; border-radius:.429em; cursor:pointer;
   font-family:inherit; letter-spacing:.02em; transition:background .15s, color .15s, border-color .15s; }
 .pkq:hover{ background:#fff; border-color:rgba(255,255,255,.95); }
 .pkq.pkq-lib.on { background:var(--green); border-color:var(--green); color:#fff; font-weight:650; }
 .pkq.pkq-wish.on{ background:var(--red);   border-color:var(--red);   color:#fff; font-weight:650; }
 
-/* 展示卡内属性图标：贴在 .cover 右下角，22px；「方形 / 圆形」开关决定来源（sv/ 或 swsh/） */
-.pktypes{ position:absolute; right:7px; bottom:7px; display:flex; align-items:center; gap:3px; z-index:2; }
-.pktypes .pktype{ width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center; }
+/* 展示卡内属性图标：贴在 .cover 右下角；「方形 / 圆形」开关决定来源（sv/ 或 swsh/） */
+.pktypes{ position:absolute; right:.5em; bottom:.5em; display:flex; align-items:center; gap:.214em; z-index:2; }
+.pktypes .pktype{ width:1.571em; height:1.571em; display:inline-flex; align-items:center; justify-content:center; }
 .pktypes .pktype img{ width:100%; height:100%; object-fit:contain; display:block; }
-.pktypes .pktype b{ font-size:10px; color:var(--muted); }
+.pktypes .pktype b{ font-size:.714em; color:var(--muted); }
 
 /* 号码索引 */
 .pkidx-stats{ display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); }
@@ -3593,22 +3644,8 @@ input.search{margin-bottom:12px}
   .pkpanel .pkchips{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
   .pkchips-sub{ margin-top:6px; padding-left:8px; border-left:2px solid var(--line); }
 
-  /* 4) 卡片密度：固定列数 */
-  .wall.wall-c3{ grid-template-columns:repeat(3,1fr); gap:9px; }
-  .wall.wall-c2{ grid-template-columns:repeat(2,1fr); gap:12px; }
-
-  /* 5) 一排 3 个时整体等比缩小，避免文字/徽标/按钮撑爆卡片导致排版变形 */
-  .wall.wall-c3 .poster .cover{ border-radius:9px; box-shadow:0 6px 14px rgba(63,48,36,.12); }
-  .wall.wall-c3 .poster .cover.noimg b{ font-size:26px; }
-  .wall.wall-c3 .poster .cover .tag{ left:5px; top:5px; padding:1px 5px; font-size:8.5px; border-radius:5px; }
-  .wall.wall-c3 .poster .cover .no{ right:5px; top:5px; padding:1px 5px; font-size:8.5px; border-radius:5px; }
-  .wall.wall-c3 .poster .cover .score{ right:5px; bottom:5px; padding:1px 5px; font-size:8.5px; border-radius:5px; }
-  .wall.wall-c3 .poster h4{ margin-top:7px; font-size:11px; }
-  .wall.wall-c3 .poster p{ font-size:9.5px; }
-  .wall.wall-c3 .pkquick{ left:4px; bottom:4px; gap:3px; }
-  .wall.wall-c3 .pkq{ font-size:8.5px; padding:2px 4px; border-radius:5px; }
-  .wall.wall-c3 .pktypes{ right:4px; bottom:4px; gap:2px; }
-  .wall.wall-c3 .pktypes .pktype{ width:15px; height:15px; }
+  /* 4) 卡片密度：v96k 起改由「全部子项」旁的缩放滑杆控制（--cs 等比缩放），
+        原先的一排 2 / 一排 3 固定列数及其等比缩小覆盖规则已移除。 */
 
   /* 6) 分页「加载更多」按钮 */
   .pkmore{ display:flex; justify-content:center; margin:18px 0 4px; }
