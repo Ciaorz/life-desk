@@ -1837,10 +1837,65 @@ async function walkDirFiles(dirHandle, prefix, out){
   }
   return out;
 }
-/* 增量上传辅助：拉取 GitHub 上 data/images/ 的远端文件大小清单（path -> size）。
-   用 Git Trees API（recursive=1）一次性取整棵树，按前缀过滤成图片清单。
+/* ===== v96t：数据文件（data/*.json）增量上传 =====
+   背景：原来只有图片做增量（比对 size），而所有 data/*.json 是「无条件全量」列入上传清单的，
+         于是每次点「上传」都把几十个 JSON 全列出来，看起来像全都变过。这里给 JSON 也做增量。
+   原理：GitHub 每个 blob 的 sha = sha1("blob " + 字节数 + "\0" + 内容)。
+         本地把 JSON.stringify(obj, null, 2) 按同一规则算 sha，与远端 tree 里的 sha 比对，
+         相同即内容完全一致 → 跳过。只要对象内容不变，stringify 结果就稳定，与文件原始排版无关。
+   安全性：远端树拉取失败 / 被截断 / 查不到该文件 → 一律上传（降级为全量），绝不丢文件。 */
+
+/* 纯 JS SHA-1：不用 crypto.subtle（它在非安全上下文下不可用，file:// 也不保证），任何环境都能算。
+   入参 Uint8Array，出参 40 位小写 hex。 */
+function sha1HexBytes(bytes){
+  var ml = bytes.length * 8;
+  var withOne = bytes.length + 1;
+  var pad = ((56 - withOne % 64) + 64) % 64;
+  var total = withOne + pad + 8;
+  var buf = new Uint8Array(total);
+  buf.set(bytes, 0);
+  buf[bytes.length] = 0x80;
+  var dv = new DataView(buf.buffer);
+  dv.setUint32(total - 8, Math.floor(ml / 4294967296));
+  dv.setUint32(total - 4, ml >>> 0);
+  var h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
+  var w = new Int32Array(80);
+  for (var off = 0; off < total; off += 64){
+    var i;
+    for (i = 0; i < 16; i++) w[i] = dv.getInt32(off + i * 4);
+    for (i = 16; i < 80; i++){ var v = w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16]; w[i] = (v << 1) | (v >>> 31); }
+    var a = h0, b = h1, c = h2, d = h3, e = h4;
+    for (i = 0; i < 80; i++){
+      var f, k;
+      if (i < 20){ f = (b & c) | ((~b) & d); k = 0x5A827999; }
+      else if (i < 40){ f = b ^ c ^ d; k = 0x6ED9EBA1; }
+      else if (i < 60){ f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+      else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+      var t = (((((a << 5) | (a >>> 27)) >>> 0) + f + e + k + w[i]) >>> 0);
+      e = d; d = c; c = ((b << 30) | (b >>> 2)) >>> 0; b = a; a = t;
+    }
+    h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0;
+  }
+  function hex(n){ return ('00000000' + (n >>> 0).toString(16)).slice(-8); }
+  return hex(h0) + hex(h1) + hex(h2) + hex(h3) + hex(h4);
+}
+/* 已编码好的字节 → git blob sha1（与 GitHub 返回的 blob.sha 同一算法） */
+function gitBlobSha1Of(bytes){
+  var head = new TextEncoder().encode('blob ' + bytes.length + '\u0000');
+  var buf = new Uint8Array(head.length + bytes.length);
+  buf.set(head, 0); buf.set(bytes, head.length);
+  return sha1HexBytes(buf);
+}
+/* 仓库路径归一化：反斜杠转正斜杠、去掉前导 ./ ，保证与 Git Trees API 的 path 口径一致 */
+function normRepoPath(p){
+  var s = String(p || '').replace(/\\/g, '/');
+  while (s.indexOf('./') === 0) s = s.slice(2);
+  return s;
+}
+/* 增量上传辅助：拉取远端整棵 Git 树，返回 path -> {size, sha}（覆盖 data/ 下全部文件）。
+   一次 API 调用同时服务「图片比 size」与「JSON 比 sha」两种增量判定。
    失败或返回被截断时返回空对象 → 调用方降级为全量上传，绝不丢文件。 */
-async function ghRemoteImageSizes(){
+async function ghRemoteTreeMap(){
   var m = {};
   try {
     var br = encodeURIComponent(GH.branch || 'main');
@@ -1849,18 +1904,10 @@ async function ghRemoteImageSizes(){
     if (!r.ok) return m;
     var j = await r.json();
     if (!j || !j.tree || j.truncated) return m;     /* 截断则放弃 diff，全量上传最安全 */
-    /* v95：同时覆盖 data/images/ 与 data/thumbs/，缩略图的增量 diff 才能生效 */
-    var baseDir = (String(GH.path || '').replace(/[\\/][^\\/]*$/, '') || 'data');
-    var prefixes = [baseDir + '/' + IMG_DIR + '/', baseDir + '/' + THUMB_DIR + '/'];
     for (var i = 0; i < j.tree.length; i++){
       var e = j.tree[i];
       if (!e || e.type !== 'blob' || typeof e.path !== 'string') continue;
-      for (var p = 0; p < prefixes.length; p++){
-        if (e.path.indexOf(prefixes[p]) === 0){
-          m[e.path] = (typeof e.size === 'number') ? e.size : -1;
-          break;
-        }
-      }
+      m[normRepoPath(e.path)] = { size: (typeof e.size === 'number') ? e.size : -1, sha: e.sha || '' };
     }
   } catch(e){}
   return m;
@@ -1870,14 +1917,29 @@ async function collectPushFiles(){
   var idx = await fsReadIndex();
   var dir = String(GH.path || '').replace(/[\\/][^\\/]*$/, '') || 'data';
   var files = [];
-  files.push({ path: GH.path, text: JSON.stringify(idx, null, 2) });
+  _ghIncrSkip = 0;
+  /* v96t：一次性拉远端整棵树 —— JSON 用 sha 精确比对、图片用 size 快速比对。
+     拉取失败（返回空）时所有文件都会走「查不到即上传」分支，自动降级为全量，不会漏文件。 */
+  var remoteMap = await ghRemoteTreeMap();
+  /* 单个数据文件：与远端 sha 相同 → 内容完全一致，跳过；
+     先比 size，大小都不同就不必再算 sha（省一次哈希）；远端查不到 → 新文件，必传。 */
+  function addJson(path, text){
+    var rr = remoteMap[normRepoPath(path)];
+    if (rr){
+      var bytes = new TextEncoder().encode(text);
+      if (rr.size !== bytes.length){ files.push({ path: path, text: text }); return; }
+      if (rr.sha && rr.sha === gitBlobSha1Of(bytes)){ _ghIncrSkip++; return; }   /* 内容一致 → 跳过 */
+    }
+    files.push({ path: path, text: text });
+  }
+  addJson(GH.path, JSON.stringify(idx, null, 2));
   var cats = Object.keys(idx.shards || {});
   for (var i = 0; i < cats.length; i++){
     var sh = idx.shards[cats[i]] || {};
     if (sh.dirShard) continue;            /* ip/series 目录分片走下方 entityFiles 清单 */
     var obj = await fsReadJSON(sh.file || shardFileName(cats[i]));
     if (!obj) continue;
-    files.push({ path: dir + '/' + (sh.file || shardFileName(cats[i])), text: JSON.stringify(obj, null, 2) });
+    addJson(dir + '/' + (sh.file || shardFileName(cats[i])), JSON.stringify(obj, null, 2));
   }
   /* 目录分片（ip/series）实体文件：直接扫描真实目录纳入上传，不再依赖可能过期的 entityFiles 清单 */
   var efList = (idx.entityFiles || []).slice();
@@ -1890,13 +1952,11 @@ async function collectPushFiles(){
     _efSeen[_efp] = 1;
     try {
       var efObj = await fsReadJSON(_efp);
-      if (efObj) files.push({ path: dir + '/' + _efp, text: JSON.stringify(efObj, null, 2) });
+      if (efObj) addJson(dir + '/' + _efp, JSON.stringify(efObj, null, 2));
     } catch(e){}
   }
-  /* 图片（增量上传：先拉远端 images 清单，仅上传「本地有而远端没有」或「大小变化」的图片，
+  /* 图片（增量上传：仅上传「本地有而远端没有」或「大小变化」的图片，
      未变更的封面直接跳过，避免每次全量重传几百 MB / 触发限流） */
-  _ghIncrSkip = 0;
-  var remoteSizes = await ghRemoteImageSizes();
   /* 把某个目录整体纳入上传（增量：远端已有且大小一致则跳过） */
   async function pushDir(dirName){
     try {
@@ -1907,8 +1967,8 @@ async function collectPushFiles(){
         var rel = list[j].rel;
         var rpath = dir + '/' + dirName + '/' + rel;
         var f = await list[j].handle.getFile();
-        var rsz = remoteSizes[rpath];
-        if (rsz != null && rsz === f.size){ _ghIncrSkip++; continue; }   /* 远端已有且大小一致 → 跳过 */
+        var rr = remoteMap[normRepoPath(rpath)];
+        if (rr && rr.size === f.size){ _ghIncrSkip++; continue; }   /* 远端已有且大小一致 → 跳过 */
         files.push({ path: rpath, blob: f });
       }
     } catch(e){}
@@ -1954,7 +2014,7 @@ function showUploadReview(files, onConfirm){
   ov.innerHTML =
     '<div class="sheet" style="max-width:520px">'+
       '<div class="sheet-head"><div><p>上传前审核</p><h2>请勾选要上传的文件</h2></div></div>'+
-      '<div style="font-size:12.5px;color:var(--ink-soft);line-height:1.7;margin-bottom:10px">下面列出本次将上传到 GitHub 的文件（已按增量规则排除未变更的封面）。<b>只有勾选的项才会真正上传</b>，取消勾选即可跳过你不想传的文件。</div>'+
+      '<div style="font-size:12.5px;color:var(--ink-soft);line-height:1.7;margin-bottom:10px">下面列出本次将上传到 GitHub 的文件（已按增量规则排除未变更的文件：数据文件比对内容指纹，封面比对大小）。<b>只有勾选的项才会真正上传</b>，取消勾选即可跳过你不想传的文件。</div>'+
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">'+
         '<button type="button" class="btn ghost sm" id="urAll">全选</button>'+
         '<button type="button" class="btn ghost sm" id="urNone">全不选</button>'+
@@ -2848,7 +2908,7 @@ function addDataTools(){
         var r = await ghPushAll(function(done, total, ok, path){
           $('ghHint').textContent = '上传中 ' + done + '/' + total + '（' + path.split('/').pop() + '）' + (ok ? '' : ' ✗');
         }, sel);
-        if (r.ok){ setGhStatus('synced'); $('ghHint').textContent = '已上传 ' + r.n + ' 个文件到 GitHub ✓' + (_ghIncrSkip ? '（另有 ' + _ghIncrSkip + ' 张未变更封面已跳过）' : ''); toast('已上传 ' + r.n + ' 个文件到云端' + (_ghIncrSkip ? '，跳过 ' + _ghIncrSkip + ' 张未变更' : '')); }
+        if (r.ok){ setGhStatus('synced'); $('ghHint').textContent = '已上传 ' + r.n + ' 个文件到 GitHub ✓' + (_ghIncrSkip ? '（另有 ' + _ghIncrSkip + ' 个未变更文件已跳过）' : ''); toast('已上传 ' + r.n + ' 个文件到云端' + (_ghIncrSkip ? '，跳过 ' + _ghIncrSkip + ' 个未变更' : '')); }
         else { setGhStatus('failed'); $('ghHint').textContent = '上传完成 ' + r.okCount + '/' + r.n + '，部分失败（检查 Token / 网络）'; }
       });
       return;
