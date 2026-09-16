@@ -1,0 +1,24 @@
+{
+  "schema": 2,
+  "cat": "series",
+  "module": "series",
+  "rows": [
+    {
+      "_id": "l_mu3iku1rv44fk",
+      "系列名称": "喵职档案",
+      "所属IP": "罗小黑",
+      "目标数量": 5,
+      "系列封面": [
+        {
+          "imageUrl": "data/images/series/喵职档案-封面/喵职档案-喵职档案-0001.webp",
+          "viewport": {
+            "s": 1,
+            "x": 0,
+            "y": 0
+          }
+        }
+      ],
+      "说明": null
+    }
+  ]
+}
