@@ -196,10 +196,13 @@ function clearSwCaches(){
 /* v60：一键「获取网站最新数据」。
    流程：清空 SW 缓存 → 清空内存与 localStorage 兜底缓存 → 给数据请求加缓存击穿参数 →
    重新加载全部数据。适用于手机/电脑在线版手动刷新仍拿不到最新数据的场景。 */
-function refreshFromServer(){
+async function refreshFromServer(){
   _forceFresh = Date.now();
   _ghCache = null; _ghLoading = null; _idxCache = null;
   try { localStorage.removeItem(_LOCAL_CACHE_KEY); } catch(e){}
+  /* v97：必须连 IndexedDB 一起清，否则离线优先会先把旧快照渲染出来，把最新数据盖住。
+     这里 await —— 确保清完再 loadAll，避免竞态。 */
+  try { await idbClear(); } catch(e){}
   clearSwCaches();
   if (MODE === 'gh' || MODE === 'db' || MODE === 'localfile'){
     toast('正在从网站获取最新数据…', '刷新', function(){ window.location.reload(); });
@@ -225,8 +228,105 @@ function snapshotAll(){
    每次本地改动后同步写一份全量到 localStorage；启动读取 GitHub 失败时回退到此缓存，避免强刷丢数据。 */
 var _LOCAL_CACHE_KEY = 'lifedesk_local_cache';
 function localCacheSetFrom(obj){ try { localStorage.setItem(_LOCAL_CACHE_KEY, JSON.stringify(obj)); } catch(e){} }
-function localCacheSet(){ localCacheSetFrom(snapshotAll()); }
+var _idbSaveTimer = null;
+function localCacheSet(){
+  var snap = snapshotAll();
+  localCacheSetFrom(snap);
+  /* v97：同步写一份到 IndexedDB —— gh 模式下每次编辑后本机快照也要跟上，
+         否则下次打开会先渲染出旧数据（要等网络拉到才纠正），像是「改了没生效」。
+         整份数据约 8MB，写入有开销，这里做 1.5 秒节流：连续编辑只落盘一次。 */
+  try {
+    clearTimeout(_idbSaveTimer);
+    _idbSaveTimer = setTimeout(function(){ try { idbSet(snap); } catch(e){} }, 1500);
+  } catch(e){}
+}
 function localCacheGet(){ try { return JSON.parse(localStorage.getItem(_LOCAL_CACHE_KEY) || 'null'); } catch(e){ return null; } }
+
+/* ===== v97：IndexedDB 持久缓存 —— 真正把整份数据存到本机（iPhone / 电脑）=====
+   为什么必须有：全量数据约 8.25MB，而 localStorage 上限约 5MB（iOS Safari 同量级），
+   写入必然抛 QuotaExceededError，而 localCacheSetFrom 用 try/catch 静默吞掉，
+   于是「本地兜底缓存」从来没真正写进去过 —— 每次打开都得重新联网拉 38 个文件，
+   网络一抖就「读取失败」。IndexedDB 容量大得多（iOS 可达数百 MB），
+   且直接存结构化对象（不必 JSON.stringify），更快也更省空间。 */
+var _IDB_NAME = 'lifedesk', _IDB_STORE = 'cache', _IDB_KEY = 'data';
+function idbOpen(){
+  return new Promise(function(resolve, reject){
+    try {
+      var req = indexedDB.open(_IDB_NAME, 1);
+      req.onupgradeneeded = function(){
+        var db = req.result;
+        if (!db.objectStoreNames.contains(_IDB_STORE)) db.createObjectStore(_IDB_STORE);
+      };
+      req.onsuccess = function(){ resolve(req.result); };
+      req.onerror = function(){ reject(req.error || new Error('idb open fail')); };
+      req.onblocked = function(){ reject(new Error('idb blocked')); };
+    } catch(e){ reject(e); }
+  });
+}
+function idbGet(){
+  return idbOpen().then(function(db){
+    return new Promise(function(resolve){
+      try {
+        var tx = db.transaction(_IDB_STORE, 'readonly');
+        var r = tx.objectStore(_IDB_STORE).get(_IDB_KEY);
+        r.onsuccess = function(){ resolve(r.result || null); };
+        r.onerror = function(){ resolve(null); };
+      } catch(e){ resolve(null); }
+    });
+  }).catch(function(){ return null; });
+}
+function idbSet(obj){
+  return idbOpen().then(function(db){
+    return new Promise(function(resolve){
+      try {
+        var tx = db.transaction(_IDB_STORE, 'readwrite');
+        tx.objectStore(_IDB_STORE).put(obj, _IDB_KEY);
+        tx.oncomplete = function(){ resolve(true); };
+        tx.onerror = function(){ resolve(false); };
+        tx.onabort = function(){ resolve(false); };
+      } catch(e){ resolve(false); }
+    });
+  }).catch(function(){ return false; });
+}
+function idbClear(){
+  return idbOpen().then(function(db){
+    return new Promise(function(resolve){
+      try {
+        var tx = db.transaction(_IDB_STORE, 'readwrite');
+        tx.objectStore(_IDB_STORE).delete(_IDB_KEY);
+        tx.oncomplete = function(){ resolve(true); };
+        tx.onerror = function(){ resolve(false); };
+        tx.onabort = function(){ resolve(false); };
+      } catch(e){ resolve(false); }
+    });
+  }).catch(function(){ return false; });
+}
+/* v97：带超时与重试的 fetch —— 根治「单个请求挂起 → Promise.all 整体卡死 → 被判读取失败」。
+   浏览器 fetch 没有内置超时；github.io 在国内常出现「连上了但半天不返回也不报错」的挂起，
+   原来 38 个文件并发 Promise.all，任一挂起就全部僵住，只能等 15 秒看门狗判失败。
+   现在每个请求单独计时，超时即中断并重试，整体不再被某一个慢请求拖死。 */
+async function fetchWithTimeout(url, ms, retries){
+  var lastErr = null, times = (retries || 0) + 1;
+  for (var i = 0; i < times; i++){
+    var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = null;
+    try {
+      if (ctl){ timer = setTimeout(function(){ try { ctl.abort(); } catch(e){} }, ms); }
+      var opt = { cache: 'no-store' };
+      if (ctl) opt.signal = ctl.signal;
+      var r = await fetch(url, opt);
+      if (timer) clearTimeout(timer);
+      if (r && r.ok) return r;
+      lastErr = new Error('HTTP ' + (r ? r.status : '?'));
+      /* 4xx（408/429 除外）多为确定性失败，重试无意义，直接放弃 */
+      if (r && r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429) break;
+    } catch(e){
+      if (timer) clearTimeout(timer);
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('fetch failed');
+}
 function persistAll(cb){
   if (MODE === 'localfile'){ saveLocalAll(snapshotAll(), function(ok){ if (cb) cb(ok); }); return; }
   if (MODE === 'gh'){ ghSaveNow(function(ok){ if (cb) cb(ok); }); return; }
@@ -1727,8 +1827,8 @@ async function resolveImagesFor(rows){
    也不经过 api.github.com（国内常超时）。分片模式下会按主索引逐个拉类目文件。 */
 async function fetchJSONRel(url){
   try {
-    var r = await fetch(_bustUrl(url), { cache: 'no-store' });
-    if (!r || !r.ok) return null;
+    /* v97：8 秒超时 + 最多重试 2 次。挂起的请求会被快速放弃而不是拖死整批。 */
+    var r = await fetchWithTimeout(_bustUrl(url), 8000, 2);
     var t = await r.text();
     if (!t || !t.trim()) return null;
     return JSON.parse(t);
@@ -4273,37 +4373,50 @@ function fetchAll(key, cb){
     if (_ghCache){ cb(_ghCache[key] || []); return; }
     if (_ghLoading){ _ghLoading.push(function(all){ cb((all||{})[key] || []); }); return; }
     _ghLoading = [];
-    /* 先试静态直读（同域 fetch，无需 Token、不怕 api.github.com 超时）；
-       拿不到分片数据再回退到原来的 API 逻辑。 */
+    /* v97：离线优先（根治「读取失败」）——
+       ① 先用本机 IndexedDB 快照立即出画面（秒开、断网也能用，不再干等网络）；
+       ② 再后台拉最新，成功则落盘 IndexedDB 并刷新界面；失败就沿用本机数据，不再报错；
+       ③ 只有「本机没有任何数据」（首次访问）时，才最后试一次 api.github.com。 */
     (async function(){
+      var waiters = _ghLoading;
+      function settle(all){
+        _ghCache = all;
+        cb(all[key] || []);
+        if (waiters){ waiters.forEach(function(fn){ fn(all); }); }
+        _ghLoading = null;
+      }
+      /* ① 本机快照：IndexedDB 优先（存得下 8MB+），旧版 localStorage 兜底（兼容老用户） */
+      var local = null;
+      try { local = await idbGet(); } catch(e){}
+      if (!local || !Object.keys(local).length) local = localCacheGet();
+      var hadLocal = !!(local && Object.keys(local).length);
+      if (hadLocal) settle(local);          /* 先用本机数据把画面顶起来 */
+      /* ② 后台拉最新（每个请求带 8 秒超时 + 重试，不会再被单个挂起请求拖死） */
       var st = await ghStaticLoadV2();
       if (st && Object.keys(st).length){
         _ghCache = st;
-        localCacheSetFrom(st);
-        cb(st[key] || []);
-        if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
+        idbSet(st);                          /* 落盘 IndexedDB：这才是真正「存在手机上」 */
+        localCacheSetFrom(st);               /* 仍试写 localStorage（小数据可用，超限静默忽略） */
+        if (hadLocal){
+          cb(st[key] || []);                 /* 把最新数据交给本次调用者 */
+          try { renderSoon(); } catch(e){}   /* 并触发全局重绘，其余模块一并换成最新 */
+        } else {
+          settle(st);                        /* 首次访问：现在才交付 */
+        }
         return;
       }
-      /* 静态直读失败：优先用本地缓存兜底（之前成功加载过会落盘），避免直接回退到 api.github.com 触发 422 / 限流 */
-      var cache = localCacheGet();
-      if (cache && Object.keys(cache).length){
-        _ghCache = cache;
-        cb(_ghCache[key] || []);
-        if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
-        return;
-      }
-      /* 实在都没有（首次访问且静态拉取失败）：最后再试一次 API；失败静默兜底，不再把 422 当阻塞错误 */
+      /* ③ 网络拿不到：本机已有数据 → 到此为止（保持正常可用，不报「读取失败」） */
+      if (hadLocal) return;
       try {
         ghGetAll(function(all, sha, err){
-          _ghCache = (all && Object.keys(all).length) ? all : (localCacheGet() || {});
-          localCacheSetFrom(_ghCache);
-          cb(_ghCache[key] || []);
-          if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
+          var got = (all && Object.keys(all).length) ? all : null;
+          if (got){ _ghCache = got; idbSet(got); localCacheSetFrom(got); }
+          else { _ghCache = {}; }
+          settle(_ghCache);
         });
       } catch(e){
         _ghCache = {};
-        cb([]);
-        if (_ghLoading){ _ghLoading.forEach(function(fn){ fn(_ghCache); }); _ghLoading = null; }
+        settle(_ghCache);
       }
     })();
     return;
@@ -4369,7 +4482,9 @@ function loadAll(){
   });
   render();
   /* v75fix：加载看门狗 —— 万一某张表（如本地目录读取 / 图片解析）卡住，
-     15 秒后强制把仍在 loading 的表置为 error 并给出提示，绝不永远停在「读取中」。 */
+     超时后强制把仍在 loading 的表置为 error 并给出提示，绝不永远停在「读取中」。
+     v97：由 15 秒放宽到 30 秒 —— 数据请求现在带 8 秒超时 + 最多 2 次重试，
+     最坏约 24 秒；原来的 15 秒会在重试还没走完时就误判成失败。 */
   clearTimeout(_loadWatchdogTimer);
   _loadWatchdogTimer = setTimeout(function(){
     var stuck = keys.filter(function(k){ return store[k] && store[k].status==='loading'; });
@@ -4378,7 +4493,7 @@ function loadAll(){
       renderSoon();
       toast('「'+stuck.join('、')+'」读取超时，请按 F12 打开控制台查看红色报错，或点右下角「重新拉取」重试');
     }
-  }, 15000);
+  }, 30000);
 }
 /* v54：启动时把错放在 collection 里的电影/留声机记录迁回 store.av，避免两边计数对不上 */
 function migrateAvFromCollection(){
