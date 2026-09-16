@@ -1150,8 +1150,19 @@ function dataUrlToBytes(dataUrl){
     return arr;
   } catch(e){ return null; }
 }
+/* v96r：已知不开放跨域 / 有防盗链的外链图片主机（如豆瓣图床 doubanio.com、gstatic.com）。
+   这些主机既不返回 Access-Control-Allow-Origin，又会用 418 之类拦截跨域 fetch，
+   前端永远读不到字节；与其发起注定失败的请求（还会在控制台刷 CORS / 418 红错），
+   不如直接返回 null，让上层保留原链接、交给 <img> 在线展示。 */
+function isNoCorsImgHost(url){
+  try {
+    var h = new URL(url).hostname.toLowerCase();
+    return /doubanio\.com$/.test(h) || /gstatic\.com$/.test(h) || /googleusercontent\.com$/.test(h);
+  } catch(e){ return false; }
+}
 /* 下载外链图片为字节（失败返回 null，保留原链接不阻断） */
 async function fetchImageBytes(url){
+  if (isNoCorsImgHost(url)) return null;   /* v96r：注定拿不到字节，跳过，避免 CORS/418 控制台报错 */
   try {
     var r = await fetch(url, { mode: 'cors' });
     if (!r || !r.ok) return null;
@@ -1544,6 +1555,7 @@ async function externalizeImages(cat, rows, startSeq, opts){
           ext = (u.indexOf('image/png') >= 0) ? 'png' : 'jpg';
           bytes = dataUrlToBytes(u);
         } else {
+          if (isNoCorsImgHost(u)){ _imgFetchFailed++; continue; }   /* v96r：已知无 CORS，保留原链接、不刷警告 */
           var got = await fetchImageBytes(u);
           if (!got){
             /* 外链取不到（防盗链 / 国内访问不了，如 gstatic.com）：保留原链接，不阻断保存 */
@@ -2945,7 +2957,7 @@ function coverStyle(row,title){
   var u = coverImg(row);
   var vp = coverViewport(row);
   /* 用单引号包裹 URL：外部 HTML 的 style 属性使用双引号，内部若再用双引号会截断属性，导致封面整片空白 */
-  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-repeat:no-repeat;background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+Math.max(50,Math.round(vp.s*100))+"% auto;background-color:#fff";
+  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-repeat:no-repeat;background-position:"+(50-vp.x)+"% "+(50-vp.y)+"%;background-size:"+Math.max(50,Math.round(vp.s*100))+"% auto;background-color:#fff";
   var h = hue(title), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -3145,13 +3157,16 @@ var MODS = {
       {k:'小类',t:'dyn',src:'sub',quarter:true},
       {k:'IP',t:'dyn',src:'ip'},
       {k:'系列',t:'dyn',src:'series'},
-      {k:'编号',t:'text',ph:'如 025，系列子项用'},
+      {k:'编号',t:'text',ph:'如 025，系列子项用',quarter:true},
       /* v76：持有数量 —— 同一件东西收了几件（数字） */
-      {k:'持有',t:'number',min:0,ph:'如 1，这一件有几份'},
-      /* v75fix：状态 1/2 + 购入价格 1/4 + 购入渠道 1/4 同一行 */
-      {k:'状态',t:'checks',o:STATES_OWN,def:['在库'],statusRow:true,rowstart:true},
+      {k:'持有',t:'number',min:0,ph:'如 1，这一件有几份',quarter:true},
       {k:'购入价格',t:'currency',ph:'0.00',quarter:true},
       {k:'购入渠道',t:'text',ph:'淘宝 / 线下店 / 朋友送',quarter:true},
+      /* v96q：状态（1/2 宽）放在 编号/持有/购入价格/购入渠道 之后 */
+      {k:'状态',t:'checks',o:STATES_OWN,def:['在库'],statusRow:true},
+      /* v96p：端盒 / 隐藏款 —— 单选取向（布尔）。端盒选中后同系列所有 item 自动置端盒，价格同步；隐藏款作为筛选条件 */
+      {k:'端盒',t:'check',quarter:true},
+      {k:'隐藏款',t:'check',quarter:true},
       /* v75fix：存放位置 = 单个字段（占 50%），内部三段下拉 房间/柜墙/层，
          与「购入日期」的年/月/日同一套路；不再拆成三个独立字段 */
       {k:'存储地点',t:'loc3',lab:'存放位置',rowstart:true},
@@ -3171,7 +3186,7 @@ var MODS = {
     fields:[
       {k:'系列名称',t:'text',req:1,ph:'如 宝可梦30周年151金属徽章',full:1},
       {k:'所属IP',t:'dyn',src:'ip'},
-      {k:'目标数量',t:'number',min:0,ph:'如 151，留空表示不限'},
+      {k:'目标数量',t:'number',min:0,ph:'如 151，留空表示不限',lab:'系列总数量'},
       {k:'系列封面',t:'img',ph:'图片链接，或点右侧上传',full:1},
       {k:'说明',t:'textarea',ph:'这一套的来历、怎么收齐的',full:1}
     ]},
@@ -4406,6 +4421,25 @@ function localUpsert(key, id, vals){
   else if (MODE === 'localfile'){ queueLocalSave(); }
   else if (MODE === 'local'){ lsSet(key, rows); localCacheSet(); }
 }
+/* v96r：只把 patch 里的字段合并进指定记录，不动其它字段（与 localUpsert 的全字段重建相反）。
+   专用于「端盒联动」给兄弟项置 端盒 / 同步 购入价格·购入渠道 —— 绝不能把兄弟项的 系列 / 编号 / 名称 等清成 null。
+   若误用 localUpsert 传部分字段，activeFields 返回全字段，会把兄弟项未提供的字段写成 null，使其脱离系列（典型表现：录入新编号后旧编号“消失”）。 */
+function patchRow(key, id, patch){
+  if (!store[key] || !store[key].rows) return;
+  var changed=false;
+  var rows = store[key].rows.map(function(r){
+    if (String(r._id)!==String(id)) return r;
+    var nr=Object.assign({}, r);
+    Object.keys(patch).forEach(function(k){ nr[k]=patch[k]; });
+    changed=true;
+    return nr;
+  });
+  if (!changed) return;
+  store[key].rows = rows;
+  if (MODE==='gh'){ queueGhSave(); localCacheSet(); }
+  else if (MODE==='localfile'){ queueLocalSave(); }
+  else if (MODE==='local'){ lsSet(key, rows); localCacheSet(); }
+}
 function refreshKey(key, after){
   fetchAll(key, function(rows){
     if (rows!==null){
@@ -4597,6 +4631,7 @@ function filtered(key){
     rows=rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
     if (f.cat) rows=rows.filter(function(r){ return r['大类']===f.cat; });
     if (f.sub) rows=rows.filter(function(r){ return r['小类']===f.sub; });
+    if (f.hidden) rows=rows.filter(function(r){ return !!r['隐藏款']; });   /* v96p：隐藏款筛选 */
     if (q) rows=rows.filter(function(r){
       return ((r['名称']||'')+' '+(r['IP']||'')+' '+(r['系列']||'')+' '+(r['编号']||'')+' '+(r['存储地点']||'')+' '+(r['购入渠道']||'')+' '+(r['短评']||'')).toLowerCase().indexOf(q)>=0; });
     rows.sort(function(a,b){
@@ -4812,6 +4847,22 @@ var MOD_BG = {
   food:       'images/mod_food.png',
   idea:       'images/idea-sky.png'                                                           /* v15.18：本地银河照片 */
 };
+/* v96p：总投入计算 —— 端盒 item 不再逐个相加：某系列一旦有端盒价（盒总价，存于每个端盒 item 的购入价格字段、同系列同值），
+   只把该端盒价计入一次，代表拥有端盒状态的所有 items 的总价；非端盒 item 仍逐条相加。 */
+function computeSpend(rows){
+  var spend = 0, box = {};
+  (rows||[]).forEach(function(r){
+    if (r['端盒']){
+      var s = r['系列'] || ' ';
+      var p = num(r['购入价格']);
+      if (p>0) box[s] = Math.max(box[s]||0, p);   /* 同系列端盒价同值，取其一即可 */
+    } else {
+      spend += num(r['购入价格']);
+    }
+  });
+  Object.keys(box).forEach(function(s){ spend += (box[s]||0); });
+  return spend;
+}
 function renderOverview(){
   var h='';
   var cards = [
@@ -4847,8 +4898,8 @@ function renderOverview(){
   /* v59：年份未选时默认统计全部 */
   var isAll = !year;
   var bought = isAll ? csRows : csRows.filter(function(r){ return yr(r['购入日期'])===year; });
-  var spend=0; bought.forEach(function(r){ spend += num(r['购入价格']); });
-  var allCost = 0; csRows.forEach(function(r){ allCost += num(r['购入价格']); });
+  var spend = computeSpend(bought);
+  var allCost = computeSpend(csRows);
   /* v58：有价格但没填购入日期的藏品不会计入「年投入」，给出明确提示避免误解 */
   var noDateCost = csRows.filter(function(r){ return !yr(r['购入日期']) && num(r['购入价格'])>0; });
   /* 分类分布也只计在库实物件数（与上方「在库」一致；非在库大类不显示） */
@@ -4938,14 +4989,14 @@ function collStats(){
   var ownedCnt = ownedCount(rows);
   var isAll = !year;
   var bought = isAll ? rows : rows.filter(function(r){ return yr(r['购入日期'])===year; });
-  var spend=0; bought.forEach(function(r){ spend += num(r['购入价格']); });
+  var spend = computeSpend(bought);
   var byCat={}; rows.forEach(function(r){ var k=r['大类']||'其他'; byCat[k]=(byCat[k]||0)+1; });
   var maxC=1; Object.keys(byCat).forEach(function(k){ if(byCat[k]>maxC) maxC=byCat[k]; });
   /* 总条目：藏品总录入条数（按购入日期所在年份分年；与状态、持有数量无关） */
   var totalEntries = isAll ? rows.length : rows.filter(function(r){ return yr(r['购入日期'])===year; }).length;
   var entriesLabel = isAll ? '总条目' : (year+' 年条目');
   var spendLabel = isAll ? '总投入' : (year+' 年投入');
-  var h='<div class="statgrid">'+
+  var h='<div class="statgrid collstat">'+
     '<div class="stat"><u>在库</u><b>'+ownedCnt+'</b><i>件</i></div>'+
     '<div class="stat"><u>'+entriesLabel+'</u><b>'+totalEntries+'</b><i>条</i></div>'+
     '<div class="stat"><u>IP 数</u><b>'+store.ip.rows.length+'</b><i>个</i></div>'+
@@ -5047,6 +5098,14 @@ function renderCatMode(){
   (SUBS[f.cat]||[]).forEach(function(x){ used[x]=1; });
   s.rows.forEach(function(r){ if (r['大类']===f.cat && r['小类']) used[r['小类']]=1; });
   var subList=Object.keys(used);
+  /* v96p：隐藏款筛选（仅当数据里存在隐藏款 item 才展示；不污染没有隐藏款的分类） */
+  var hasHidden = s.rows.some(function(r){ return !!r['隐藏款']; });
+  if (hasHidden){
+    h += '<div class="subchips">'+
+      '<button class="chip'+(f.hidden?'':' on')+'" type="button" data-act="f" data-k="hidden" data-v="">全部</button>'+
+      '<button class="chip'+(f.hidden==='1'?' on':'')+'" type="button" data-act="f" data-k="hidden" data-v="1">只看隐藏款</button>'+
+      '</div>';
+  }
   if (f.cat && subList.length){
     h += '<div class="subchips">'+
       '<button class="chip'+(f.sub?'':' on')+'" type="button" data-act="f" data-k="sub" data-v="">不限</button>'+
@@ -8169,7 +8228,21 @@ function reloadOne(key){
 /* ============ 表单 ============ */
 /* ---------- 动态下拉：小类 / IP / 存储地点 ---------- */
 function dynOptions(src){
-  if (src==='sub') return SUBS[(editing && editing.vals) ? editing.vals['大类'] : ''] || [];
+  /* v96p：小类下拉 = 预定义 SUBS[大类] + 本大类「在实际数据里已用过」的小类。
+     这样像 冰箱贴 这种当年手打进「＋ 自定义」框、被用了上千次却从没正式登记的值，
+     也会自动出现在下拉框里，不再每次编辑都退化成「＋ 自定义… + 输入框」。
+     顺序：预定义在前，已用但未登记的追加在后；只取同大类，避免串类。 */
+  if (src==='sub'){
+    var _cat = (editing && editing.vals) ? editing.vals['大类'] : '';
+    var _base = (SUBS[_cat] || []).slice();
+    var _seen = {};
+    _base.forEach(function(s){ _seen[s] = 1; });
+    (store.collection.rows || []).forEach(function(r){
+      var s = r['小类'];
+      if (s && String(r['大类']||'') === String(_cat) && !_seen[s]){ _seen[s] = 1; _base.push(s); }
+    });
+    return _base;
+  }
   if (src==='ip')  return (store.ip.rows  || []).map(function(r){ return r['IP名称'];   }).filter(Boolean);
   if (src==='series') return (store.series.rows || []).map(function(r){ return r['系列名称']; }).filter(Boolean);
   /* v75fix：用 locDisplayName —— 新数据是「房间 · 柜体墙面 · 所在层」三段合成，
@@ -8279,7 +8352,7 @@ function setImgPreview(prev, url, k){
 function applyImgViewport(prev, k){
   if (!prev || !k) return;
   var vp = (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0};
-  prev.style.backgroundPosition = (50+vp.x)+'% '+(50+vp.y)+'%';
+  prev.style.backgroundPosition = (50-vp.x)+'% '+(50-vp.y)+'%';
   prev.style.backgroundSize = (vp.s && vp.s>1) ? (Math.max(100,Math.round(vp.s*100))+'% auto')
                           : (vp.s && vp.s<1) ? (Math.max(50,Math.round(vp.s*100))+'% auto') : 'contain';
 }
@@ -8824,17 +8897,22 @@ function toggleRowStatus(key, id, status){
 /* 收服 / 想收 快速按钮的作用域是整个「宝可梦」IP（含旗下所有系列）；
    属性图标仍然只属于「30周年冰箱贴」系列（属性 / 副属性字段是挂在这个系列上的） */
 function pkIsPkmIp(r){ return !!r && r['IP']===PK_IP; }
-/* v77：展示卡左下角两个快速按钮——「收服 / 在库」「想收」，点一次写入、再点一次取消 */
+/* v77：展示卡左下角两个快速按钮——「在库 / 想收」快速状态切换，点一次写入、再点一次取消。
+   v96q：不再限定宝可梦 IP —— 所有藏品 item 卡都展示「在库 / 想收」快速按钮。
+   在库未收态动作词：宝可梦 IP 用「收服」，其它 IP 用「招募」；点过之后统一为状态「在库」。 */
 function pkQuickBtnsHTML(r){
-  if (!pkIsPkmIp(r)) return '';
   function btn(s){
     var on = hasStatus(r, s);
     var cls = s==='在库' ? 'pkq-lib' : 'pkq-wish';
-    /* 在库：没点时是动作「收服」，点过之后是状态「在库」 */
-    var label = (s==='在库' && !on) ? '收服' : s;
+    var isPkm = pkIsPkmIp(r);
+    /* 在库：没点时是动作「收服」（宝可梦）/「招募」（其它 IP），点过之后是状态「在库」 */
+    var actWord = (s==='在库' && !on) ? (isPkm ? '收服' : '招募') : s;
+    var tipVerb = (s==='在库')
+      ? (on ? '已「在库」，再点一次取消' : (isPkm ? '收服了（标记为在库）' : '招募了（标记为在库）'))
+      : (on ? '已「想收」，再点一次取消' : '标记为「想收」');
     return '<button type="button" class="pkq '+cls+(on?' on':'')+'"'+
       ' data-act="pkquick" data-s="'+esc(s)+'" data-id="'+esc(r._id)+'"'+
-      ' title="'+(on ? '已「'+esc(s)+'」，再点一次取消' : (s==='在库' ? '收服了（标记为在库）' : '标记为「'+esc(s)+'」'))+'">'+esc(label)+'</button>';
+      ' title="'+esc(tipVerb)+'">'+esc(actWord)+'</button>';
   }
   return '<div class="pkquick">'+btn('在库')+btn('想收')+'</div>';
 }
@@ -8897,8 +8975,8 @@ function renderSeriesMode(){
       '<div class="bd"><strong>'+esc(name)+'</strong>'+
         '<span>'+esc(se['所属IP']||'未绑 IP')+'</span>'+
         (target
-          ? '<span>'+owned+' / '+target+'</span>'
-          : '<span>'+owned+' 件</span>')+
+          ? '<span>在库 '+owned+' / '+target+'</span>'
+          : '<span>在库 '+owned+' 件</span>')+
       '</div></div>';
   }).join('')+
   '<div class="ipcard add" data-act="add" data-key="series">'+
@@ -9104,7 +9182,7 @@ function renderSeriesDetail(){
   }
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+esc(name)+'</h2>'+
-    '<div class="hint">'+(target? '目标 '+target+' 件 · 已有 '+cntAll+' 件' : '已有 '+cntAll+' 件')+'</div></div>'+modeSeg()+'</div>'+
+    '<div class="hint">'+(target? '系列总数量 '+target+' 件 · 在库 '+cntAll+' 件' : '在库 '+cntAll+' 件')+'</div></div>'+modeSeg()+'</div>'+
     '<div style="margin-bottom:14px"><button class="btn link" type="button" data-act="seriesback">← 返回系列列表</button></div>'+
     '<div class="iphero">'+
       '<div class="ph" style="'+coverStyle(se,name)+'">'+(hasCover(se)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
@@ -9122,7 +9200,7 @@ function renderSeriesDetail(){
     h += '<div class="buybox" style="margin-bottom:20px">'+
       '<div class="procline">'+
         '<h4>收集进度</h4>'+
-        '<span style="font-size:12.5px;color:var(--muted)">已有 <b style="color:var(--ink)">'+cntAll+'</b> / '+target+'</span>'+
+        '<span style="font-size:12.5px;color:var(--muted)">在库 <b style="color:var(--ink)">'+cntAll+'</b> / '+target+'</span>'+
       '</div>';
     if (miss.length){
       /* v59：缺失编号默认只显示前 8 个，其余收进「…还有 N 个」（点击展开）；
@@ -9158,17 +9236,29 @@ function renderSeriesDetail(){
   }
   /* 全部 / 在库 / 云游 / 想收 四段切换：默认「全部」，单击切换；子项按 状态 过滤
      云游 = 状态含「云游」（未入手）；想收 = 状态含「想收」（可与其他状态共存） */
-  var wandering=itemsAll.filter(function(r){ return hasStatus(r,'云游'); });
+  /* 云游 = 状态含「云游」且不在库（东西已回库就不再算云游，避免「在库+云游」的脏数据挤进云游视图） */
+  var wandering=itemsAll.filter(function(r){ return hasStatus(r,'云游') && !hasStatus(r,'在库'); });
   var wishedAll=itemsAll.filter(function(r){ return hasStatus(r,'想收'); });
   var sf = ui.collection.seriesStatus;
   function segBtn(v, n){
     return '<button type="button" data-act="seriesfilt" data-v="'+v+'" class="'+(sf===v?'on':'')+'">'+
       v+'<i class="fb">'+n+'</i></button>';
   }
+  /* v96q：隐藏款筛选与 全部 / 在库 / 云游 / 想收 同级别，放在「想收」后面；
+     仅当本系列录过隐藏款 item 才出现该筛选项（未录则不展示） */
+  var _hasHidden = itemsAll.some(function(r){ return !!r['隐藏款']; });
+  function hiddenSeg(){
+    if (!_hasHidden) return '';
+    var on = ui.collection.hidden==='1';
+    /* 单按钮切换：开时 data-v 置空（再点即关），关时 data-v=1（再点即开） */
+    return '<button type="button" class="'+(on?'on':'')+'" data-act="f" data-k="hidden" data-v="'+(on?'':'1')+'">隐藏款</button>';
+  }
   h += '<div class="segline" style="margin:0 0 14px"><div class="seg seriesfilt">'+
     segBtn('全部', itemsAll.length)+segBtn('在库', inLib.length)+
-    segBtn('云游', wandering.length)+segBtn('想收', wishedAll.length)+'</div></div>';
+    segBtn('云游', wandering.length)+segBtn('想收', wishedAll.length)+hiddenSeg()+'</div></div>';
   var items = sf==='在库' ? inLib : sf==='云游' ? wandering : sf==='想收' ? wishedAll : itemsAll;
+  /* v96p：系列内隐藏款筛选 —— 只影响展示的子项墙，不改变收集进度 */
+  if (ui.collection.hidden==='1') items = items.filter(function(r){ return !!r['隐藏款']; });
   if (isPk){
     h += pkFilterBar(itemsAll);
     items = pkApplyFilters(items);
@@ -9407,6 +9497,11 @@ function openForm(key, id, opts){
     var _dcat = seed['大类'] || editing.vals['大类'] || '';
     if (_dcat) draftKey += '_' + _dcat;
   }
+  /* v96q 修复：saveDraft 在 openForm 作用域内声明一次，供 wireFormControls 与下方
+     端盒/云游 联动 IIFE 共用——之前只在 wireFormControls 的参数里定义，IIFE 里引用的是
+     未声明的 saveDraft，点击云游/端盒时 `if (saveDraft)` 抛 ReferenceError（file:// 下被
+     全局错误框截成 "Script error."，白屏根因）。 */
+  var saveDraft = function(){ try { localStorage.setItem(draftKey, JSON.stringify(editing.vals)); } catch(e){} };
   try {
     var raw = localStorage.getItem(draftKey);
     if (raw){
@@ -9468,7 +9563,7 @@ function openForm(key, id, opts){
       }
       var fg = host.querySelector('.fgrid');
       if (fg) fg.innerHTML = activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('');
-      wireFormControls(host, function(){ try { localStorage.setItem(draftKey, JSON.stringify(editing.vals)); } catch(e){} });
+      wireFormControls(host, saveDraft);
       try { localStorage.removeItem(draftKey); } catch(e){}
       toast('已归位');
     };
@@ -9493,9 +9588,7 @@ function openForm(key, id, opts){
     if (as) as.value = String(editing.vals['地点']||editing.vals['地区']||'');
   }
 
-  wireFormControls(host, function(){
-    try { localStorage.setItem(draftKey, JSON.stringify(editing.vals)); } catch(e){}
-  });
+  wireFormControls(host, saveDraft);
 
   $('saveBtn').onclick=function(){
     var bad=null;
@@ -9522,6 +9615,23 @@ function openForm(key, id, opts){
           : String(editing.vals['状态']||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
         editing.vals['状态'] = clearWanderWhenOwned(_sa);
       }
+      /* v96r：端盒联动 —— 选上端盒则同系列所有 item 自动置端盒；端盒价（购入价格）与 购入渠道 同步。
+         价格仅在 >0 时同步，渠道仅在非空时同步；用 patchRow 只合并这两个字段，绝不把兄弟项其它字段清成 null。 */
+      if (key==='collection'){
+        var _series = editing.vals['系列'], _endbox = !!editing.vals['端盒'];
+        if (_series && _endbox){
+          var _p = num(editing.vals['购入价格']);
+          var _ch = editing.vals['购入渠道'];
+          store.collection.rows.forEach(function(r){
+            if (String(r._id)===String(id)) return;     /* 当前这条稍后由主保存处理 */
+            if (r['系列']!==_series) return;
+            var patch = { '端盒': true };
+            if (_p>0) patch['购入价格'] = _p;
+            if (_ch!=null && _ch!=='') patch['购入渠道'] = _ch;
+            if (Object.keys(patch).length) patchRow('collection', r._id, patch);
+          });
+        }
+      }
       if (id) updateRow(key, id, editing.vals, after);
       else addRow(key, editing.vals, after);
       try { localStorage.removeItem(draftKey); } catch(e){}
@@ -9540,6 +9650,93 @@ function openForm(key, id, opts){
       doSave();
     }
   };
+  /* v96p：端盒勾选 → 购入价格 字段标签变「端盒价」；取消 → 变回「购入价格」 */
+  (function(){
+    var endboxInp = host.querySelector('[data-f="端盒"][type="checkbox"]');
+    var priceF = host.querySelector('.fgrid [data-f="购入价格"]');
+    var priceLab = priceF ? priceF.closest('.f') : null;
+    var priceLabEl = priceLab ? priceLab.querySelector('label') : null;
+    var channelF = host.querySelector('.fgrid [data-f="购入渠道"]');
+    var dateF = host.querySelector('.fgrid [data-f="购入日期"]');
+    var dateY = host.querySelector('.fgrid [data-fy="购入日期"]');
+    var dateM = host.querySelector('.fgrid [data-fm="购入日期"]');
+    var dateD = host.querySelector('.fgrid [data-fd="购入日期"]');
+    function syncEndboxLabel(){
+      if (!priceLabEl) return;
+      priceLabEl.textContent = (endboxInp && endboxInp.checked) ? '端盒价' : '购入价格';
+    }
+    /* v96s：勾选端盒 → 自动从同系列已录入、且本身为端盒的兄弟项继承 端盒价 / 购入渠道 / 购入日期（仅当当前为空时填入，不覆盖手动输入）。
+       不勾选端盒则保持默认 null（端盒价/购入渠道/购入日期为 null）。优先选字段最全的兄弟项作为模板。 */
+    function inheritEndbox(){
+      if (!endboxInp || !endboxInp.checked) return;
+      var _series = editing.vals['系列'];
+      if (!_series) return;
+      var tmpl=null, best=-1;
+      (store.collection.rows||[]).forEach(function(r){
+        if (String(r._id)===String(id)) return;
+        if (r['系列']!==_series) return;
+        if (!r['端盒']) return;
+        var score = (num(r['购入价格'])>0?1:0) + (r['购入渠道']?1:0) + (r['购入日期']?1:0);
+        if (score>best){ best=score; tmpl=r; }
+      });
+      if (!tmpl) return;
+      var _empty = function(x){ return x==null || x===''; };
+      if (_empty(editing.vals['购入价格']) && num(tmpl['购入价格'])>0){
+        editing.vals['购入价格'] = tmpl['购入价格'];
+        if (priceF) priceF.value = tmpl['购入价格'];
+      }
+      if (_empty(editing.vals['购入渠道']) && tmpl['购入渠道']){
+        editing.vals['购入渠道'] = tmpl['购入渠道'];
+        if (channelF) channelF.value = tmpl['购入渠道'];
+      }
+      if (_empty(editing.vals['购入日期']) && tmpl['购入日期']){
+        var _dv = String(tmpl['购入日期']||'');
+        editing.vals['购入日期'] = _dv;
+        if (dateF) dateF.value = _dv;
+        if (dateY) dateY.value = /^\d{4}/.test(_dv) ? _dv.slice(0,4) : '';
+        if (dateM) dateM.value = /^\d{4}-\d{2}/.test(_dv) ? String(parseInt(_dv.slice(5,7),10)) : '';
+        if (dateD) dateD.value = /^\d{4}-\d{2}-\d{2}$/.test(_dv) ? String(parseInt(_dv.slice(8,10),10)) : '';
+      }
+      if (saveDraft) saveDraft();
+    }
+    if (endboxInp){
+      endboxInp.addEventListener('change', function(){ syncEndboxLabel(); inheritEndbox(); });
+      syncEndboxLabel();
+      inheritEndbox();   /* 打开即已勾选端盒的存量 item：有值不覆盖，无值则尝试继承 */
+    }
+  })();
+  /* v96q：云游联动 —— 勾选「云游」时自动取消「在库」并把「持有」清空为 null（云游＝未入手，不应有持有数） */
+  (function(){
+    var statusBox = host.querySelector('.checksrow[data-k="状态"]');
+    if (!statusBox) return;
+    var wanderCb = statusBox.querySelector('input[data-v="云游"]');
+    var ownCb = statusBox.querySelector('input[data-v="在库"]');
+    var holdInp = host.querySelector('[data-f="持有"]');
+    function rebuildStatus(){
+      var arr=[];
+      statusBox.querySelectorAll('input[type="checkbox"]').forEach(function(cb){ if(cb.checked) arr.push(cb.getAttribute('data-v')); });
+      editing.vals['状态']=arr;
+      if (saveDraft) saveDraft();
+    }
+    if (wanderCb){
+      wanderCb.addEventListener('change', function(){
+        if (!wanderCb.checked) return;        /* 仅「勾选云游」触发；取消云游不反向处理 */
+        if (ownCb) ownCb.checked=false;        /* 自动取消在库 */
+        rebuildStatus();                       /* 从 DOM 重算状态数组（去掉在库） */
+        if (holdInp){ holdInp.value=''; editing.vals['持有']=null; if (saveDraft) saveDraft(); }
+      });
+    }
+    /* v96s：在库联动 —— 勾选「在库」时自动取消「云游」（在库与云游互斥），并把「持有」自动填充为 1（在库＝至少拥有 1 件）。
+       取消在库不反向处理；与「勾选云游→清在库+清持有」互补，二者因只响应各自「勾选」动作、且程序改 .checked 不触发 change，不会互相递归。 */
+    if (ownCb){
+      ownCb.addEventListener('change', function(){
+        if (!ownCb.checked) return;            /* 仅「勾选在库」触发；取消在库不反向处理 */
+        if (wanderCb) wanderCb.checked=false;  /* 自动取消云游 */
+        rebuildStatus();                       /* 从 DOM 重算状态数组（去掉云游） */
+        if (holdInp){ holdInp.value='1'; editing.vals['持有']=1; if (saveDraft) saveDraft(); }
+      });
+    }
+  })();
   var del=$('delBtn');
   if (del) del.onclick=function(){
     /* v58：必须先取名称再 closeSheet()——closeSheet 会把 editing 置空，
@@ -9634,7 +9831,7 @@ function fieldHTML(f, v){
        用户缩小（s<1）按比例缩小、最低 50%（Math.max(50,...) 兜底），不再强制 contain 以免无法缩小 */
     var bgSize = (vp.s && vp.s>1) ? (Math.max(100,Math.round(vp.s*100))+"% auto")
                 : (vp.s && vp.s<1) ? (Math.max(50,Math.round(vp.s*100))+"% auto") : "contain";
-    var prevStyle = v ? ("background-image:url('"+resolveImgUrl(v).replace(/[\"'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+(50+vp.x)+"% "+(50+vp.y)+"%;background-size:"+bgSize) : '';
+    var prevStyle = v ? ("background-image:url('"+resolveImgUrl(v).replace(/[\"'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+(50-vp.x)+"% "+(50-vp.y)+"%;background-size:"+bgSize) : '';
     var hasV = !!v;
     body='<div class="imgwrap" data-k="'+f.k+'" data-has-img="'+(hasV?1:0)+'">'+
       '<div class="imgprev" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
@@ -9768,7 +9965,7 @@ function fieldHTML(f, v){
       return '<label class="checkrow"><input data-f="'+f.k+'" data-v="'+esc(o)+'" type="checkbox"'+(arr.indexOf(o)>=0?' checked':'')+'>'+esc(o)+'</label>';
     }).join('')+'</div>';
   }
-  var lab = f.t==='geopick' ? '' : '<label>'+esc(f.lab||f.k)+(f.req?' *':'')+'</label>';
+  var lab = (f.t==='geopick' || f.t==='check') ? '' : '<label>'+esc(f.lab||f.k)+(f.req?' *':'')+'</label>';
   return '<div class="'+cls+'">'+lab+body+
     (f.req?'<span class="err">这一项必填</span>':'')+'</div>';
 }
@@ -10749,7 +10946,7 @@ function openItemDetail(key, id){
       '</div></div></div>'+
     '<div class="buybox"><h4>购入信息</h4><div class="buygrid">'+
       '<div><u>购入时间</u>'+ed('购入日期', date?esc(date):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
-      '<div><u>价格</u>'+ed('购入价格', price?esc('¥'+price.toFixed(2)):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
+      '<div><u>'+(row['端盒']?'端盒价':'价格')+'</u>'+ed('购入价格', price?esc('¥'+price.toFixed(2)):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
       '<div><u>存放位置</u>'+ed('存储地点', loc?esc(loc):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没指定</span>')+'</div>'+
       '<div><u>购入渠道</u>'+ed('购入渠道', ch?esc(ch):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
       '<div><u>持有</u>'+ed('持有', function(){ var h=effHold(row); return h!=null?esc(h):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>'; }())+'</div>'+
@@ -14583,7 +14780,7 @@ function showFoodRecipe(id){
    背景使用真实银河照片（CSS ::before）；canvas 只画柔光星尘
    ============================================================ */
 function renderIdeaSky(){
-  var empty = store.idea.rows.length? '' : '<div class="idea-sky-empty">夜空还空着，去点「记一条灵感」放一颗星</div>';
+  var empty = store.idea.rows.length? '' : '<div class="idea-sky-empty">夜空还空着，点右下角按钮，记下第一个灵感</div>';
   return '<div class="ideasky">'+empty+'<canvas id="ideaSky"></canvas>'+
     '<button class="r-btn idea-add" data-act="add" data-key="idea" style="position:absolute;right:24px;bottom:24px;background:linear-gradient(135deg,#e6c478,#b08850);color:#fff;border-color:transparent;box-shadow:var(--shadow-1);z-index:3">+ 记一条灵感</button>'+
     '</div>';

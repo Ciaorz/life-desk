@@ -561,6 +561,9 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .multisel button.on{background:var(--accent);border-color:var(--accent);color:#fff}
 .checkrow{display:flex;align-items:center;gap:9px;min-height:42px;font-size:13px;cursor:pointer}
 .checkrow input{width:18px;height:18px;accent-color:var(--accent)}
+/* v96p：端盒 / 隐藏款 在 1/4 宽字段里不换行、字号略缩，避免「隐藏款」被挤断 */
+.f.q .checkrow{font-size:12px;gap:6px;min-height:38px;white-space:nowrap}
+.f.q .checkrow input{width:15px;height:15px}
 .checksrow{display:flex;gap:24px;flex-wrap:wrap}
 .checksrow.statusrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .checksrow.statusrow .checkrow{margin:0;padding:1px 10px;border:1px solid #ddd4c8;border-radius:999px;min-height:0;background:#fbf8f3;transition:.15s;font-size:12.5px;line-height:1.4}
@@ -762,6 +765,12 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .statgrid.ovstat .stat u{font-size:9px;letter-spacing:.05em;margin-bottom:5px}
   .statgrid.ovstat .stat b{font-size:19px}
   .statgrid.ovstat .stat i{font-size:10px}
+  /* v96p：藏品馆概览（4 个框）手机端强制一排 4 个，不再折成 2+2；同步缩小字号与内边距 */
+  .statgrid.collstat{grid-template-columns:repeat(4,1fr);gap:6px}
+  .statgrid.collstat .stat{padding:10px 4px;border-radius:12px;text-align:center}
+  .statgrid.collstat .stat u{font-size:8.5px;letter-spacing:.02em;margin-bottom:4px}
+  .statgrid.collstat .stat b{font-size:18px}
+  .statgrid.collstat .stat i{font-size:9px}
   .row{grid-template-columns:1fr auto;row-gap:6px}
   .fitem{grid-template-columns:1fr;gap:9px}
   .fitem .r{align-items:flex-start;text-align:left}
