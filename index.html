@@ -24,7 +24,16 @@
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
 
 <!-- ===== 样式（拆分自原 HTML） ===== -->
-<link rel="stylesheet" href="style.css">
+<!-- v96r_fix：若地址带 ?_=时间戳（「抓取最新版本」在无 SW 时的兜底导航），给 style.css 加 ?v= 缓存击穿，强制拉最新样式 -->
+<script>
+(function(){
+  var m=/[?&]_=([0-9]+)/.exec(location.search||'');
+  var bust=m?('?v='+m[1]):'';
+  var l=document.createElement('link');
+  l.rel='stylesheet'; l.href='style.css'+bust;
+  document.head.appendChild(l);
+})();
+</script>
 
 <!-- ===== 致命错误可视化层（必须最前，捕获后续脚本一切错误） ===== -->
 <script>
@@ -165,7 +174,21 @@
 
 <!-- ===== 地球标记内联图标 + 主应用（three.js 已改为按需加载）===== -->
 <script defer src="marker-icons.js"></script>
-<script defer src="app.js"></script>
+<!-- v96r_fix：不再写死 app.js；若地址带 ?_=时间戳（无 SW 兜底导航），给 app.js 加 ?v= 缓存击穿强制拉最新；
+     同时清掉 ?_ 防止后续软刷新一直击穿。https 下无 ?_ 则正常走 SW 缓存。 -->
+<script>
+(function(){
+  var m=/[?&]_=([0-9]+)/.exec(location.search||'');
+  var bust=m?('?v='+m[1]):'';
+  if(m&&history.replaceState){
+    var ns=location.search.replace(/[?&]_=[0-9]+/,'').replace(/^&/,'?');
+    history.replaceState(null,'',location.pathname+ns+location.hash);
+  }
+  var s=document.createElement('script');
+  s.src='app.js'+bust; s.defer=true;
+  document.head.appendChild(s);
+})();
+</script>
 
 <!-- ===== Service Worker =====
   规则（v58 优化：开发期零缓存干扰，发布期保留离线/秒开）：

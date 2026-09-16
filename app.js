@@ -2715,26 +2715,33 @@ function addDataTools(){
     refreshFromServer();
   };
   /* v96o：手动「抓取最新版本」—— 调 index.html 暴露的 __applySwUpdate。
-     只有用户主动点才去拉新 sw.js 并换上新代码（不再后台自动刷新 / 自动重载）。 */
+     只有用户主动点才去拉新 sw.js 并换上新代码（不再后台自动刷新 / 自动重载）。
+     v96r_fix：__applySwUpdate 只在 https（注册了 SW）时存在；若没有 SW（手机经代理以 http 打开），
+     不再报「未启用 Service Worker」，而是退回「缓存击穿导航」——带 ?_=时间戳重开页面，
+     由 index.html 给 app.js / style.css 加 ?v= 强制拉最新，不依赖 SW 也能更新应用代码。 */
   if ($('swUpdate')) $('swUpdate').onclick = function(){
     var btn = this, sp = $('swUpdateHint');
-    if (!('serviceWorker' in navigator) || !window.__applySwUpdate){
-      if (sp) sp.textContent = '未启用 Service Worker（请用 https 打开本站点）';
+    if (window.__applySwUpdate){
+      btn.disabled = true;
+      if (sp) sp.textContent = '正在检查…';
+      window.__applySwUpdate().then(function(res){
+        btn.disabled = false;
+        if (!sp) return;
+        if (res === 'up-to-date') sp.textContent = '已是最新版本';
+        else if (res === 'no-sw') sp.textContent = '未注册 SW（请用 https 打开）';
+        else if (res === 'error') sp.textContent = '检查失败，稍后重试';
+        else sp.textContent = '正在更新…';
+      }).catch(function(){
+        btn.disabled = false;
+        if (sp) sp.textContent = '检查失败，稍后重试';
+      });
       return;
     }
-    btn.disabled = true;
-    if (sp) sp.textContent = '正在检查…';
-    window.__applySwUpdate().then(function(res){
-      btn.disabled = false;
-      if (!sp) return;
-      if (res === 'up-to-date') sp.textContent = '已是最新版本';
-      else if (res === 'no-sw') sp.textContent = '未注册 SW（请用 https 打开）';
-      else if (res === 'error') sp.textContent = '检查失败，稍后重试';
-      else sp.textContent = '正在更新…';
-    }).catch(function(){
-      btn.disabled = false;
-      if (sp) sp.textContent = '检查失败，稍后重试';
-    });
+    /* 无 SW 兜底：缓存击穿导航，强制拉最新 app.js / style.css */
+    if (sp) sp.textContent = '正在更新…';
+    var base = String(location.href.split('#')[0]);
+    var sep = base.indexOf('?') >= 0 ? '&' : '?';
+    window.location.href = base + sep + '_=' + Date.now();
   };
   /* v95：离线下载全部封面——逐个 fetch，SW 顺手写进 Cache Storage。
      存完之后图片走 cache-first 本地读取，浏览不联网、断网可用。 */
