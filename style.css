@@ -36,10 +36,10 @@ html[data-theme="navy"]{--accent:#344b63;--accent-soft:#dde4ea}
    museum 等卡片各自浮在背景之上。body[data-pg] 由 app.js 在 render 时按当前页写入。 */
 body{--page-bg:none}
 body[data-pg="collection"]{--page-bg:url("images/museum-bg.png")}
-body[data-pg="av"]{--page-bg:url("images/opera-bg.png")}
+body[data-pg="av"]{--page-bg:url("images/opera-bg.webp")}
 body[data-pg="study"]{--page-bg:url("images/study-bg.png")}
 body[data-pg="food"]{--page-bg:url("images/foodtwo.png")}
-body[data-pg="idea"]{--page-bg:url("images/idea-sky.png"), radial-gradient(ellipse at center,#0a1232 0%,#050816 60%,#02030a 100%)}
+body[data-pg="idea"]{--page-bg:url("images/idea-sky.webp"), radial-gradient(ellipse at center,#0a1232 0%,#050816 60%,#02030a 100%)}
 /* 灵思阁：背景银河图保持高清，不加模糊（仅灵思阁；其它主页维持轻模糊柔化） */
 body[data-pg="idea"]::before{ filter:none; }
 body::before{
@@ -874,7 +874,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
   content: "";
   position: absolute; inset: 0;
   border-radius: inherit;          /* 跟着面板圆角裁切，避免方角溢出 */
-  background: url("images/travel-bg.jpg") center / cover no-repeat;
+  background: url("images/travel-bg.webp") center / cover no-repeat;
   opacity: 0.16;                   /* 低透明度，仅作底纹 */
   z-index: -1;
   pointer-events: none;

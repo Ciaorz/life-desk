@@ -301,6 +301,44 @@ function idbClear(){
     });
   }).catch(function(){ return false; });
 }
+/* v99：分片级下载缓存 —— 真正「只下载更新的部分」。
+   整份数据 8MB+ 拆成 ~38 个分片文件 + 实体文件，每个文件在主索引里带一个内容指纹 fp。
+   这里把「每个分片相对路径 → {fp, rows, mk}」单独存一份（独立于整份合并快照），
+   加载时只重新下载 fp 变化的分片，未变的直接复用本机缓存，不再走网络。
+   注意：与 _IDB_KEY（整份合并快照，用于「秒开/离线首屏」）是两个不同的键，各管各的。 */
+var _IDB_SHARDS_KEY = 'shards_v1';
+function idbGetShards(){
+  return idbOpen().then(function(db){
+    return new Promise(function(res){
+      try {
+        var tx = db.transaction(_IDB_STORE, 'readonly');
+        var r = tx.objectStore(_IDB_STORE).get(_IDB_SHARDS_KEY);
+        r.onsuccess = function(){ var v = r.result; res((v && v.shards && typeof v.shards==='object') ? v.shards : {}); };
+        r.onerror = function(){ res({}); };
+      } catch(e){ res({}); }
+    });
+  }).catch(function(){ return {}; });
+}
+function idbSetShards(shards){
+  return idbOpen().then(function(db){
+    return new Promise(function(res){
+      try {
+        var tx = db.transaction(_IDB_STORE, 'readwrite');
+        tx.objectStore(_IDB_STORE).put({ shards: shards || {}, ts: Date.now() }, _IDB_SHARDS_KEY);
+        tx.oncomplete = function(){ res(true); };
+        tx.onerror = function(){ res(false); };
+        tx.onabort = function(){ res(false); };
+      } catch(e){ res(false); }
+    });
+  }).catch(function(){ return false; });
+}
+/* 内容指纹：与上传增量同算法（git blob sha1），只要文件内容变，fp 必变；
+   客户端从不重算 fp（直接信任索引给的 fp 作为该版本的标识），所以无需和「线上真实字节」逐字节一致，
+   只要「内容变 → fp 变」即可驱动增量判定。 */
+function contentFingerprint(rowsOrObj){
+  try { return gitBlobSha1Of(new TextEncoder().encode(JSON.stringify(rowsOrObj))); }
+  catch(e){ return ''; }
+}
 /* v97：带超时与重试的 fetch —— 根治「单个请求挂起 → Promise.all 整体卡死 → 被判读取失败」。
    浏览器 fetch 没有内置超时；github.io 在国内常出现「连上了但半天不返回也不报错」的挂起，
    原来 38 个文件并发 Promise.all，任一挂起就全部僵住，只能等 15 秒看门狗判失败。
@@ -423,6 +461,13 @@ async function localfsWrite(obj, cb){
 var SCHEMA_V2 = 2;
 var IMG_DIR = 'images';
 var THUMB_DIR = 'thumbs';      /* v95：tools/gen_thumbs.py 生成的 WebP 缩略图目录 data/thumbs */
+/* v100：高清原图存档目录 data/orig。
+   与 data/images 完全相同的目录结构与文件名，只是保留原始扩展名（.png / .jpg）和原始字节。
+   —— data/orig   = 原图（本地专用，永不上传，画质最高）
+   —— data/images = 展示图（WebP，上传给云端 / 手机端读）
+   —— data/thumbs = 缩略图（更小的 WebP）
+   三者同结构同命名，找图时一一对应。 */
+var ORIG_DIR = 'orig';
 /* 数据目录在站点下的路径前缀。
    注意区分两种路径：
    - 写文件时用的路径：相对于 FSA 数据目录，形如 images/{类目}-封面/0001.jpg
@@ -891,6 +936,28 @@ async function storageSaveV2(snapshot){
     });
   });
   idx.__main = main;
+
+  /* v101：未分片记录（__main）的封面同样要外置。
+     ------------------------------------------------------------------
+     以前 externalizeImages() 只在下面「有分片的类目」那个循环里调用，
+     于是「大类=手办/毛绒 但 小类 为空」这类记录永远走不到那一步，
+     封面一直以 data:image/...;base64 内嵌在 lifedesk.json 里。
+     实测：18 张图撑出 1.36 MB，占主索引体积的 59%，手机端每次打开都要整份下载。
+     这里按「大类」分组补一遍，外置规则与分片记录完全一致
+     （有系列 → series/{大类}-封面-NN/，无系列 → {大类}-封面/）。 */
+  var mainCoverCats = {};
+  Object.keys(main).forEach(function(mk){
+    (main[mk] || []).forEach(function(r){
+      if (!r) return;
+      var c = String(r['大类'] || r['小类'] || '').trim() || mk;
+      if (!mainCoverCats[c]) mainCoverCats[c] = [];
+      mainCoverCats[c].push(r);
+    });
+  });
+  for (var _mc in mainCoverCats){
+    if (!Object.prototype.hasOwnProperty.call(mainCoverCats, _mc)) continue;
+    await externalizeImages(_mc, mainCoverCats[_mc]);
+  }
 
   /* 写分片：内容无变化则跳过 */
   var okAll = true;
@@ -1566,26 +1633,43 @@ async function ingestImageToLib(cat, opt){
     var _cinfo = coverBaseParts(cat, opt.row);
     parts = await pickCoverFolder(_cinfo);
   }
-  var okDir = await _fsaGetDir([IMG_DIR].concat(parts), true);
+  /* v100：原图进 data/orig（原始字节、原始扩展名），展示图进 data/images（WebP）。
+     编号在 orig 上取，两边同名同号，找图时一一对应。 */
+  var okDir = await _fsaGetDir([ORIG_DIR].concat(parts), true);
   if (!okDir){ toast('创建图片文件夹失败：' + parts.join('/')); return null; }
   var seq = await scanMaxImageSeqFor(parts);
   var bn = safeFileName(opt.baseName || cat);
-  var rel = '', ok = false;
+  var stem = '', ok = false;
   var pn = safeFileName(opt.namePrefix || cat);
   for (var t = 0; t < 60; t++){
     seq++;
-    var name = pn + '-' + (bn ? bn + '-' : '') + pad4(seq) + '.' + ext;
-    var relTry = DATA_PREFIX + '/' + IMG_DIR + '/' + parts.join('/') + '/' + name;
-    var dup = await fsGetFileHandleAt(relToFsParts(relTry).join('/'), false);
+    stem = pn + '-' + (bn ? bn + '-' : '') + pad4(seq);
+    var origName = stem + '.' + ext;
+    var origTry = DATA_PREFIX + '/' + ORIG_DIR + '/' + parts.join('/') + '/' + origName;
+    var dup = await fsGetFileHandleAt(relToFsParts(origTry).join('/'), false);
     if (dup) continue;                 /* 极端情况：同名已存在，跳号 */
-    ok = await _fsaWriteBinary([IMG_DIR].concat(parts), name, bytes);
-    if (ok){ rel = relTry; break; }
+    ok = await _fsaWriteBinary([ORIG_DIR].concat(parts), origName, bytes);
+    if (ok) break;
     seq--; break;
   }
-  if (!ok || !rel) return null;
-  /* v96m：原图写盘成功 → 立刻生成缩略图，保证之后「上传」能把手机端要读的 webp 一起带上 */
+  if (!ok || !stem) return null;
+  /* 展示图：浏览器转 WebP 放进 data/images（同名、.webp）。
+     原图已完整保存在 orig，这里只决定「显示 / 上传」的那一份。 */
+  var rel = '';
+  try {
+    var webp = await makeWebpThumb(bytes, 999999, 0.92);   /* 999999 = 不缩放，只换格式 */
+    if (webp && webp.length){
+      await _fsaGetDir([IMG_DIR].concat(parts), true);
+      if (await _fsaWriteBinary([IMG_DIR].concat(parts), stem + '.webp', webp)){
+        rel = DATA_PREFIX + '/' + IMG_DIR + '/' + parts.join('/') + '/' + stem + '.webp';
+      }
+    }
+  } catch(e){}
+  /* WebP 生成失败（浏览器不支持等）→ 退回原图路径，至少不丢东西 */
+  if (!rel) rel = DATA_PREFIX + '/' + ORIG_DIR + '/' + parts.join('/') + '/' + stem + '.' + ext;
+  /* v96m：写盘成功 → 立刻生成缩略图，保证之后「上传」能把手机端要读的 webp 一起带上 */
   await writeThumbFor(rel, bytes);
-  imgIndexPut(rel, hash, src, bytes.length, ext);
+  imgIndexPut(rel, hash, src, bytes.length, (rel.slice(-5) === '.webp' ? 'webp' : ext));
   _imgUrlCache[rel] = src || URL.createObjectURL(new Blob([bytes]));
   await saveImgIndex();
   return { rel: rel, reused: false };
@@ -1750,16 +1834,29 @@ async function ensureImageIndex(){
   if (_imgNameIndex || !_fsaHandle) return;
   _imgNameIndex = {};
   try {
-    var root = await _fsaGetDir([IMG_DIR], false);
-    if (!root) return;
-    var list = await walkDirFiles(root, '', []);
-    for (var i = 0; i < list.length; i++){
-      var nm = String(list[i].rel || '').split('/').pop();
-      if (nm) _imgNameIndex[nm] = list[i].handle;
+    /* v100fix：同时索引 data/images 与 data/orig，并且额外用「去掉扩展名」当键。
+       原因：以前只索引 data/images、且只按完整文件名（含扩展名）索引，
+       所以一旦扩展名变了（.png → .webp，或原图在 orig 里是 .png 而引用是 .webp），
+       「按文件名模糊兜底」这一层就直接失效 → 封面整块空白。
+       现在同一个 stem 能命中任意扩展名 / 任意目录，兜底才真的兜得住。 */
+    var roots = [IMG_DIR, ORIG_DIR];
+    for (var d = 0; d < roots.length; d++){
+      var root = await _fsaGetDir([roots[d]], false);
+      if (!root) continue;
+      var list = await walkDirFiles(root, '', []);
+      for (var i = 0; i < list.length; i++){
+        var nm = String(list[i].rel || '').split('/').pop();
+        if (!nm) continue;
+        if (!_imgNameIndex[nm]) _imgNameIndex[nm] = list[i].handle;
+        var stem = nm.replace(/\.[^.]+$/, '');
+        if (stem && !_imgNameIndex['#' + stem]) _imgNameIndex['#' + stem] = list[i].handle;
+      }
     }
   } catch(e){ _imgNameIndex = _imgNameIndex || {}; }
 }
-/* 三层兜底解析一张封面：精确 blob → 精确 data → 按文件名模糊（用索引里的句柄直读） */
+/* 三层兜底解析一张封面：精确 blob → 精确 data → 按文件名模糊（用索引里的句柄直读）
+   v100fix：第三层同时用「完整文件名」和「去掉扩展名的 stem」去查，
+   这样扩展名不一致（.webp 引用 ↔ .png 原图）时也能兜住，不再整块空白。 */
 async function resolveOneImage(u){
   if (!u) return null;
   var name = String(u).split('/').pop();
@@ -1768,7 +1865,8 @@ async function resolveOneImage(u){
   bu = await readRelPathAsDataUrl(u);
   if (bu) return bu;
   await ensureImageIndex();
-  var h = _imgNameIndex && _imgNameIndex[name];
+  var stem = String(name).replace(/\.[^.]+$/, '');
+  var h = _imgNameIndex && (_imgNameIndex[name] || _imgNameIndex['#' + stem]);
   if (h){
     try { var f = await h.getFile(); if (f) return URL.createObjectURL(f); } catch(_){}
     try { var f2 = await h.getFile(); if (f2) return await fileToDataUrl(f2); } catch(_){}
@@ -1777,6 +1875,17 @@ async function resolveOneImage(u){
 }
 async function resolveImagesFor(rows){
   if (!rows || !rows.length) return;
+  /* v101：非 FSA 模式（手机端 / 静态托管 / 本地服务器）一律不预取封面。
+     ----------------------------------------------------------------
+     改之前这里会把每条记录的封面都 fetch 成 blob URL，实测后果：
+       ① 移动端首屏要发 2769 个缩略图请求、下 43 MB —— 而屏幕上当时只有 12 张图；
+       ② 12 个模块的 resolveImagesFor 是并发跑的，「先查 _imgUrlCache 再写」挡不住竞态，
+          同一张图会被重复拉 2 遍（1383 张唯一封面 → 2769 个请求）。
+     现在直接返回：相对路径原样交给浏览器，由 coverImg() 换成 data/thumbs/...，
+     只有真正渲染出来的卡片才发请求，滚到哪加载到哪。
+     FSA 模式（电脑端连本地目录）仍走下面的文件句柄解析 —— 本地读盘不花流量，
+     而且必须转成 blob URL 浏览器才肯显示。 */
+  if (!_fsaHandle) return;
   /* 1) 先把所有待解析的相对路径收集起来并去重（同一张图被多条记录引用时只解析一次） */
   var all = [];
   function push(u){
@@ -1807,17 +1916,9 @@ async function resolveImagesFor(rows){
     var batch = all.slice(s, s + CONC);
     await Promise.all(batch.map(async function(u){
       if (_imgUrlCache[u]) return;
-      if (_fsaHandle){
-        /* FSA 模式：用文件句柄解析（含文件名模糊兜底） */
-        var bu = await resolveOneImage(u);
-        if (bu) _imgUrlCache[u] = bu;
-      } else {
-        /* 非 FSA（local / gh / 静态托管）：用 fetch 把相对路径转成 blob，保证能显示 */
-        try {
-          var resp = await fetch(u);
-          if (resp && resp.ok){ var bl = await resp.blob(); _imgUrlCache[u] = URL.createObjectURL(bl); }
-        } catch(_){ /* 取不到就保留原相对路径，浏览器自行尝试 */ }
-      }
+      /* v101：只处理 FSA（本地目录）模式；非 FSA 已在函数开头直接返回 */
+      var bu = await resolveOneImage(u);
+      if (bu) _imgUrlCache[u] = bu;
     }));
   }
 }
@@ -1837,7 +1938,11 @@ async function fetchJSONRel(url){
 async function ghStaticLoadV2(){
   try {
     /* 用绝对地址拼目录，避免页面无尾斜杠 / 基址异常时相对路径解析错位（会 404 → 回退到 api.github.com 触发 422） */
-    var _base = String(location.href.split('#')[0]);
+    /* v99fix：先把查询串和「末尾的文件名」去掉。以前直接拿 location.href 拼，
+       如果用户是打开 .../index.html（而不是 .../），基址会变成 .../index.html/，
+       于是 data/ 被解析成 .../index.html/data/ → 全部 404 → 页面显示 0 件。 */
+    var _base = String(location.href.split('#')[0]).split('?')[0];
+    if (/\.[a-z0-9]+$/i.test(_base)) _base = _base.replace(/[^/]*$/, '');
     if (_base.charAt(_base.length - 1) !== '/') _base += '/';
     var _rel = String(GH.path || 'data/lifedesk.json').replace(/[\\/][^\\/]*$/, '') || 'data';
     var dir = new URL(_rel + '/', _base).href;   /* 例：https://ciaorz.github.io/life-desk/data/ */
@@ -2086,6 +2191,9 @@ async function collectPushFiles(){
   var wantOriginals = false;
   try { wantOriginals = localStorage.getItem('pushOriginals') === '1'; } catch(e){}
   if (wantOriginals) await pushDir(IMG_DIR);
+  /* v100：data/orig（高清原图存档）**永远不上传** —— 它是本地专用的大文件，
+     云端只需要 data/images（WebP 展示图）和 data/thumbs（缩略图）。
+     这里不做任何 pushDir(ORIG_DIR) 调用，就是刻意的。 */
   if (_ghIncrSkip) console.log('[增量上传] 跳过未变更文件 ' + _ghIncrSkip + ' 个，仅上传新增/改动');
   return files;
 }
@@ -2470,6 +2578,28 @@ function queueLocalSave(){
   }, 400);
 }
 
+/* v100fix：给已连接的本地数据目录做一次「体检」。
+   背景：FSA 目录句柄存在 IndexedDB 里、跨刷新保留。用户换过项目位置后，
+   旧句柄会继续指向旧的 data 文件夹；而两个文件夹往往同名（都叫 data），
+   界面上完全看不出区别 —— 表现就是「所有文件型封面全白、base64 封面却正常」。
+   这里连上后数一下目录里到底有多少图片，数量为 0 就明确报警。 */
+async function fsaDirHealth(){
+  var out = { imgs: 0, origs: 0, thumbs: 0, hasIndex: false };
+  if (!_fsaHandle) return out;
+  try { out.hasIndex = !!(await fsGetFileHandleAt('lifedesk.json', false)); } catch(e){}
+  async function countDir(name){
+    try {
+      var d = await _fsaGetDir([name], false);
+      if (!d) return 0;
+      var list = await walkDirFiles(d, '', []);
+      return list.length;
+    } catch(e){ return 0; }
+  }
+  out.imgs = await countDir(IMG_DIR);
+  out.origs = await countDir(ORIG_DIR);
+  out.thumbs = await countDir(THUMB_DIR);
+  return out;
+}
 /* 选择/更换数据目录并连接：连接后若目录为空则把当前内存数据写入，避免切换丢数据 */
 var _pickingDir = false;   /* v75fix perf：防连点——重复调用会让目录选择框唤不出来 */
 async function pickFsaDirAndConnect(){
@@ -2502,7 +2632,20 @@ async function pickFsaDirAndConnect(){
   refreshFsaButtons();
   _pickingDir = false;    /* 释放防连点锁 */
   loadAll();
-  toast('已连接本地数据目录：' + h.name + (isEmpty ? '（已把当前数据写入）' : '（已读取目录内数据）'));
+  /* v100fix：连上后立刻体检。图片数为 0 说明多半选错了目录（比如指向了旧的 data 文件夹），
+     此时所有「文件型封面」都会是空白，但界面看上去一切正常 —— 必须明确提醒。 */
+  try {
+    var _hl = await fsaDirHealth();
+    if (_hl.imgs === 0 && _hl.origs === 0){
+      toast('⚠️ 这个目录里一张图片都没有，很可能选错了文件夹', '重新选择', function(){ pickFsaDirAndConnect(); });
+      console.warn('[数据目录体检] 疑似选错目录，目录内容统计：', _hl);
+    } else {
+      toast('已连接数据目录：' + h.name + ' · 图片 ' + (_hl.imgs + _hl.origs) + ' 张'
+            + (isEmpty ? '（已把当前数据写入）' : '（已读取目录内数据）'));
+    }
+  } catch(e){
+    toast('已连接本地数据目录：' + h.name + (isEmpty ? '（已把当前数据写入）' : '（已读取目录内数据）'));
+  }
 }
 
 /* 刷新「选择数据目录」按钮的文案/可见性，以及「下载云端到本地」按钮的显示 */
@@ -2661,8 +2804,18 @@ function addDataTools(){
   updateToTop();
   window.addEventListener('scroll', updateToTop, {passive:true});
   window.addEventListener('resize', updateToTop);
-  box.querySelector('[data-act="fsa"]').onclick = function(){
-    if (MODE === 'localfile' && _fsaHandle){ toast('已连接数据目录：' + _fsaHandle.name); return; }
+  box.querySelector('[data-act="fsa"]').onclick = async function(){
+    if (MODE === 'localfile' && _fsaHandle){
+      /* v100fix：已连接时点一下 = 体检并报告目录里到底有多少图。
+         两个同名 data 文件夹肉眼分不出，只能靠数量辨认。 */
+      var _h2 = await fsaDirHealth();
+      if (_h2.imgs === 0 && _h2.origs === 0){
+        toast('⚠️ 当前目录里没有图片，很可能选错了文件夹', '重新选择', function(){ pickFsaDirAndConnect(); });
+      } else {
+        toast('当前目录：' + _fsaHandle.name + ' · 展示图 ' + _h2.imgs + ' · 原图 ' + _h2.origs + ' · 缩略图 ' + _h2.thumbs);
+      }
+      return;
+    }
     reconnectFsaDir();
   };
   box.querySelector('[data-act="export"]').onclick = exportData;
@@ -3288,34 +3441,34 @@ var CAT_ICON = {'手办':'办','毛绒':'绒','居陈':'陈','周边':'周','赏
 
 /* v17.0：影音厅两个子项目改回「老版本」的胶片 / 留声机封面（本地 PNG），歌剧院留给展厅背景与角落装饰 */
 var CAT_BG = {
-  '手办':   'images/figure-cover.png',                                                             /* 博物馆左侧最近（动漫手办图，PNG 带透明背景） */
-  '毛绒':   'images/cat_fluffy.png',  /* 博物馆右侧 */
-  '居陈':   'images/cat_card.png',  /* 博物馆右侧（v92：原卡牌大类改名居陈，沿用原封面图） */
-  '周边':   'images/cat_peripheral.png',  /* 博物馆左侧 */
-  '电影':   'images/film-cover.png',                                                               /* 影音厅左侧：老版胶片图 */
-  '留声机': 'images/gramophone-cover.png',                                                          /* 影音厅右侧：老版留声机图 */
+  '手办':   'images/figure-cover.webp',                                                             /* 博物馆左侧最近（动漫手办图，PNG 带透明背景） */
+  '毛绒':   'images/cat_fluffy.webp',  /* 博物馆右侧 */
+  '居陈':   'images/cat_card.webp',  /* 博物馆右侧（v92：原卡牌大类改名居陈，沿用原封面图） */
+  '周边':   'images/cat_peripheral.webp',  /* 博物馆左侧 */
+  '电影':   'images/film-cover.webp',                                                               /* 影音厅左侧：老版胶片图 */
+  '留声机': 'images/gramophone-cover.webp',                                                          /* 影音厅右侧：老版留声机图 */
   /* v75fix：大类定名 赏戏/留音，封面图沿用原来的两张 */
-  '戏':     'images/film-cover.png',
-  '音':     'images/gramophone-cover.png',
-  '赏戏':   'images/film-cover.png',
-  '留音':   'images/gramophone-cover.png',
-  '杯盏':   'images/cat_cup.png',  /* 博物馆左侧 */
-  '着物':   'images/cat_clothing.png'   /* 博物馆右侧（衣服/帽子/背包/鞋子） */
+  '戏':     'images/film-cover.webp',
+  '音':     'images/gramophone-cover.webp',
+  '赏戏':   'images/film-cover.webp',
+  '留音':   'images/gramophone-cover.webp',
+  '杯盏':   'images/cat_cup.webp',  /* 博物馆左侧 */
+  '着物':   'images/cat_clothing.webp'   /* 博物馆右侧（衣服/帽子/背包/鞋子） */
 };
 /* CAT_DECOR 保留为透明 PNG 装饰图备用（备用背景，与 CAT_BG 等值） */
 var CAT_DECOR = {
-  '手办':   'images/figure-cover.png',
-  '毛绒':   'images/cat_fluffy.png',
-  '居陈':   'images/cat_card.png',   /* v92：原卡牌大类改名居陈 */
-  '周边':   'images/cat_peripheral.png',
-  '电影':   'images/film-cover.png',                                                               /* v17.0：换回老版胶片图 */
-  '留声机': 'images/gramophone-cover.png',                                                          /* v17.0：换回老版留声机图 */
-  '戏':     'images/film-cover.png',       /* v75fix：大类改名后补上 */
-  '音':     'images/gramophone-cover.png',
-  '赏戏':   'images/film-cover.png',
-  '留音':   'images/gramophone-cover.png',
-  '杯盏':   'images/cat_cup.png',
-  '着物':   'images/cat_clothing.png'
+  '手办':   'images/figure-cover.webp',
+  '毛绒':   'images/cat_fluffy.webp',
+  '居陈':   'images/cat_card.webp',   /* v92：原卡牌大类改名居陈 */
+  '周边':   'images/cat_peripheral.webp',
+  '电影':   'images/film-cover.webp',                                                               /* v17.0：换回老版胶片图 */
+  '留声机': 'images/gramophone-cover.webp',                                                          /* v17.0：换回老版留声机图 */
+  '戏':     'images/film-cover.webp',       /* v75fix：大类改名后补上 */
+  '音':     'images/gramophone-cover.webp',
+  '赏戏':   'images/film-cover.webp',
+  '留音':   'images/gramophone-cover.webp',
+  '杯盏':   'images/cat_cup.webp',
+  '着物':   'images/cat_clothing.webp'
 };
 
 var MODS = {
@@ -4875,7 +5028,8 @@ function stripHTML(key){
   if (s.status==='loading') return '<span class="dot load"></span>正在从线上读取…';
   if (s.status==='error') return '<span class="dot err"></span>读取失败，数据没能拉回来 '+
     '<button class="btn link" type="button" data-act="reload" data-key="'+key+'">重试</button>';
-  return '<span class="dot ok"></span>已同步 '+s.rows.length+' 条 · 数据在资料库里，换设备也在';
+  /* 加载成功后不再显示「已同步 X 条 · 数据在资料库里，换设备也在」这类提示（用户要求去掉） */
+  return '';
 }
 function emptyHTML(title, tip){
   return '<div class="empty"><b>'+esc(title)+'</b><span>'+esc(tip)+'</span></div>';
@@ -5029,11 +5183,11 @@ function statusPill(v){
 /* 各模块封面 CDN + v13 各分类封面（侧栏/主页/藏品筛选共用；缺图时回退汉字 icon） */
 var MOD_BG = {
   collection: 'images/museum-bg.png',                                                          /* v16.0：替换为无水印博物馆背景图 */
-  travel:     'images/earth-cover.png',                                                        /* v15.18：基于 16K 颜色 + 4K 高程的地球封面 */
-  av:         'images/opera-bg.png',                                                          /* v16.0：新模块「影音厅」用歌剧院背景 */
+  travel:     'images/earth-cover.webp',                                                        /* v15.18：基于 16K 颜色 + 4K 高程的地球封面 */
+  av:         'images/opera-bg.webp',                                                          /* v16.0：新模块「影音厅」用歌剧院背景 */
   study:      'images/study-bg.png',                                                          /* v15.19/v16.0：古典文渊斋（无水印） */
   food:       'images/mod_food.png',
-  idea:       'images/idea-sky.png'                                                           /* v15.18：本地银河照片 */
+  idea:       'images/idea-sky.webp'                                                           /* v15.18：本地银河照片 */
 };
 /* v96p：总投入计算 —— 端盒 item 不再逐个相加：某系列一旦有端盒价（盒总价，存于每个端盒 item 的购入价格字段、同系列同值），
    只把该端盒价计入一次，代表拥有端盒状态的所有 items 的总价；非端盒 item 仍逐条相加。 */
@@ -7845,18 +7999,24 @@ document.addEventListener('click', function(ev){
     toast('已清除图片');
     return;
   }
+  /* v100：批量补封面 —— 书籍 / 杂志 通用。
+     手机端扫码只记 ISBN 与书名，封面保持外链 URL；回到电脑端点这个按钮，
+     一次性把外链封面抓下来存进本地图库（data/orig + data/images）。 */
   if (act==='dlallcovers'){
-    var _bk = (store.collection && store.collection.rows || []).filter(function(r){ return r['大类']==='书籍'; });
-    if (!_bk.length){ toast('书架里还没有书'); return; }
-    var _n = node.getAttribute('data-n');
-    askConfirm('把书架里所有还是「网络链接」的封面下载到 data/images？\n' +
+    var _cat = node.getAttribute('data-cat') || '书籍';
+    var _bk = (store.collection && store.collection.rows || []).filter(function(r){ return r['大类']===_cat; });
+    if (!_bk.length){ toast('还没有「'+_cat+'」条目'); return; }
+    var _n = parseInt(node.getAttribute('data-n') || '0', 10) || 0;
+    if (!_n){ toast('「'+_cat+'」里的封面都已经存到本地了'); return; }
+    if (!_fsaHandle){ toast('请先连接本地数据目录，封面才能存下来', '选择目录', function(){ pickFsaDirAndConnect(); }); return; }
+    askConfirm('把「'+_cat+'」里所有还是「网络链接」的封面下载到本地？\n' +
       '已经存过的不会重复下载；下载失败的（对方防盗链）需要手动「上传」。\n' +
-      '共 ' + (_n || _bk.length) + ' 本书参与检查。', function(){
+      '共 ' + _n + ' 条待补。', function(){
         toast('开始检查并下载封面…');
         downloadAllRemoteCovers('collection', _bk, null, function(){
           loadAll();
         });
-      }, { yesLabel:'开始下载', yesColor:'#2f8f5b', title:'封面存入本地图库' });
+      }, { yesLabel:'开始下载', yesColor:'#2f8f5b', title:'补封面 · 存入本地图库' });
     return;
   }
   if (act==='go'){ ui.view=key; if(key==='collection'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; ui.collection.seriesId=null; ui.collection.seriesStatus='全部'; ui.collection.seriesSort='no'; } if(key==='av'){ ui.av.classic=false; ui.av.cat=''; ui.av.sub=''; } if(key==='study'){ ui.study.classic=false; ui.study.ccat=''; } window.scrollTo(0,0); render(); return; }
@@ -9030,7 +9190,8 @@ function pkTypeSrc(t, sh){
   var en = PK_TYPE_EN[t];
   if (!en) return '';
   var sub = (sh || pkShape()) === 'circle' ? 'swsh' : 'sv';
-  return 'data/images/types/'+sub+'/'+en+'.png';
+  /* v100fix：图片已全量转 WebP，这里必须跟着改后缀，否则 18 个属性图标全部 404 */
+  return 'data/images/types/'+sub+'/'+en+'.webp';
 }
 /* 圆形 / 方形：偏好存 localStorage，默认圆形（swsh 圆形图标） */
 function pkShape(){
@@ -9092,6 +9253,9 @@ function pkIsPkmIp(r){ return !!r && r['IP']===PK_IP; }
    v96q：不再限定宝可梦 IP —— 所有藏品 item 卡都展示「在库 / 想收」快速按钮。
    在库未收态动作词：宝可梦 IP 用「收服」，其它 IP 用「招募」；点过之后统一为状态「在库」。 */
 function pkQuickBtnsHTML(r){
+  /* v99：已经「在库」的 item 卡片不再显示「想收」按钮 —— 东西都到手了，不需要再标记想要。
+     只影响卡片上的快捷按钮，编辑表单里的「状态」多选照旧可以手动改。 */
+  var _inLib = hasStatus(r, '在库');
   function btn(s){
     var on = hasStatus(r, s);
     var cls = s==='在库' ? 'pkq-lib' : 'pkq-wish';
@@ -9105,7 +9269,7 @@ function pkQuickBtnsHTML(r){
       ' data-act="pkquick" data-s="'+esc(s)+'" data-id="'+esc(r._id)+'"'+
       ' title="'+esc(tipVerb)+'">'+esc(actWord)+'</button>';
   }
-  return '<div class="pkquick">'+btn('在库')+btn('想收')+'</div>';
+  return '<div class="pkquick">'+btn('在库')+(_inLib ? '' : btn('想收'))+'</div>';
 }
 /* 18 个属性图标的两种版本走一遍 resolveImagesFor，保证 FSA / 静态模式都能显示 */
 function pkIconProbeRows(){
@@ -9113,7 +9277,7 @@ function pkIconProbeRows(){
   PK_TYPES.forEach(function(t){
     ['sv','swsh'].forEach(function(sub){
       var en = PK_TYPE_EN[t];
-      rows.push({封面:[{imageUrl:'data/images/types/'+sub+'/'+en+'.png'}]});
+      rows.push({封面:[{imageUrl:'data/images/types/'+sub+'/'+en+'.webp'}]});
     });
   });
   return rows;
@@ -13651,14 +13815,24 @@ function renderStudyRoom(){
   var unit = tab === '杂志' ? '册' : '本';
   var addAct = tab==='学习计划' ? 'add' : (tab==='书籍'?'bookadd':'magadd');
   var addKey = tab==='学习计划' ? 'study' : '';
-  /* v67：书籍页顶部加「标签卡 + 小分类 chips」，以及「外链封面一键存本地」入口 */
+  /* v67：书籍页顶部加「标签卡 + 小分类 chips」，以及「外链封面一键存本地」入口
+     v100：入口扩展到「杂志」页 —— 手机端扫码只记 ISBN/刊名，封面留成外链 URL，
+           回到电脑端在对应页面点这个按钮，一次性把外链封面抓下来存进本地图库。
+           （这就是「方案 A」：手机端不传图，封面由电脑端批量补。） */
   var tagBar = '';
   var dlBtn = '';
   if (tab === '书籍'){
     tagBar = bookTagBarHTML(legacyRowsAll) + bookSubBarHTML(String(ui.study.bookTag || ''));
-    var remoteN = bookRemoteCoverCount(legacyRowsAll.filter(function(r){ return r['大类']==='书籍'; }));
+  }
+  if (tab === '书籍' || tab === '杂志'){
+    var _dlRows = legacyRowsAll.filter(function(r){ return r['大类'] === tab; });
+    var remoteN = bookRemoteCoverCount(_dlRows);
     if (remoteN){
-      dlBtn = '<button class="r-btn sm" data-act="dlallcovers" data-n="'+remoteN+'" title="把还是网络链接的封面下载到 data/images">⬇ 存 '+remoteN+' 张封面</button>';
+      dlBtn = '<button class="r-btn sm" data-act="dlallcovers" data-n="'+remoteN+'" data-cat="'+esc(tab)+'"'+
+        ' title="把「'+esc(tab)+'」里还是网络链接的封面下载到 data/images">⬇ 补 '+remoteN+' 张封面</button>';
+    } else if (_dlRows.length){
+      dlBtn = '<button class="r-btn sm" data-act="dlallcovers" data-n="0" data-cat="'+esc(tab)+'"'+
+        ' title="检查「'+esc(tab)+'」里有没有还是网络链接的封面">⬇ 补封面</button>';
     }
   }
   shelfHtml = tab === 'home' ? '' :
