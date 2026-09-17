@@ -4,6 +4,36 @@
   "module": "collection",
   "rows": [
     {
+      "_id": "l_mtmoq465conxe",
+      "名称": "妙蛙种子",
+      "大类": "周边",
+      "小类": "徽章",
+      "IP": "宝可梦",
+      "系列": "30周年151金属徽章",
+      "编号": "001",
+      "状态": [
+        "在库"
+      ],
+      "存储地点": null,
+      "购入日期": "2026-08-25",
+      "购入价格": 22,
+      "购入渠道": null,
+      "封面": [
+        {
+          "imageUrl": "data/images/徽章-封面/徽章-妙蛙种子-0001.webp",
+          "viewport": {
+            "s": 0.9,
+            "x": 0,
+            "y": 0
+          }
+        }
+      ],
+      "短评": null,
+      "持有": 0,
+      "端盒": false,
+      "隐藏款": false
+    },
+    {
       "_id": "l_mtpvgzaa93k2y",
       "名称": "列缺",
       "大类": "周边",
@@ -42,31 +72,6 @@
       "短评": null
     },
     {
-      "_id": "l_mtmoq465conxe",
-      "名称": "妙蛙种子",
-      "大类": "周边",
-      "小类": "徽章",
-      "IP": "宝可梦",
-      "系列": "30周年151金属徽章",
-      "编号": "001",
-      "状态": "在库",
-      "存储地点": null,
-      "购入日期": "2026-08-25",
-      "购入价格": 22,
-      "购入渠道": null,
-      "封面": [
-        {
-          "imageUrl": "data/images/徽章-封面/徽章-妙蛙种子-0001.jpg",
-          "viewport": {
-            "s": 1,
-            "x": 0,
-            "y": 0
-          }
-        }
-      ],
-      "短评": null
-    },
-    {
       "_id": "l_mtniwbi3jm5o2",
       "名称": "比比鸟",
       "大类": "周边",
@@ -81,7 +86,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-比比鸟-0018.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-比比鸟-0018.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -106,7 +111,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-波波-0017.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-波波-0017.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -131,7 +136,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-大针蜂-0016.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-大针蜂-0016.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -156,7 +161,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-铁壳蛹-0015.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-铁壳蛹-0015.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -181,7 +186,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-独角虫-0014.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-独角虫-0014.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -206,7 +211,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-卡咪龟-0009.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-卡咪龟-0009.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -231,7 +236,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-水箭龟-0010.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-水箭龟-0010.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -256,7 +261,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-巴大蝶-0013.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-巴大蝶-0013.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -281,7 +286,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-铁甲蛹-0012.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-铁甲蛹-0012.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -306,7 +311,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-绿毛虫-0011.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-绿毛虫-0011.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -331,7 +336,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-杰尼龟-0008.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-杰尼龟-0008.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -356,7 +361,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-小火龙-0005.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-小火龙-0005.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -381,7 +386,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-火恐龙-0006.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-火恐龙-0006.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -406,7 +411,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-喷火龙-0007.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-喷火龙-0007.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -431,7 +436,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-妙蛙草-0004.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-妙蛙草-0004.webp",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -456,7 +461,7 @@
       "购入渠道": null,
       "封面": [
         {
-          "imageUrl": "data/images/徽章-封面/徽章-妙蛙花-0003.jpg",
+          "imageUrl": "data/images/徽章-封面/徽章-妙蛙花-0003.webp",
           "viewport": {
             "s": 1,
             "x": 0,
