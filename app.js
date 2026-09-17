@@ -2060,7 +2060,8 @@ async function collectPushFiles(){
   /* 把某个目录整体纳入上传（增量：远端已有且大小一致则跳过） */
   async function pushDir(dirName){
     try {
-      var d = await _fsaGetDir([dirName], false);
+      /* v98：支持多级路径（如 images/series）—— FSA 的 getDirectoryHandle 不接受含斜杠的名字，要逐级取 */
+      var d = await _fsaGetDir(String(dirName).split('/'), false);
       if (!d) return;
       var list = await walkDirFiles(d, '', []);
       for (var j = 0; j < list.length; j++){
@@ -2075,6 +2076,11 @@ async function collectPushFiles(){
   }
   /* v95：缩略图必须上传——手机端只读 data/thumbs，这是唯一会被同步的图片目录 */
   await pushDir(THUMB_DIR);
+  /* v98：实体（IP / 系列）封面必须上传 —— 系列卡 / IP 卡的唯一封面来源就是这里。
+     之前只传缩略图、不传实体封面原图，导致在线版和手机端都看不到系列封面
+     （items 原图 130MB+ 仍然默认不传，体积太大；实体封面数量少且是刚需）。 */
+  await pushDir(IMG_DIR + '/ip');
+  await pushDir(IMG_DIR + '/series');
   /* 原图默认不再上传（132MB，手机端用不到，传了也是白占仓库和流量）。
      需要保留桌面网页版看图时，控制台执行 localStorage.setItem('pushOriginals','1') 即可恢复。 */
   var wantOriginals = false;
@@ -5267,10 +5273,13 @@ function renderCatMode(){
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>藏品</h2>'+
     '<div class="hint">点开任意一件，看它的购入信息和存放位置</div></div>'+modeSeg()+'</div>'+
-    /* v75fix：用块级 flex 铺满整行（.searchwrap 默认 inline-flex 会收缩到内容宽，× 会被挤到可视区外） */
-    '<div class="searchwrap" style="margin-bottom:12px;display:flex"><input class="search" autocomplete="off" id="q_collection" placeholder="搜名称 / IP / 系列 / 地点 / 短评" value="'+esc(f.q)+'"></div>'+
-    '<div class="chips">'+
-    '<button class="chip'+(f.cat?'':' on')+'" type="button" data-act="f" data-k="cat" data-v="">全部</button>'+
+    /* v98：手机端布局 —— 「全部」与搜索栏同一行（全部在左、搜索框占满剩余宽度），
+       省下一整行；六大类 chip 独占一行，用 6 等分网格强制不折行并变窄。 */
+    '<div class="catbar">'+
+      '<button class="chip'+(f.cat?'':' on')+'" type="button" data-act="f" data-k="cat" data-v="">全部</button>'+
+      '<div class="searchwrap" style="flex:1;min-width:0;margin-bottom:0;display:flex"><input class="search" autocomplete="off" id="q_collection" placeholder="搜名称 / IP / 系列 / 地点 / 短评" value="'+esc(f.q)+'"></div>'+
+    '</div>'+
+    '<div class="chips cat6">'+
     CATS.map(function(t){
       /* 六大类 chip：只做筛选入口，不显示数量 */
       return '<button class="chip'+(f.cat===t?' on':'')+'" type="button" data-act="f" data-k="cat" data-v="'+t+'">'+
