@@ -1,0 +1,54 @@
+# ===== 敏感信息：绝对不要提交 =====
+token.txt
+*.token
+*.secret
+.env
+
+# ===== 本地数据目录 =====
+# data/ 里既有数据文件也有备份，按需手动推送即可；
+# 备份文件通常不必进仓库：
+data/lifedesk.backup.json
+data/*.backup.json
+
+# ===== 应用 / 数据 的本地备份副本（不进仓库）=====
+*.bak*
+data/*bak*
+
+# ===== v100：高清原图存档（本地专用，永远不进仓库 / 不上传）=====
+# data/orig 与 data/images 同结构同命名，只是保留原始扩展名与原始字节。
+# 云端和手机端只读 data/images（WebP）与 data/thumbs（缩略图）。
+data/orig/
+
+# ===== v101：本地归档目录（不进仓库）=====
+# data/_bak_*        历史数据备份与旧副本归档
+# data/_legacy_*     v1 单文件时代的顶层数据键归档（App 不读取）
+# images/_orig/      装饰图转 WebP 之前的原始 PNG/JPG
+data/_bak_*/
+data/_legacy_*.json
+images/_orig/
+
+# ===== 已废弃：早期本地服务器方案（已被 File System Access API 取代）=====
+serve.js
+
+# ===== 临时 / 调试脚本 =====
+_*.js
+_*.html
+
+# ===== v102：工作台自身的杂项，不进仓库 =====
+# debug.log    Chromium/Edge 的崩溃日志，每次调试都会重新生成
+# yun_probe.js 一次性网页结构探测脚本，与本站点无关
+# 推送清单.md   由本机与线上逐文件比对生成的临时清单
+debug.log
+*.log
+yun_probe.js
+推送清单.md
+云同步部署手册.md
+
+# ===== v102：WorkBuddy 工作目录（含会话记忆，属本机私有）=====
+.workbuddy/
+.workbuddy-ai/
+
+# ===== 编辑器与系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini

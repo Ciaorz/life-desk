@@ -17,7 +17,7 @@
 
 /* v96m：每次部署请 bump 这个版本号 —— 浏览器只有发现 sw.js 字节变了才会安装新 SW，
    版本号不变 → 手机上永远拿不到新的 app.js / style.css（这就是"PWA 不更新"的根因）。 */
-const CACHE = 'lifedesk-v98-2026-09-17';
+const CACHE = 'lifedesk-v100-2026-09-17';
 
 /* v96m：图片单独放一个「不随版本清理」的缓存桶。
    以前图片和代码共用 CACHE，每次部署 bump 版本号，activate 会把图片一起删光，

@@ -11,7 +11,9 @@
       "来源": null,
       "食材": null,
       "菜谱": null,
-      "_module": "recipe"
+      "_module": "recipe",
+      "_upd": 1789699895277,
+      "_rev": 1
     }
   ]
 }

@@ -17,7 +17,7 @@
       "标签分类": null,
       "照片": [
         {
-          "imageUrl": "https://img3.doubanio.com/view/subject/l/public/s34902277.jpg",
+          "imageUrl": "data/images/工具语言-封面/工具语言-中国古代文化常识辞典-0001.webp",
           "viewport": {
             "s": 1.1,
             "x": 0,
@@ -25,7 +25,9 @@
           }
         }
       ],
-      "大类": "书籍"
+      "大类": "书籍",
+      "_upd": 1789699895277,
+      "_rev": 1
     }
   ]
 }

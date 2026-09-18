@@ -4754,6 +4754,14 @@ function localUpsert(key, id, vals){
     if (vals['纬度']!=null && vals['纬度']!=='') row['纬度']=num(vals['纬度'])||0;
     if (vals['经度']!=null && vals['经度']!=='') row['经度']=num(vals['经度'])||0;
   }
+  /* v102：打同步时间戳。
+     _upd = 最后修改时间（毫秒），_rev = 改过几次。
+     增量同步（只推/拉比上次同步新的记录）和冲突判断全靠这两个字段。
+     历史数据由 tools/add_timestamps.py 补过一个统一的基线值，之后每次保存都会刷新。
+     注意：这里放在最后，确保所有分支（含早退）都不会漏掉打戳。 */
+  row._upd = Date.now();
+  row._rev = (Number(prev._rev) || 0) + 1;
+
   var rows = store[key].rows.filter(function(r){ return String(r._id)!==String(id); });
   rows.unshift(row);
   store[key].rows = rows;
@@ -4772,6 +4780,9 @@ function patchRow(key, id, patch){
     if (String(r._id)!==String(id)) return r;
     var nr=Object.assign({}, r);
     Object.keys(patch).forEach(function(k){ nr[k]=patch[k]; });
+    /* v102：局部改字段也要刷新同步时间戳，否则云端拉不到这次改动 */
+    nr._upd = Date.now();
+    nr._rev = (Number(r._rev) || 0) + 1;
     changed=true;
     return nr;
   });
@@ -4948,6 +4959,16 @@ function updateRow(key, id, vals, after){
 function deleteRow(key, id, name, after){
   if (MODE !== 'db'){
     var sid=String(id);
+    /* v102：删除也要留「墓碑」。否则手机端离线缓存里那条还在，
+       下次手机推上来会把它复活。同步时按墓碑把云端对应记录软删掉。 */
+    try{
+      var _ts = JSON.parse(localStorage.getItem('lifedesk_tombstones') || '[]');
+      if (!Array.isArray(_ts)) _ts = [];
+      _ts = _ts.filter(function(t){ return String(t.id)!==sid; });
+      _ts.push({ id:sid, key:key, at:Date.now() });
+      if (_ts.length > 2000) _ts = _ts.slice(-2000);
+      localStorage.setItem('lifedesk_tombstones', JSON.stringify(_ts));
+    }catch(e){}
     store[key].rows = store[key].rows.filter(function(r){ return String(r._id)!==sid; });
     store[key].status = store[key].rows.length ? 'ok' : 'empty';
     if (MODE === 'gh'){ queueGhSave(); localCacheSet(); }
@@ -11262,6 +11283,9 @@ function patchRowFields(key, id, patch){
     var v=patch[k];
     row[k] = (v===''||v==null) ? null : v;
   });
+  /* v102：这条路径是就地改 row，也要打同步时间戳，否则云端拉不到 */
+  row._upd = Date.now();
+  row._rev = (Number(row._rev) || 0) + 1;
   if (MODE==='gh'){ queueGhSave(); localCacheSet(); }
   else if (MODE==='localfile'){ queueLocalSave(); }
   else if (MODE==='local'){ lsSet(key, store[key].rows); localCacheSet(); }
