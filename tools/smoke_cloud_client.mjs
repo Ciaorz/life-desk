@@ -38,11 +38,27 @@ if (i < 0 || j < 0) {
 let block = src.slice(i, j);
 
 /* cloudAsk 会建 DOM，Node 里没有 document —— 把调用点换成桩。
-   只换调用，不换定义，所以抠出来的代码其余部分一字未动。 */
+   只换调用，不换定义，所以抠出来的代码其余部分一字未动。
+   v103：上传 1 处 + 下载 1 处 = 2 处。 */
 const ASK_CALLS = (block.match(/await cloudAsk\(/g) || []).length;
-if (ASK_CALLS !== 1) {
-  console.error('!! 预期只有 1 处 await cloudAsk(，实际 ' + ASK_CALLS + ' 处。');
+if (ASK_CALLS !== 2) {
+  console.error('!! 预期 2 处 await cloudAsk(（上传 1 + 下载 1），实际 ' + ASK_CALLS + ' 处。');
   console.error('   如果确实改过，请同步更新本测试。');
+  process.exit(1);
+}
+/* 光数个数看不出「确认框被挪进了别的函数」——位置才是重点。
+   下载会改本机数据，所以它【必须】有确认框；上传也必须有。 */
+function askInside(fnName) {
+  const a = block.indexOf('async function ' + fnName + '(');
+  if (a < 0) return false;
+  const b = block.indexOf('\nasync function ', a + 20);
+  const seg = block.slice(a, b < 0 ? block.length : b);
+  return /await cloudAsk\(/.test(seg);
+}
+const askUp = askInside('cloudUpload'), askDl = askInside('cloudPull');
+if (!askUp || !askDl) {
+  console.error('!! 确认框位置不对：cloudUpload=' + askUp + ' / cloudPull=' + askDl);
+  console.error('   上传和下载都必须先弹确认框再动手。');
   process.exit(1);
 }
 block = block.replace(/await cloudAsk\(/g, 'await __ask(');
@@ -183,6 +199,32 @@ await check('force=true 忽略水位线，全量 + 全部墓碑', async () => {
   const c = s.api.cloudCollect(true);
   assert(c.pending.length === 4, '全量应收 4 条，实际 ' + c.pending.length);
   assert(c.dels.length === 1, '应收 1 条删除，实际 ' + c.dels.length);
+});
+/* 2026-09-18 实测漏出去的：_file 是 ip/series 的目录分片位置标记，
+   只在 localfile（FSA）模式下由 loadEntityModule() 挂到内存行上，
+   写盘前 saveEntityModule() 会删掉它。但上传是直接读内存行的，
+   于是 D1 里留了 8 条（2 ip + 6 series）带 _file。这里堵住源头。 */
+await check('运行期字段 _file 不进云端（上传时剥掉）', async () => {
+  const ipRow = { _id: 'ip1', IP名称: '宝可梦', _file: 'ip/宝可梦-data.json', _upd: 1000, _rev: 1 };
+  const s = makeSandbox({ ls: CFG, store: { ip: [ipRow], collection: rows(1, 0, 1000) } });
+  const c = s.api.cloudCollect(false);
+  const p = c.pending.filter(x => x.id === 'ip1')[0];
+  assert(p, 'ip1 应该被收集');
+  assert(!('_file' in p.data), '_file 应被剥掉，实际 data=' + JSON.stringify(p.data));
+  assert(p.data.IP名称 === '宝可梦', '其它字段要原样保留');
+  assert(p.data._id === 'ip1' && p.data._upd === 1000, '_id / _upd 要保留');
+});
+await check('_file 剥离不能改坏原对象（内存行仍要留着它）', async () => {
+  const ipRow = { _id: 'ip2', IP名称: '罗小黑', _file: 'ip/罗小黑-data.json', _upd: 1000, _rev: 1 };
+  const s = makeSandbox({ ls: CFG, store: { ip: [ipRow] } });
+  s.api.cloudCollect(false);
+  assert(ipRow._file === 'ip/罗小黑-data.json', '原对象的 _file 不能被删掉，否则本机改名/删除会找不到文件');
+});
+await check('没有 _file 的行照常上传（不做多余复制）', async () => {
+  const s = makeSandbox({ ls: CFG, store: { collection: rows(3, 0, 1000) } });
+  const c = s.api.cloudCollect(false);
+  assert(c.pending.length === 3, '应收 3 条');
+  assert(c.pending[0].data.名称 === '测试0', 'data 内容要完整');
 });
 
 console.log('\n[2] 上传分块（cloudUpload）');

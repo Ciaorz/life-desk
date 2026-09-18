@@ -2868,11 +2868,23 @@ function cloudCollect(force){
     (snap[mk] || []).forEach(function(r){
       if (!r || r._id == null) return;
       if (!force && !(Number(r._upd) > wm)) return;
+      /* 运行期字段 _file 不能进云端：它是 ip/series 目录分片「这条记录住在哪个文件里」的
+         位置标记，由 loadEntityModule() 在本机挂上去、saveEntityModule() 写盘前删掉
+         （见 app.js 那两处）。别的设备既用不上也认不出这个路径。
+         2026-09-18 实测就是这么漏出去的 —— D1 里有 8 条 ip/series 记录带着 _file。
+         只在真带了 _file 时才复制，免得给 1414 条的全量上传白做一次深拷贝。 */
+      var _data = r;
+      if (r._file !== undefined){
+        _data = {};
+        for (var _k in r){
+          if (Object.prototype.hasOwnProperty.call(r, _k) && _k !== '_file') _data[_k] = r[_k];
+        }
+      }
       pending.push({
         id: String(r._id),
         module: mk,
         cat: shardCatOf(mk, r),
-        data: r
+        data: _data
       });
     });
   });
@@ -3072,6 +3084,363 @@ async function cloudUpload(force){
   if (!useBatch) cloudStatus((($('cloudStatus') || {}).textContent || '') + '｜本次用了逐条模式，建议重新部署 Pages 以启用批量接口', '#c77700');
 }
 
+/* ============================================================
+ * v103：云 → 本地（下载 + 合并）
+ *
+ * 为什么之前只有「上传」：上传是「只读本地、只写云端」，做错了最多云端多几条，
+ * 本机毫发无伤；下载要动本机数据，风险完全不同，所以先把上传跑稳再补这半边。
+ *
+ * 合并规则刻意【不是】「后写覆盖」：
+ *   手机改「状态」、电脑改「价格」，两边各自只带了自己改的字段，
+ *   整条覆盖必然丢掉一边。所以做【字段并集】：
+ *     · 只有一边有的字段 → 直接保留（绝大多数情况，等于双方改动都保住）
+ *     · 两边都有且值相同 → 不用管
+ *     · 两边都有但值不同 → 真冲突，看整条记录的 _upd，较新的一方赢，并把条数报给用户
+ *   本机独有的字段永远不会被云端抹掉 —— 宁可多留，不可误删。
+ *
+ * 水位线单独一个键（lifedesk_cloud_dl_wm），与上传的 lifedesk_cloud_wm 分开 ——
+ * 两者语义完全不同（一个「我推到哪了」、一个「我拉到哪了」），
+ * 共用会互相顶掉，导致反复重推或永久漏拉。
+ *
+ * 两个必须小心的坑（都写在下面代码里了）：
+ *   1) 服务端一次 batch 里所有行的 updated_at 完全相同（共用一个 Date.now()），
+ *      而 /api/sync 用的是严格大于。翻页时必须往回退 1 毫秒做重叠，
+ *      否则同一批的后半截会被永久跳过。
+ *   2) 本地墓碑（lifedesk_tombstones）里的 id 绝不复活 —— 那是用户在本机删掉的，
+ *      只是还没来得及推上去而已。
+ * ============================================================ */
+var CLOUD_DL_WM_KEY = 'lifedesk_cloud_dl_wm';
+var _cloudTombs = null;         /* 本次合并用的墓碑表（只读快照） */
+var _cloudConflicts = [];       /* 真冲突清单，合并完报给用户 */
+
+/* 云端可能有、但本机代码早就不认的运行期字段 —— 合并时【不要】带回来。
+   2026-09-18 实测：D1 与本机 data/ 逐条对账，1414 条里只有 8 条有差异，
+   8 条全是同一个 _file，而且正好是 2 条 ip + 6 条 series。
+   原因：_file 只在 localfile（FSA）模式下由 loadEntityModule() 挂到内存行上，
+   gh 模式（手机 / 网页版）加载出来的行没有这个字段。
+   于是并集规则把「只有云端有的 _file」取回来 → 这 8 条被算成「有改动」，
+   还会把这个本机布局的路径写进手机缓存。不是数据丢失，但是纯噪音。
+   两头都堵：cloudCollect() 上传时剥掉（见那边），这里合并时也不收。
+   以后发现新的运行期字段，往这个表里加。
+   注：声明放在这里而不是文件更上面，是为了让测试抠源码时能一起抠到 ——
+   它被 cloudCollect() 和 cloudMergePlan() 共用，var 提升保证两边都读得到。 */
+var CLOUD_DEAD_FIELDS = { _file: 1 };
+
+function cloudDlWatermark(){
+  try { return Number(localStorage.getItem(CLOUD_DL_WM_KEY) || 0) || 0; } catch(e){ return 0; }
+}
+function setCloudDlWatermark(t){
+  try { localStorage.setItem(CLOUD_DL_WM_KEY, String(t)); } catch(e){}
+}
+function cloudTombstoneMap(){
+  var m = {};
+  try {
+    var ts = JSON.parse(localStorage.getItem('lifedesk_tombstones') || '[]');
+    if (Array.isArray(ts)){
+      ts.forEach(function(t){ if (t && t.id != null) m[String(t.id)] = Number(t.at) || 0; });
+    }
+  } catch(e){}
+  return m;
+}
+function cloudRowName(r){
+  return String((r && (r['名称'] || r['书名'] || r['标题'])) || (r && r._id) || '');
+}
+
+/* 纯函数：算出这条云端记录该怎么落地，【不改动任何东西】。
+   先算一遍再让用户确认，是因为下载是本项目里唯一会改本机数据的操作。
+   act：insert 本地没有 / update 有改动 / same 一模一样 / del 云端说删了 / skip 不管 */
+function cloudMergePlan(row){
+  var mk = String((row && row.module) || '');
+  var id = String((row && row.id) || '');
+  if (!id || !mk) return { act:'skip' };
+  if (!store[mk] || !store[mk].rows) return { act:'skip', why:'本机没有这个模块' };
+  if (_cloudTombs === null) _cloudTombs = cloudTombstoneMap();
+  /* 本机删过的，云端还不知道 → 别复活 */
+  if (_cloudTombs[id]) return { act:'skip', why:'本机已删除' };
+
+  var rows = store[mk].rows, local = null;
+  for (var i = 0; i < rows.length; i++){
+    if (String(rows[i]._id) === id){ local = rows[i]; break; }
+  }
+
+  /* 云端说「这条没了」→ 本机也删。但若本机在删除之后又改过，保留本机（较新者赢），
+     否则会静默吃掉一次编辑。 */
+  if (row.deleted){
+    if (!local) return { act:'same' };
+    var cupdD = Number(row.updated_at) || 0;
+    var lupdD = Number(local._upd) || 0;
+    if (lupdD > cupdD){
+      _cloudConflicts.push({ id:id, module:mk, name:cloudRowName(local), fields:['云端已删除，本机较新，保留本机'] });
+      return { act:'same' };
+    }
+    return { act:'del' };
+  }
+
+  var cd = row.data || {};
+  var cupd = Number(cd._upd) || Number(row.updated_at) || 0;
+
+  if (!local){
+    var nr = Object.assign({}, cd);
+    nr._id = id;
+    nr._upd = cupd || Date.now();
+    nr._rev = Math.max(Number(nr._rev) || 0, Number(row.rev) || 1);
+    return { act:'insert', out:nr };
+  }
+
+  var lupd = Number(local._upd) || 0;
+  var keys = {};
+  Object.keys(cd).forEach(function(x){ keys[x] = 1; });
+  Object.keys(local).forEach(function(x){ keys[x] = 1; });
+
+  var out = {}, changed = false, conflicts = [];
+  Object.keys(keys).forEach(function(k){
+    if (k === '_id'){ out[k] = id; return; }
+    if (k === '_upd'){
+      var u = Math.max(cupd, lupd);
+      out[k] = u; if (u !== lupd) changed = true; return;
+    }
+    if (k === '_rev'){
+      var rv = Math.max(Number(cd._rev) || 0, Number(local._rev) || 0);
+      out[k] = rv; if (rv !== (Number(local._rev) || 0)) changed = true; return;
+    }
+    var hasC = Object.prototype.hasOwnProperty.call(cd, k);
+    var hasL = Object.prototype.hasOwnProperty.call(local, k);
+    var cv = cd[k], lv = local[k];
+    if (!hasC){ out[k] = lv; return; }                    /* 只有本机有 → 并集保留 */
+    if (!hasL){
+      if (CLOUD_DEAD_FIELDS[k]) return;                   /* 运行期字段：本机没有就别带回来 */
+      out[k] = cv; changed = true; return;                /* 只有云端有 → 取云端 */
+    }
+    if (JSON.stringify(cv) === JSON.stringify(lv)){ out[k] = lv; return; }
+    /* 两边都有、值不同 → 真冲突。两边都不是空值才算「改过」，空值只是没填。 */
+    if (cv != null && lv != null) conflicts.push(k);
+    if (cupd > lupd){ out[k] = cv; changed = true; } else { out[k] = lv; }
+  });
+  if (conflicts.length){
+    _cloudConflicts.push({ id:id, module:mk, name:cloudRowName(local), fields:conflicts });
+  }
+  return { act: changed ? 'update' : 'same', out: out, conflicts: conflicts };
+}
+
+/* v103fix：刷新加载时的「并集」—— 根治「手机录完刷新即丢」。
+   入参 two maps，形状与 ghStaticLoadV2() / idbGet() 一致：{ module: [rows] }。
+     local = 本机 IndexedDB 快照（可能含手机刚录、还没推到云端的记录）
+     cloud = 从仓库拉回的（上次推送之后的状态）
+   规则（与 cloudMergePlan 同根，但【不】碰墓碑/删除——那是 ☁ 下载按钮的职责）：
+     · 只有本机有的 id（=手机刚录、没推的）→ 保本机，绝不被云端整份冲掉
+     · 只有云端有的 id（=桌面推了、手机还没拉到的）→ 取云端
+     · 两边都有 → 字段并集，按各字段的 _upd 较新者赢（_upd/_rev 取 max）
+     · 云端独有的运行期字段（CLOUD_DEAD_FIELDS，如 _file）→ 不收
+   纯函数、幂等：merged 再跟同一个 cloud 合并不会重复或丢字段。
+   为什么要单独写一份而不直接调 cloudMergePlan：cloudMergePlan 挂在 store 上、
+   还会按墓碑把本机已删的复活掉，刷新这种「每次都跑」的路径绝不能那样干。 */
+function mergeLoadData(localData, cloudData){
+  var out = {};
+  var mods = {};
+  Object.keys(localData || {}).forEach(function(m){ mods[m] = 1; });
+  Object.keys(cloudData || {}).forEach(function(m){ mods[m] = 1; });
+  Object.keys(mods).forEach(function(mk){
+    var lrows = (localData && localData[mk]) || [];
+    var crows = (cloudData && cloudData[mk]) || [];
+    var map = {}, order = [];
+    lrows.forEach(function(r){
+      var id = String((r && r._id) || '');
+      if (!id) return;
+      if (!map[id]){ map[id] = { local:r, cloud:null }; order.push(id); }
+    });
+    crows.forEach(function(r){
+      var id = String((r && r._id) || '');
+      if (!id) return;
+      if (!map[id]){ map[id] = { local:null, cloud:r }; order.push(id); }
+      else map[id].cloud = r;
+    });
+    var merged = [];
+    order.forEach(function(id){
+      var pair = map[id];
+      if (!pair.local){ merged.push(pair.cloud); return; }   /* 只有云端 → 取云端 */
+      if (!pair.cloud){ merged.push(pair.local); return; }   /* 只有本机 → 保本机（手机刚录、没推的） */
+      var l = pair.local, c = pair.cloud;
+      var lupd = Number(l._upd) || 0;
+      var cupd = Number(c._upd) || 0;
+      var keys = {}, o = {};
+      Object.keys(c).forEach(function(x){ keys[x] = 1; });
+      Object.keys(l).forEach(function(x){ keys[x] = 1; });
+      Object.keys(keys).forEach(function(k){
+        if (k === '_id'){ o[k] = id; return; }
+        if (k === '_upd'){ o[k] = Math.max(cupd, lupd); return; }
+        if (k === '_rev'){ o[k] = Math.max(Number(c._rev) || 0, Number(l._rev) || 0); return; }
+        var hasC = Object.prototype.hasOwnProperty.call(c, k);
+        var hasL = Object.prototype.hasOwnProperty.call(l, k);
+        var cv = c[k], lv = l[k];
+        if (!hasC){ o[k] = lv; return; }
+        if (!hasL){
+          if (CLOUD_DEAD_FIELDS[k]) return;                  /* 运行期字段：本机没有就别带回来 */
+          o[k] = cv; return;
+        }
+        if (JSON.stringify(cv) === JSON.stringify(lv)){ o[k] = lv; return; }
+        o[k] = (cupd > lupd) ? cv : lv;                      /* 真冲突：整条 _upd 较新者赢 */
+      });
+      merged.push(o);
+    });
+    out[mk] = merged;
+  });
+  return out;
+}
+
+/* 把算好的方案真正落进内存 store。落盘统一放到最后做一次，避免 1414 条触发 1414 次写盘。 */
+function cloudApplyPlan(row, plan){
+  if (plan.act === 'skip' || plan.act === 'same') return plan.act;
+  var mk = String(row.module || ''), id = String(row.id || '');
+  var rows = store[mk].rows, idx = -1;
+  for (var i = 0; i < rows.length; i++){
+    if (String(rows[i]._id) === id){ idx = i; break; }
+  }
+  if (plan.act === 'del'){
+    if (idx >= 0) rows.splice(idx, 1);
+    store[mk].status = rows.length ? 'ok' : 'empty';
+    return 'del';
+  }
+  if (idx >= 0) rows[idx] = plan.out;
+  else rows.unshift(plan.out);
+  store[mk].status = rows.length ? 'ok' : 'empty';
+  return plan.act;
+}
+
+/* 下载。force=true 时忽略下载水位线，把云端全部记录拉下来对一遍。 */
+async function cloudPull(force){
+  if (_cloudBusy){ toast('正在同步中，请稍候'); return; }
+  var base = cloudBase(), tok = cloudToken();
+  if (!base || !tok){ toast('请先填好 API 地址和令牌'); return; }
+
+  _cloudBusy = true;
+  _cloudConflicts = [];
+  _cloudTombs = cloudTombstoneMap();
+  var since = force ? 0 : cloudDlWatermark();
+  var nextSince = since;
+  var uniq = [], seen = {}, guard = '';
+  var pages = 0;
+
+  try {
+    while (pages < 40){
+      var res = await cloudFetch(base, tok,
+        '/api/sync?since=' + encodeURIComponent(since) + '&limit=2000', { timeout: 60000 });
+
+      if (res.status === 401){ cloudStatus('✗ 令牌不对（401）', '#e5484d'); toast('☁ 下载失败：令牌不对'); return; }
+      if (!res.ok || !res.json || !res.json.ok){
+        cloudStatus('✗ 下载失败（HTTP ' + res.status + '）', '#e5484d');
+        toast('☁ 下载失败：HTTP ' + res.status);
+        return;
+      }
+
+      var rows = res.json.rows || [];
+      var added = 0;
+      rows.forEach(function(r){
+        var k = String(r.id);
+        if (!seen[k]){ seen[k] = 1; uniq.push(r); added++; }
+      });
+      pages++;
+      cloudStatus('正在下载… 已取回 ' + uniq.length + ' 条', '#3b6fd4');
+
+      if (!rows.length || !res.json.hasMore){
+        nextSince = Number(res.json.nextSince) || nextSince;
+        break;
+      }
+      /* 这一页被 limit 截断了。往回退 1 毫秒重叠取，宁可重复（合并是幂等的）不可漏。 */
+      if (!added){
+        guard = '云端有一批记录的时间戳完全相同，本次没能全部取回，请再点一次「下载」';
+        nextSince = Number(res.json.nextSince) || nextSince;
+        break;
+      }
+      nextSince = Number(res.json.nextSince) || nextSince;
+      since = Math.max(0, nextSince - 1);
+    }
+  } catch(e){
+    cloudStatus('✗ 下载中断：' + (e && e.message ? e.message : e), '#e5484d');
+    toast('☁ 下载中断：网络错误');
+    return;
+  } finally {
+    _cloudBusy = false;
+  }
+
+  if (!uniq.length){
+    setCloudDlWatermark(Math.max(nextSince, cloudDlWatermark()));
+    cloudStatus('✓ 云端没有新改动（' + (force ? '全量检查过' : '自上次下载以来') + '）', '#1a7f37');
+    toast('☁ 云端没有新内容');
+    return;
+  }
+
+  /* ---- 先算方案，让用户看清楚会发生什么 ---- */
+  var plans = uniq.map(function(r){ return { row:r, plan:cloudMergePlan(r) }; });
+  var st = { insert:0, update:0, same:0, del:0, skip:0 };
+  plans.forEach(function(p){ st[p.plan.act] = (st[p.plan.act] || 0) + 1; });
+
+  var parts = [];
+  if (st.insert) parts.push('新增 ' + st.insert + ' 条');
+  if (st.update) parts.push('更新 ' + st.update + ' 条');
+  if (st.del)    parts.push('删除 ' + st.del + ' 条');
+  if (st.same)   parts.push('无变化 ' + st.same + ' 条');
+  if (st.skip)   parts.push('跳过 ' + st.skip + ' 条');
+
+  var msg = '云端取回 ' + uniq.length + ' 条记录，合并后：\n' + (parts.join('、') || '无变化') + '\n\n'
+    + '合并规则：只有一边有的字段一律保留（手机改状态、电脑改价格互不影响）；\n'
+    + '同一个字段两边都改过才算冲突，冲突时较新的一方赢。\n'
+    + '本机独有的字段永远不会被云端抹掉。'
+    + (_cloudConflicts.length ? '\n\n⚠️ 其中 ' + _cloudConflicts.length + ' 条存在真冲突，将保留较新的值。' : '');
+
+  if (!(await cloudAsk(force ? '从云全量下载' : '从云下载', msg, '开始合并'))){ _cloudBusy = false; return; }
+
+  /* ---- 真正落地 ---- */
+  _cloudBusy = true;
+  var applied = { insert:0, update:0, del:0 };
+  var touched = {};
+  try {
+    plans.forEach(function(p){
+      var a = cloudApplyPlan(p.row, p.plan);
+      if (a === 'insert' || a === 'update' || a === 'del'){
+        applied[a]++;
+        touched[String(p.row.module || '')] = 1;
+      }
+    });
+    var mkList = Object.keys(touched);
+    if (mkList.length){
+      /* 落盘只做一次。localfile 走 FSA 直写 data/ 目录；gh 模式写本机快照，
+         有令牌才顺带推 GitHub（手机端多半没令牌，推不动也不该弹一堆提示）。 */
+      if (MODE === 'localfile'){ localCacheSet(); queueLocalSave(); }
+      else if (MODE === 'gh'){ localCacheSet(); if (GH && GH.token) queueGhSave(); }
+      else if (MODE === 'local'){ mkList.forEach(function(k){ lsSet(k, store[k].rows); }); localCacheSet(); }
+      else { localCacheSet(); }
+      render();
+    }
+    setCloudDlWatermark(Math.max(nextSince, cloudDlWatermark()));
+  } finally {
+    _cloudBusy = false;
+  }
+
+  var done = applied.insert + applied.update + applied.del;
+  var tail = applied.insert + ' 新增 / ' + applied.update + ' 更新 / ' + applied.del + ' 删除';
+  var warn = guard ? '。' + guard : '';
+
+  if (done){
+    cloudStatus('✓ 下载完成：' + tail
+      + (_cloudConflicts.length ? '。⚠️ ' + _cloudConflicts.length + ' 条有真冲突，已保留较新的值' : '')
+      + warn, guard ? '#c77700' : '#1a7f37');
+    toast('☁ 下载完成：' + tail + warn);
+  } else {
+    cloudStatus('✓ 云端没有需要合并的改动（' + (st.same || 0) + ' 条一模一样'
+      + (st.skip ? '，' + st.skip + ' 条跳过' : '') + '）' + warn, guard ? '#c77700' : '#1a7f37');
+    toast('☁ 云端没有需要合并的改动' + warn);
+  }
+
+  if (_cloudConflicts.length){
+    var ex = _cloudConflicts.slice(0, 3).map(function(c){
+      return c.name + '（' + c.fields.join('、') + '）';
+    }).join('；');
+    cloudStatus((($('cloudStatus') || {}).textContent || '')
+      + '\n冲突明细（最多列 3 条）：' + ex
+      + (_cloudConflicts.length > 3 ? ' …还有 ' + (_cloudConflicts.length - 3) + ' 条' : ''), '#c77700');
+  }
+}
+
 function addDataTools(){
   if ($('dataTools')) return;
   var box = document.createElement('div');
@@ -3160,13 +3529,18 @@ function addDataTools(){
         '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' +
           '<button type="button" id="cloudSaveTest" style="padding:7px 12px;border:0;border-radius:7px;background:#3b6fd4;color:#fff;cursor:pointer;font-size:12px">保存并测试</button>' +
           '<button type="button" id="cloudUploadBtn" style="padding:7px 12px;border:1px solid #2f7a5a;border-radius:7px;background:#2f7a5a;color:#fff;cursor:pointer;font-size:12px">上传</button>' +
+          '<button type="button" id="cloudPullBtn" style="padding:7px 12px;border:1px solid #b8860b;border-radius:7px;background:#b8860b;color:#fff;cursor:pointer;font-size:12px">下载</button>' +
           '<button type="button" id="cloudFullBtn" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">全量上传</button>' +
+          '<button type="button" id="cloudFullPullBtn" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">全量下载</button>' +
         '</div>' +
-        '<div id="cloudStatus" style="margin-top:8px;font-size:11px;line-height:1.6;color:#666"></div>' +
+        '<div id="cloudStatus" style="margin-top:8px;font-size:11px;line-height:1.6;color:#666;white-space:pre-line"></div>' +
         '<div style="font-size:10px;color:#888;line-height:1.6;margin-top:6px">' +
           '「上传」只推<b>改过的</b>记录（按每条记录的最后修改时间判断），所以第一次点就等于全量。' +
           '「全量上传」忽略判断、把所有记录重推一遍（数据对不上时用）。' +
-          '<br>这条通道<b>只上传</b>，绝不改动本地数据。手机上想看新内容，仍然要靠下面的 GitHub 通道推一次。' +
+          '<br>「下载」把云端<b>改过的</b>记录合并进本机；「全量下载」忽略判断、把云端全部记录拉下来对一遍。' +
+          '<br>合并是<b>字段并集</b>：只有一边有的字段一律保留（手机改状态、电脑改价格互不影响）；' +
+          '同一个字段被两边都改过才算冲突，冲突时较新的一方赢。本机独有的字段<b>永远不会被云端抹掉</b>，本机删过的也不会被复活。' +
+          '<br>上传和下载各自记一条水位线，互不干扰。手机上想看新内容，仍然要靠下面的 GitHub 通道推一次。' +
         '</div>' +
       '</div>' +
     '</div>' +
@@ -3291,9 +3665,13 @@ function addDataTools(){
     $('cloudApiBase').value = _cc.apiBase || CLOUD_DEFAULT_BASE;
     $('cloudToken').value = _cc.token || '';
     var _wm = cloudWatermark();
-    cloudStatus(_wm
+    var _dl = cloudDlWatermark();
+    cloudStatus((_wm
       ? '上次上传：' + new Date(_wm).toLocaleString()
-      : '还没上传过。第一次点「上传」会把全部记录推上去。', '#666');
+      : '还没上传过。第一次点「上传」会把全部记录推上去。')
+      + '\n' + (_dl
+      ? '上次下载：' + new Date(_dl).toLocaleString()
+      : '还没下载过。第一次点「下载」会把云端全部记录合并进来。'), '#666');
   } catch(e){}
   if ($('cloudSaveTest')) $('cloudSaveTest').onclick = function(){
     var b = String($('cloudApiBase').value || '').trim().replace(/\/+$/, '');
@@ -3302,8 +3680,10 @@ function addDataTools(){
     setCloudConfig({ apiBase: b, token: t });
     cloudTest();
   };
-  if ($('cloudUploadBtn')) $('cloudUploadBtn').onclick = function(){ cloudUpload(false); };
-  if ($('cloudFullBtn'))   $('cloudFullBtn').onclick   = function(){ cloudUpload(true);  };
+  if ($('cloudUploadBtn'))   $('cloudUploadBtn').onclick   = function(){ cloudUpload(false); };
+  if ($('cloudFullBtn'))     $('cloudFullBtn').onclick     = function(){ cloudUpload(true);  };
+  if ($('cloudPullBtn'))     $('cloudPullBtn').onclick     = function(){ cloudPull(false);  };
+  if ($('cloudFullPullBtn')) $('cloudFullPullBtn').onclick = function(){ cloudPull(true);   };
   $('ghClose').onclick = function(){ p.style.display = 'none'; };
   /* v75fix：同步设置三段折叠（GitHub / 高德地图 / 查书代理）——默认收起，
      点击标题各自独立展开，互不排斥（允许同时展开多个） */
@@ -4901,14 +5281,19 @@ function fetchAll(key, cb){
       /* ② 后台拉最新（每个请求带 8 秒超时 + 重试，不会再被单个挂起请求拖死） */
       var st = await ghStaticLoadV2();
       if (st && Object.keys(st).length){
-        _ghCache = st;
-        idbSet(st);                          /* 落盘 IndexedDB：这才是真正「存在手机上」 */
-        localCacheSetFrom(st);               /* 仍试写 localStorage（小数据可用，超限静默忽略） */
+        /* v103fix：刷新即丢根治 —— 绝不让云端整份覆盖本机快照。
+           本机 IndexedDB 里可能有手机刚录、还没推到云端的记录（见下方 5539 注释），
+           直接 idbSet(st) 会把它们冲掉。改成【并集】合并：本机独有的记录保本机、
+           云端新增的补进来、两边都有的按字段较新者赢。 */
+        var merged = mergeLoadData(local, st);
+        _ghCache = merged;
+        idbSet(merged);                      /* 落盘 IndexedDB：这才是真正「存在手机上」 */
+        localCacheSetFrom(merged);           /* 仍试写 localStorage（小数据可用，超限静默忽略） */
         if (hadLocal){
-          cb(st[key] || []);                 /* 把最新数据交给本次调用者 */
+          cb(merged[key] || []);             /* 把最新数据交给本次调用者 */
           try { renderSoon(); } catch(e){}   /* 并触发全局重绘，其余模块一并换成最新 */
         } else {
-          settle(st);                        /* 首次访问：现在才交付 */
+          settle(merged);                    /* 首次访问：现在才交付 */
         }
         return;
       }
@@ -5221,7 +5606,21 @@ function addRow(key, vals, after){
     localUpsert(key, id, vals);
     if (after) after();
     render();
-    toast(MODE === 'localfile' ? '已保存到本地 data 文件夹' : '已保存到本地（当前浏览器）');
+    /* ⚠️ 2026-09-18：这里原来一律说「已保存到本地（当前浏览器）」，是个数据丢失陷阱。
+       gh 模式下没有 GitHub Token 时，记录其实只进了本机快照（localStorage/IndexedDB），
+       而早先的加载逻辑会把「从仓库拉回的数据」整份覆盖上去 → **刷新即丢**
+       （已于 v103fix 改成字段并集合并，本机独有记录不再被冲掉，见 mergeLoadData / 5217 注释）。
+       即便刷新不丢了，这条记录依旧只在这台设备上、还没推到云端，
+       更糟的是这条提示还会把上面 queueGhSave() 的「请先粘贴 Token」提醒冲掉，
+       用户看到「已保存」就以为存住了（已实测复现）。
+       现在如实告知，并给一个直达云同步面板的入口，提醒尽快上传。 */
+    if (MODE === 'localfile'){
+      toast('已保存到本地 data 文件夹');
+    } else if (MODE === 'gh' && !(GH && GH.token)){
+      toast('⚠️ 只存在这台设备上，记得去「云同步」上传到云端', '去上传', function(){ toggleGhPanel(); });
+    } else {
+      toast('已保存到本地（当前浏览器）');
+    }
     return;
   }
   var m=MODS[key], props=propsFrom(m.fields, vals, key);
