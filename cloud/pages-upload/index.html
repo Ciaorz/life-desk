@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>日常集 · 云同步 API</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --line:#e4e6eb; --ink:#1c1e21; --dim:#65676b;
+    --ok:#137333; --okbg:#e6f4ea; --bad:#c5221f; --badbg:#fce8e6;
+    --warn:#8a6d00; --warnbg:#fef7e0; --accent:#1a73e8;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#18191a; --card:#242526; --line:#3a3b3c; --ink:#e4e6eb; --dim:#b0b3b8;
+      --ok:#81c995; --okbg:#1e3a24; --bad:#f28b82; --badbg:#3c1f1e;
+      --warn:#fdd663; --warnbg:#3a3115; --accent:#8ab4f8;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:24px 16px 48px; background:var(--bg); color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:620px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 4px;letter-spacing:.02em}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 20px}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;margin-bottom:14px;
+  }
+  .card h2{font-size:14px;margin:0 0 12px;color:var(--dim);font-weight:600;letter-spacing:.04em}
+  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .badge{
+    display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:999px;
+    font-size:13px;font-weight:600;
+  }
+  .badge.ok{background:var(--okbg);color:var(--ok)}
+  .badge.bad{background:var(--badbg);color:var(--bad)}
+  .badge.wait{background:var(--warnbg);color:var(--warn)}
+  .dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+  input[type=password],input[type=text]{
+    flex:1 1 200px;min-width:0;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+    background:var(--bg);color:var(--ink);font-size:15px;font-family:ui-monospace,Menlo,Consolas,monospace;
+  }
+  input:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+  button{
+    padding:9px 16px;border:0;border-radius:8px;background:var(--accent);color:#fff;
+    font-size:14px;font-weight:600;cursor:pointer;
+  }
+  button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+  button:disabled{opacity:.5;cursor:default}
+  .hint{color:var(--dim);font-size:13px;margin:10px 0 0}
+  pre{
+    margin:12px 0 0;padding:11px 13px;background:var(--bg);border:1px solid var(--line);
+    border-radius:8px;overflow:auto;font-size:12.5px;line-height:1.55;
+    font-family:ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;
+  }
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px}
+  th,td{text-align:left;padding:7px 0;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:12.5px}
+  td:last-child,th:last-child{text-align:right;font-variant-numeric:tabular-nums}
+  tr:last-child td{border-bottom:0}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;
+    background:var(--bg);padding:1.5px 5px;border-radius:5px;border:1px solid var(--line)}
+  ol{margin:10px 0 0;padding-left:20px;color:var(--dim);font-size:13.5px}
+  ol li{margin:5px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>日常集 · 云同步 API</h1>
+  <p class="sub">Cloudflare Pages 后端。这个页面只用来做自检，不是给日常使用的。</p>
+
+  <!-- ============ 第一步：服务是否在线 ============ -->
+  <div class="card">
+    <h2>① 服务是否在线</h2>
+    <div class="row">
+      <span id="pingBadge" class="badge wait"><span class="dot"></span>检测中…</span>
+      <button class="ghost" id="pingBtn" style="margin-left:auto">重新检测</button>
+    </div>
+    <p class="hint">这一项访问 <code>/api/ping</code>，不需要令牌。失败就说明部署没成功。</p>
+    <pre id="pingOut" style="display:none"></pre>
+  </div>
+
+  <!-- ============ 第二步：令牌 + 数据库绑定 ============ -->
+  <div class="card">
+    <h2>② 令牌与数据库绑定</h2>
+    <div class="row">
+      <input type="password" id="tok" placeholder="粘贴 SYNC_TOKEN" autocomplete="off" spellcheck="false">
+      <button class="ghost" id="showBtn" type="button">显示</button>
+      <button id="testBtn" type="button">测试</button>
+    </div>
+    <p class="hint">
+      这一项访问 <code>/api/stats</code>，会真的去读一次 D1 数据库。
+      能读出条数，就说明 <strong>令牌</strong> 和 <strong>D1 绑定</strong> 都对了。
+    </p>
+    <div id="statBox" style="display:none">
+      <div class="row" style="margin-top:12px"><span id="statBadge" class="badge wait"><span class="dot"></span></span></div>
+      <div id="statTable"></div>
+    </div>
+    <pre id="statOut" style="display:none"></pre>
+  </div>
+
+  <!-- ============ 第三步：查书接口 ============ -->
+  <div class="card">
+    <h2>③ 查书接口（ISBN）</h2>
+    <div class="row">
+      <input type="text" id="isbnIn" value="9787506365437" placeholder="ISBN（10 位或 13 位）"
+             autocomplete="off" spellcheck="false">
+      <button id="isbnBtn" type="button">查这本</button>
+    </div>
+    <p class="hint">
+      这一项访问 <code>/api/isbn/{ISBN}</code>，由 Cloudflare 代你去 OpenLibrary 查书。
+      顺便验证 <strong>封面中转</strong>：国内直连 openlibrary.org 是被 DNS 污染的
+      （解析成 <code>face:b00c</code> 那个假 IP），只有走这里才通。
+    </p>
+    <div id="isbnBox" style="display:none">
+      <div class="row" style="margin-top:12px"><span id="isbnBadge" class="badge wait"><span class="dot"></span></span></div>
+      <div id="isbnBody"></div>
+    </div>
+    <pre id="isbnOut" style="display:none"></pre>
+  </div>
+
+  <!-- ============ 排查指引 ============ -->
+  <div class="card">
+    <h2>如果没通过</h2>
+    <ol>
+      <li><strong>① 失败</strong> → 项目没部署成功，或地址打错了。回 Cloudflare 看部署日志。</li>
+      <li><strong>② 显示 401</strong> → 令牌不对。检查 Settings → Variables and Secrets 里
+        <code>SYNC_TOKEN</code> 的值，注意前后不要有空格。</li>
+      <li><strong>② 显示 500 或 <code>DB is not defined</code></strong> → D1 绑定没加，或名字不是大写的
+        <code>DB</code>。加完绑定必须 <strong>重新部署一次</strong>才生效。</li>
+      <li><strong>② 显示 <code>no such table: records</code></strong> → 建表 SQL 没执行，
+        去 D1 Console 里跑一遍 <code>cloud/schema.sql</code>。</li>
+      <li><strong>③ 显示 404</strong> → 这个接口是后加的，说明项目还没 <strong>重新部署</strong>。
+        把 <code>cloud/pages-upload/</code> 里那两个文件再拖一次即可。</li>
+      <li><strong>③ 查得到书名、但封面裂了</strong> → <code>/api/isbn-cover</code> 的转发有问题，
+        回 Cloudflare 看那次请求的状态码。</li>
+    </ol>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function badge(el, kind, text) {
+    el.className = 'badge ' + kind;
+    el.innerHTML = '<span class="dot"></span>' + text;
+  }
+
+  function showPre(el, text) {
+    el.style.display = 'block';
+    el.textContent = text;
+  }
+
+  /* 返回值会拼进 innerHTML，必须转义 —— 书名/作者来自外部接口，不可信 */
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /* ---------------- ① /api/ping ---------------- */
+  function ping() {
+    badge($('pingBadge'), 'wait', '检测中…');
+    $('pingOut').style.display = 'none';
+    $('pingBtn').disabled = true;
+
+    fetch('/api/ping', { cache: 'no-store' })
+      .then(function (r) { return r.text().then(function (t) { return { s: r.status, t: t }; }); })
+      .then(function (res) {
+        var j = null;
+        try { j = JSON.parse(res.t); } catch (e) {}
+        if (res.s === 200 && j && j.ok) {
+          badge($('pingBadge'), 'ok', '在线 ✅');
+        } else {
+          badge($('pingBadge'), 'bad', '异常（HTTP ' + res.s + '）');
+        }
+        showPre($('pingOut'), res.t);
+      })
+      .catch(function (e) {
+        badge($('pingBadge'), 'bad', '连不上 ❌');
+        showPre($('pingOut'), '请求失败：' + (e && e.message ? e.message : e));
+      })
+      .then(function () { $('pingBtn').disabled = false; });
+  }
+
+  $('pingBtn').addEventListener('click', ping);
+
+  /* ---------------- ② /api/stats ---------------- */
+  function testStats() {
+    var tok = $('tok').value.trim();
+    if (!tok) {
+      badge($('statBadge'), 'bad', '先填令牌');
+      $('statBox').style.display = 'block';
+      return;
+    }
+    $('testBtn').disabled = true;
+    $('statBox').style.display = 'block';
+    $('statOut').style.display = 'none';
+    $('statTable').innerHTML = '';
+    badge($('statBadge'), 'wait', '测试中…');
+
+    fetch('/api/stats', { cache: 'no-store', headers: { authorization: 'Bearer ' + tok } })
+      .then(function (r) { return r.text().then(function (t) { return { s: r.status, t: t }; }); })
+      .then(function (res) {
+        var j = null;
+        try { j = JSON.parse(res.t); } catch (e) {}
+
+        if (res.s === 401) {
+          badge($('statBadge'), 'bad', '令牌不对（401）');
+          showPre($('statOut'), res.t);
+          return;
+        }
+        if (res.s !== 200 || !j || !j.ok) {
+          badge($('statBadge'), 'bad', '失败（HTTP ' + res.s + '）');
+          showPre($('statOut'), res.t);
+          return;
+        }
+
+        badge($('statBadge'), 'ok', '通了 ✅  共 ' + j.total + ' 条记录');
+
+        var rows = j.byModule || [];
+        if (rows.length) {
+          var h = '<table><thead><tr><th>模块</th><th>条数</th></tr></thead><tbody>';
+          var sum = 0;
+          for (var i = 0; i < rows.length; i++) {
+            h += '<tr><td>' + String(rows[i].module) + '</td><td>' + rows[i].n + '</td></tr>';
+            sum += Number(rows[i].n) || 0;
+          }
+          h += '</tbody></table>';
+          $('statTable').innerHTML = h;
+        } else {
+          $('statTable').innerHTML =
+            '<p class="hint">数据库能读，但一条记录都没有 —— 这是正常的，'
+            + '还没同步过。等桌面端点「同步」之后这里就会有数字。</p>';
+        }
+
+        if (j.lastUpdate) {
+          showPre($('statOut'), '最近更新：' + new Date(j.lastUpdate).toLocaleString());
+        }
+      })
+      .catch(function (e) {
+        badge($('statBadge'), 'bad', '连不上 ❌');
+        showPre($('statOut'), '请求失败：' + (e && e.message ? e.message : e));
+      })
+      .then(function () { $('testBtn').disabled = false; });
+  }
+
+  $('testBtn').addEventListener('click', testStats);
+  $('tok').addEventListener('keydown', function (e) { if (e.key === 'Enter') testStats(); });
+
+  /* ---------------- ③ /api/isbn/{isbn} ---------------- */
+  function testIsbn() {
+    var tok = $('tok').value.trim();
+    var isbn = $('isbnIn').value.replace(/[^0-9Xx]/g, '').toUpperCase();
+    $('isbnBox').style.display = 'block';
+    if (!tok) { badge($('isbnBadge'), 'bad', '先在上面 ② 里填令牌'); return; }
+    if (!isbn) { badge($('isbnBadge'), 'bad', 'ISBN 不能为空'); return; }
+
+    $('isbnBtn').disabled = true;
+    $('isbnOut').style.display = 'none';
+    $('isbnBody').innerHTML = '';
+    badge($('isbnBadge'), 'wait', '查询中…');
+
+    fetch('/api/isbn/' + encodeURIComponent(isbn), {
+      cache: 'no-store',
+      headers: { authorization: 'Bearer ' + tok },
+    })
+      .then(function (r) { return r.text().then(function (t) { return { s: r.status, t: t }; }); })
+      .then(function (res) {
+        var j = null;
+        try { j = JSON.parse(res.t); } catch (e) {}
+
+        if (res.s === 401) {
+          badge($('isbnBadge'), 'bad', '令牌不对（401）');
+          showPre($('isbnOut'), res.t);
+          return;
+        }
+        if (res.s === 404) {
+          badge($('isbnBadge'), 'bad', '接口不存在（404）');
+          $('isbnBody').innerHTML =
+            '<p class="hint">这个接口是后加的 —— 说明项目还没<strong>重新部署</strong>。'
+            + '把 <code>cloud/pages-upload/</code> 里那两个文件再拖一次就行。</p>';
+          showPre($('isbnOut'), res.t);
+          return;
+        }
+        if (res.s !== 200 || !j || !j.ok) {
+          badge($('isbnBadge'), 'bad', '失败（HTTP ' + res.s + '）');
+          showPre($('isbnOut'), res.t);
+          return;
+        }
+        if (!j.found) {
+          /* 接口通、只是这本书 OpenLibrary 没有 —— 不算部署问题 */
+          badge($('isbnBadge'), 'wait', '接口通了，但这本书没查到');
+          $('isbnBody').innerHTML =
+            '<p class="hint">能走到这一步就说明<strong>部署是成功的</strong>，'
+            + '只是 OpenLibrary 没有这本。换个 ISBN 再试。</p>';
+          showPre($('isbnOut'), res.t);
+          return;
+        }
+
+        var b = j.book;
+        badge($('isbnBadge'), 'ok', '通了 ✅');
+        var h = '<table><tbody>'
+          + '<tr><td>书名</td><td>' + esc(b['名称']) + '</td></tr>'
+          + '<tr><td>作者</td><td>' + esc(b['作者'] || '—') + '</td></tr>'
+          + '<tr><td>出版社</td><td>' + esc(b['出版社'] || '—') + '</td></tr>'
+          + '<tr><td>出版年</td><td>' + esc(b['出版年'] || '—') + '</td></tr>'
+          + '<tr><td>来源</td><td>' + esc(b._src || '—') + '</td></tr>'
+          + '</tbody></table>';
+        if (b['封面']) {
+          /* 这张图走的是 /api/isbn-cover 中转。能显示出来 = 封面代理也通了。
+             注意这里【不带令牌】，因为 <img> 根本没法带 Authorization 头 ——
+             所以服务端刻意把 /api/isbn-cover 放行、不校验令牌。 */
+          h += '<p class="hint">封面中转的实拍（能显示就说明封面代理也通了）：</p>'
+            + '<img alt="封面" style="max-height:210px;border:1px solid var(--line);'
+            + 'border-radius:8px" src="' + esc(b['封面']) + '">';
+        } else {
+          h += '<p class="hint">这本没有封面图。</p>';
+        }
+        $('isbnBody').innerHTML = h;
+      })
+      .catch(function (e) {
+        badge($('isbnBadge'), 'bad', '连不上 ❌');
+        showPre($('isbnOut'), '请求失败：' + (e && e.message ? e.message : e));
+      })
+      .then(function () { $('isbnBtn').disabled = false; });
+  }
+
+  $('isbnBtn').addEventListener('click', testIsbn);
+  $('isbnIn').addEventListener('keydown', function (e) { if (e.key === 'Enter') testIsbn(); });
+
+  /* ---------------- 显示/隐藏令牌 ---------------- */
+  $('showBtn').addEventListener('click', function () {
+    var el = $('tok');
+    var hidden = el.type === 'password';
+    el.type = hidden ? 'text' : 'password';
+    this.textContent = hidden ? '隐藏' : '显示';
+  });
+
+  /* ---------------- 自动跑第一项 ---------------- */
+  ping();
+})();
+</script>
+</body>
+</html>

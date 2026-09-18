@@ -83,10 +83,24 @@ export default {
       return json({ ok: true, service: 'life-desk-sync', time: Date.now() });
     }
 
-    const needAuth = p.startsWith('/api/sync')
+    /* 需要认证的路径前缀。
+       ⚠️ 2026-09-18 修 bug：这里原来漏了 /api/stats，而 REQUIRE_READ_AUTH = true
+       本意是「读也要令牌」，结果 /api/stats 完全裸奔 —— 任何人知道地址就能读到
+       总条数和各模块条数。已补上。
+       注意：/api/img-batch 是靠 '/api/img' 这个前缀覆盖到的，别把它拆成单独一项。
+
+       ⚠️ /api/isbn-cover/* 刻意【不要】认证：
+         封面是公开图片，而且必须能被 <img src> 和普通 fetch 直接取用 ——
+         这两种请求都带不了 Authorization 头，一加认证，所有封面会全裂成 401。
+         「不许当开放代理」这件事由「id 必须是纯数字」的校验兜住，不靠认证。
+         （/api/isbn 查书本身仍然要令牌，因为会消耗上游配额。） */
+    const needAuth = (p.startsWith('/api/sync')
       || p.startsWith('/api/records')
       || p.startsWith('/api/img')
-      || p.startsWith('/api/meta');
+      || p.startsWith('/api/meta')
+      || p.startsWith('/api/stats')
+      || p.startsWith('/api/isbn'))
+      && !p.startsWith('/api/isbn-cover');
     if (needAuth && !(REQUIRE_READ_AUTH ? authorized(request, env) : (request.method === 'GET' || authorized(request, env)))) {
       return fail('unauthorized', 401);
     }
@@ -161,6 +175,68 @@ export default {
         ).bind(id, module, cat, data, rev, now, device).run();
 
         return json({ ok: true, id, rev, updated_at: now });
+      }
+
+      /* ================= 记录：批量上传（桌面端全量/增量同步走这里） =================
+       *
+       * 为什么需要它：逐条 POST /api/records 的话，1414 条记录要发 1414 个请求，
+       * 又慢又脆（中途断一次得重来）。这里用 D1 的 batch() 一次写多条。
+       *
+       * 两个刻意的设计：
+       *   1) rev 用 `records.rev + 1` 在 SQL 里自增，而不是先 SELECT 再累加。
+       *      省一次查询，也避开「单查询最多 100 个绑定参数」的限制
+       *      （如果先 SELECT ... WHERE id IN (?,?,...)，100 条就正好顶到上限）。
+       *   2) 每条语句 6 个参数，服务端单次上限 100 条 —— 客户端按 50 条分块发，
+       *      双保险，任何一边改坏了另一边还能兜住。
+       *
+       * body: { records:[{id,module,cat,data}], deletes:["id1","id2"], device }
+       */
+      if (p === '/api/records-batch' && request.method === 'POST') {
+        const body = await request.json().catch(() => null);
+        if (!body) return fail('请求体不是合法 JSON');
+
+        const MAX_ONE_CALL = 100;
+        const list = Array.isArray(body.records) ? body.records.slice(0, MAX_ONE_CALL) : [];
+        const del = Array.isArray(body.deletes) ? body.deletes.slice(0, MAX_ONE_CALL) : [];
+        if (!list.length && !del.length) {
+          return json({ ok: true, saved: 0, deleted: 0, updated_at: Date.now() });
+        }
+
+        for (const r of list) {
+          if (!r || !r.id) return fail('每条记录都需要 id');
+        }
+
+        const now = Date.now();
+        const device = String(body.device || 'unknown').slice(0, 40);
+        const stmts = [];
+
+        for (const r of list) {
+          stmts.push(env.DB.prepare(
+            `INSERT INTO records (id, module, cat, data, rev, updated_at, deleted, device)
+             VALUES (?, ?, ?, ?, 1, ?, 0, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               module = excluded.module, cat = excluded.cat, data = excluded.data,
+               rev = records.rev + 1, updated_at = excluded.updated_at,
+               deleted = 0, device = excluded.device`
+          ).bind(
+            String(r.id),
+            String(r.module || 'collection'),
+            r.cat == null ? null : String(r.cat),
+            JSON.stringify(r.data || {}),
+            now, device
+          ));
+        }
+
+        /* 删除也走同一批：软删除，让别的设备知道「这条没了」 */
+        for (const id of del) {
+          stmts.push(env.DB.prepare(
+            `UPDATE records SET deleted = 1, rev = rev + 1, updated_at = ?, device = ?
+             WHERE id = ?`
+          ).bind(now, device, String(id)));
+        }
+
+        await env.DB.batch(stmts);
+        return json({ ok: true, saved: list.length, deleted: del.length, updated_at: now });
       }
 
       /* ================= 记录：字段级合并（手机端轻量改走这里） ================= */
@@ -284,6 +360,136 @@ export default {
         return json({ ok: true, uploaded: ok, failed });
       }
 
+      /* ================= ISBN 查书（服务端代查） =================
+       *
+       * 为什么必须放在服务端：
+       *   openlibrary.org / covers.openlibrary.org / r.jina.ai 在国内全部被
+       *   DNS 污染（解析成 face:b00c 那个假 IP），直连和代理两条路都不通。
+       *   Cloudflare 不在墙内，从这里 fetch 完全正常。
+       *   → 这一步顺便把电脑端那个坏掉的查书功能也修好了。
+       *
+       * 返回结构刻意和客户端 lookupBookByISBN 一致（中文键），才能直接替换：
+       *   { ISBN, _src, 名称, 作者, 出版社, 出版年, 封面 }
+       * 「封面」指向我们自己的 /api/isbn-cover/{id}，因为 covers.openlibrary.org
+       * 同样被墙，直接给原地址的话图片加载不出来。
+       *
+       * 三个数据源依次兜底：/api/books（一次带全）→ /isbn/{isbn}.json → /search.json
+       */
+      if (p.startsWith('/api/isbn/') && request.method === 'GET') {
+        const isbn = normIsbn(decodeURIComponent(p.slice('/api/isbn/'.length)));
+        if (!isbn) return fail('ISBN 不合法（应为 10 位或 13 位）');
+
+        const self = url.origin;
+        const book = { ISBN: isbn, _src: '', 名称: '', 作者: '', 出版社: '', 出版年: '', 封面: '' };
+        let coverId = '';
+        const errs = [];
+
+        async function ol(url2) {
+          try {
+            const r = await fetch(url2, {
+              headers: { Accept: 'application/json', 'User-Agent': 'life-desk-sync/1.0' },
+              cf: { cacheTtl: 86400, cacheEverything: true },
+            });
+            if (!r.ok) { errs.push('HTTP ' + r.status); return null; }
+            return await r.json();
+          } catch (e) {
+            errs.push(String(e && e.message ? e.message : e));
+            return null;
+          }
+        }
+        function year(v) { const m = String(v || '').match(/\d{4}/); return m ? m[0] : ''; }
+
+        /* ① /api/books?bibkeys —— 一次就带回书名/作者/出版社/年份/封面 */
+        const bk = await ol('https://openlibrary.org/api/books?bibkeys=ISBN:' + isbn + '&format=json&jscmd=data');
+        const one = bk && bk['ISBN:' + isbn];
+        if (one) {
+          book.名称 = String(one.title || '').trim();
+          if (one.authors && one.authors.length) {
+            book.作者 = one.authors.map((a) => String((a && a.name) || '').trim()).filter(Boolean).join(' / ');
+          }
+          if (one.publishers && one.publishers.length) book.出版社 = String((one.publishers[0] || {}).name || '').trim();
+          book.出版年 = year(one.publish_date);
+          if (one.cover) coverId = coverIdOf(one.cover.large || one.cover.medium || '');
+          if (book.名称) book._src = 'Open Library';
+        }
+
+        /* ② 兜底：edition 记录。作者挂在 work 上，要再查一次 */
+        if (!book.名称) {
+          const ed = await ol('https://openlibrary.org/isbn/' + isbn + '.json');
+          if (ed && ed.title) {
+            book.名称 = String(ed.title).trim();
+            if (ed.publishers && ed.publishers.length) book.出版社 = String(ed.publishers[0]).trim();
+            book.出版年 = year(ed.publish_date);
+            if (ed.covers && ed.covers.length) coverId = String(ed.covers[0]);
+            book._src = 'Open Library';
+            const wk = ed.works && ed.works[0] && ed.works[0].key;
+            if (wk) {
+              const w = await ol('https://openlibrary.org' + wk + '.json');
+              const keys = ((w && w.authors) || [])
+                .map((a) => a && a.author && a.author.key).filter(Boolean).slice(0, 3);
+              if (keys.length) {
+                const names = await Promise.all(keys.map((k) =>
+                  ol('https://openlibrary.org' + k + '.json').then((a) => a && a.name)));
+                book.作者 = names.filter(Boolean).join(' / ');
+              }
+            }
+          }
+        }
+
+        /* ③ 再兜底：全文搜索（命中率略高，但字段少） */
+        if (!book.名称) {
+          const sr = await ol('https://openlibrary.org/search.json?q=isbn:' + isbn
+            + '&fields=title,author_name,publish_date,publisher,cover_i&limit=1');
+          const doc = sr && sr.docs && sr.docs[0];
+          if (doc && doc.title) {
+            book.名称 = String(doc.title).trim();
+            book.作者 = (doc.author_name || []).slice(0, 3).join(' / ');
+            book.出版社 = (doc.publisher && doc.publisher[0]) || '';
+            book.出版年 = year(doc.publish_date);
+            if (doc.cover_i) coverId = String(doc.cover_i);
+            book._src = 'Open Library 搜索';
+          }
+        }
+
+        if (!book.名称) {
+          /* 查不到不算错误（很多中文书 OpenLibrary 确实没有），但把上游报错带回去便于排查 */
+          return json({ ok: true, found: false, isbn, book: null, upstream: errs.slice(0, 3) });
+        }
+        if (coverId) book.封面 = self + '/api/isbn-cover/' + coverId;
+        return json({ ok: true, found: true, book });
+      }
+
+      /* ================= 封面中转 =================
+       * covers.openlibrary.org 同样被墙，所以图片也由服务端代取。
+       * id 只允许纯数字 —— 否则这就成了一个「任意 URL 代理」，
+       * 别人能拿它去刷任意地址，属于必须堵掉的口子。
+       */
+      if (p.startsWith('/api/isbn-cover/') && request.method === 'GET') {
+        const id = decodeURIComponent(p.slice('/api/isbn-cover/'.length));
+        if (!/^\d{1,12}$/.test(id)) return fail('封面 id 必须是数字');
+        try {
+          const r = await fetch('https://covers.openlibrary.org/b/id/' + id + '-L.jpg', {
+            headers: { Accept: 'image/*' },
+            cf: { cacheTtl: 604800, cacheEverything: true },
+          });
+          if (!r.ok) return fail('封面不存在', 404);
+          /* OpenLibrary 对没有封面的书会返回一张 1x1 占位图，且状态码是 200。
+             靠体积挡掉，免得占位图被当成真封面存进记录。 */
+          const len = Number(r.headers.get('content-length') || 0);
+          if (len && len < 1000) return fail('封面不存在（占位图）', 404);
+          return new Response(r.body, {
+            status: 200,
+            headers: {
+              'content-type': r.headers.get('content-type') || 'image/jpeg',
+              'cache-control': 'public, max-age=604800',
+              'access-control-allow-origin': '*',
+            },
+          });
+        } catch (e) {
+          return fail('取封面失败：' + (e && e.message ? e.message : e), 502);
+        }
+      }
+
       return fail('未知接口：' + p, 404);
     } catch (e) {
       return json({ ok: false, error: String(e && e.message ? e.message : e) }, 500);
@@ -295,4 +501,20 @@ function safeParse(s) {
   if (s == null) return null;
   if (typeof s !== 'string') return s;
   try { return JSON.parse(s); } catch (e) { return null; }
+}
+
+/* ISBN 归一化 + 校验。客户端传什么都不该信，服务端必须自己再校验一遍。
+   去掉横杠和空格，10 位（末位可能是 X）和 13 位都收。 */
+function normIsbn(s) {
+  const t = String(s == null ? '' : s).replace(/[^0-9Xx]/g, '').toUpperCase();
+  if (t.length === 13) return /^\d{13}$/.test(t) ? t : '';
+  if (t.length === 10) return /^\d{9}[\dX]$/.test(t) ? t : '';
+  return '';
+}
+
+/* 从 covers.openlibrary.org 的地址里抠出封面 id：
+   https://covers.openlibrary.org/b/id/11973290-L.jpg → "11973290" */
+function coverIdOf(u) {
+  const m = String(u || '').match(/\/b\/id\/(\d+)/);
+  return m ? m[1] : '';
 }

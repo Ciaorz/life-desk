@@ -2766,6 +2766,312 @@ function updateToTop(){
   var sh=Math.max((de && de.scrollHeight) || 0, (bd && bd.scrollHeight) || 0);
   t.classList.toggle('show', sh > vh + 8);
 }
+/* ============================================================
+ * v102：云同步（Cloudflare Pages + D1）
+ * ------------------------------------------------------------
+ * 和上面的「GitHub 数据同步」是两条独立的路，各管各的：
+ *   · GitHub 那条 = 手机端的数据来源（静态文件，推完等约 1 分钟生效）
+ *   · 云同步这条  = 真正的增量同步（只推改过的，秒级生效）
+ *
+ * 设计要点（都是刻意的，改之前先想清楚）：
+ *
+ *   1) 只推「改过的」。每条记录都有 _upd（最后修改毫秒，三条写入路径
+ *      localUpsert / patchRow / patchRowFields 都会自动刷新），拿它跟一条
+ *      水位线比。水位线为 0 时自然就是全量，不用单独写一套全量逻辑。
+ *
+ *   2) 水位线取「收集之前」的时间戳，绝不能等到确认框点完再取。
+ *      反例：收集 → 弹确认框（用户看几十秒）→ t0=now。这期间改动的记录既没被
+ *      收集、_upd 又小于 t0，落在新水位线以下 → 永远推不上去 → 静默丢数据。
+ *      先取 t0 则最坏只是重复推一次（无害）。**宁可多推，不可漏推。**
+ *
+ *   3) 删除走软删除，对应本地墓碑 localStorage['lifedesk_tombstones']。
+ *
+ *   4) 优先用批量接口 /api/records-batch（一次 50 条，1414 条只要 29 个请求）。
+ *      万一服务器还是老版本没这个接口，自动退回逐条 POST，不让用户卡死。
+ *
+ *   5) 只做「上传」。下载（云 → 本地）要处理字段级合并，等上传稳了再做，
+ *      不然两头同时改会互相覆盖。所以这里绝不碰本地数据，只读不写。
+ * ============================================================ */
+
+var CLOUD_KEY = 'lifedesk_cloud';        /* 配置：{apiBase, token}，仅存本机 */
+var CLOUD_WM_KEY = 'lifedesk_cloud_wm';  /* 水位线：上次成功上传的时间点 */
+var CLOUD_DEFAULT_BASE = 'https://life-desk-api.pages.dev';
+var _cloudBusy = false;
+
+function cloudConfig(){
+  try { return JSON.parse(localStorage.getItem(CLOUD_KEY) || 'null') || {}; }
+  catch(e){ return {}; }
+}
+function setCloudConfig(cfg){
+  try { localStorage.setItem(CLOUD_KEY, JSON.stringify(cfg || {})); } catch(e){}
+}
+function cloudWatermark(){
+  try { return Number(localStorage.getItem(CLOUD_WM_KEY) || 0) || 0; } catch(e){ return 0; }
+}
+function setCloudWatermark(t){
+  try { localStorage.setItem(CLOUD_WM_KEY, String(t)); } catch(e){}
+}
+function cloudBase(){
+  var c = cloudConfig();
+  return String(c.apiBase || CLOUD_DEFAULT_BASE).trim().replace(/\/+$/, '');
+}
+function cloudToken(){
+  var c = cloudConfig();
+  return String(c.token || '').trim();
+}
+/* 面板里那行状态文字 */
+function cloudStatus(msg, color){
+  var el = $('cloudStatus');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.color = color || '#666';
+}
+
+/* 一个带超时的 JSON 请求小工具。不用 fetchWithTimeout 是因为那个只支持 GET。 */
+function cloudFetch(base, tok, path, opts){
+  opts = opts || {};
+  var init = {
+    method: opts.method || 'GET',
+    cache: 'no-store',
+    headers: { 'Authorization': 'Bearer ' + tok }
+  };
+  if (opts.body != null){
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(opts.body);
+  }
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = null;
+  if (ctrl){
+    init.signal = ctrl.signal;
+    timer = setTimeout(function(){ try { ctrl.abort(); } catch(e){} }, opts.timeout || 30000);
+  }
+  function done(){ if (timer) { clearTimeout(timer); timer = null; } }
+  return fetch(base + path, init).then(function(res){
+    done();
+    return res.text().then(function(t){
+      var j = null;
+      try { j = JSON.parse(t); } catch(e){}
+      return { status: res.status, ok: res.ok, json: j, text: t };
+    });
+  }, function(err){
+    done();
+    throw err;
+  });
+}
+
+/* 收集「需要上传的东西」。只读，不动任何本地数据。 */
+function cloudCollect(force){
+  var wm = force ? 0 : cloudWatermark();
+  var snap = snapshotAll();
+  var pending = [];
+  Object.keys(snap).forEach(function(mk){
+    (snap[mk] || []).forEach(function(r){
+      if (!r || r._id == null) return;
+      if (!force && !(Number(r._upd) > wm)) return;
+      pending.push({
+        id: String(r._id),
+        module: mk,
+        cat: shardCatOf(mk, r),
+        data: r
+      });
+    });
+  });
+  var dels = [];
+  try {
+    var ts = JSON.parse(localStorage.getItem('lifedesk_tombstones') || '[]');
+    if (Array.isArray(ts)){
+      ts.forEach(function(t){
+        if (t && t.id != null && (force || Number(t.at) > wm)) dels.push(String(t.id));
+      });
+    }
+  } catch(e){}
+  return { pending: pending, dels: dels, wm: wm, force: !!force };
+}
+
+/* 测试连接：先 ping（不需要令牌），再 stats（需要令牌，会真读一次 D1） */
+async function cloudTest(){
+  var base = cloudBase(), tok = cloudToken();
+  if (!base){ cloudStatus('请先填 API 地址', '#e5484d'); return false; }
+  cloudStatus('正在测试…', '#3b6fd4');
+  try {
+    var p = await cloudFetch(base, tok, '/api/ping', { timeout: 15000 });
+    if (!p.ok || !p.json || !p.json.ok){
+      cloudStatus('✗ 服务连不上（HTTP ' + p.status + '）—— 检查 API 地址', '#e5484d');
+      return false;
+    }
+    if (!tok){ cloudStatus('⚠ 服务在线，但还没填令牌', '#c77700'); return false; }
+    var s = await cloudFetch(base, tok, '/api/stats', { timeout: 20000 });
+    if (s.status === 401){ cloudStatus('✗ 令牌不对（401）', '#e5484d'); return false; }
+    if (!s.ok || !s.json || !s.json.ok){
+      cloudStatus('✗ 读取失败（HTTP ' + s.status + '）' + (s.text ? ' ' + String(s.text).slice(0, 80) : ''), '#e5484d');
+      return false;
+    }
+    var n = Number(s.json.total) || 0;
+    cloudStatus('✓ 通了。云端现有 ' + n + ' 条记录' + (s.json.lastUpdate ? '（最后更新 ' + new Date(s.json.lastUpdate).toLocaleString() + '）' : ''), '#1a7f37');
+    return true;
+  } catch(e){
+    cloudStatus('✗ 请求失败：' + (e && e.message ? e.message : e), '#e5484d');
+    return false;
+  }
+}
+
+/* 一个「两种结果都会返回」的确认框。
+   不用现成的 askConfirm 是因为它有两个坑：① 回调式，② 点「再想想」时
+   不回调 —— 拿 await 等它的话，用户一取消就永远挂住。
+   这里自己写个 Promise 版，取消也会 resolve(false)。
+   消息会被 esc() 转义，所以只能传纯文本，不能塞 HTML。 */
+function cloudAsk(title, msg, yesLabel){
+  return new Promise(function(resolve){
+    var ov = document.createElement('div');
+    ov.className = 'backdrop';
+    ov.style.zIndex = 300;
+    ov.innerHTML = '<div class="sheet"><div class="sheet-head"><div><p>确认</p><h2>' + esc(title) + '</h2></div>'
+      + '<button class="x" type="button" data-x="1">×</button></div>'
+      + '<p style="font-size:13.5px;line-height:1.8;color:var(--muted);white-space:pre-line">' + esc(msg) + '</p>'
+      + '<div class="sheet-actions"><button class="btn ghost" type="button" data-x="1">再想想</button>'
+      + '<button class="btn primary" type="button" id="cloudYes" style="background:#3b6fd4">' + esc(yesLabel || '确定') + '</button></div></div>';
+    document.body.appendChild(ov);
+    var settled = false;
+    function done(v){
+      if (settled) return;
+      settled = true;
+      if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+      resolve(v);
+    }
+    ov.querySelectorAll('[data-x]').forEach(function(n){ n.onclick = function(){ done(false); }; });
+    ov.onclick = function(e){ if (e.target === ov) done(false); };
+    var yb = ov.querySelector('#cloudYes');
+    if (yb) yb.onclick = function(){ done(true); };
+  });
+}
+
+/* 上传。force=true 时忽略水位线，全量重传。 */
+async function cloudUpload(force){
+  if (_cloudBusy){ toast('正在上传中，请稍候'); return; }
+  var base = cloudBase(), tok = cloudToken();
+  if (!base || !tok){ toast('请先填好 API 地址和令牌'); return; }
+
+  /* ⚠️ 水位线必须在「收集之前」取，不能等确认框点完再取。
+     原来写成 cloudCollect() → 弹确认框 → t0=Date.now()，中间隔着用户看确认框的
+     几十秒。这期间被改动的记录：既没被收集（改在收集之后），_upd 又小于 t0
+     （落在新水位线以下）→ 下次永远收集不到 → **静默丢数据**。
+     先取 t0 则相反：收集完才发现的新记录 _upd > t0，下次会再推一次（重复无害），
+     而漏推是不可接受的。宁可多推，不可漏推。 */
+  var t0 = Date.now();
+
+  var col = cloudCollect(force);
+  var pending = col.pending, dels = col.dels;
+  if (!pending.length && !dels.length){ toast('没有需要上传的改动'); return; }
+
+  var msg = '要上传 ' + pending.length + ' 条记录'
+    + (dels.length ? '，删除 ' + dels.length + ' 条' : '') + '。\n\n'
+    + '只会读取本地数据，不会改动你电脑上的任何东西。';
+  if (force) msg = '【全量】' + msg;
+  if (!(await cloudAsk(force ? '全量上传到云' : '上传到云', msg, '开始上传'))) return;
+
+  _cloudBusy = true;
+  var total = pending.length;
+  var done = 0, failed = [];
+  var CHUNK = 50;
+  var useBatch = true;
+  var lastErr = '';
+
+  function prog(){
+    cloudStatus('正在上传 ' + done + ' / ' + total + ' 条…'
+      + (failed.length ? '（失败 ' + failed.length + '）' : ''), '#3b6fd4');
+  }
+  prog();
+
+  try {
+    var i = 0;
+    while (i < total){
+      var chunk = pending.slice(i, i + CHUNK);
+      var isLast = (i + CHUNK >= total);
+      var chunkDels = isLast ? dels : [];
+
+      if (useBatch){
+        var res = null, threw = null;
+        try {
+          res = await cloudFetch(base, tok, '/api/records-batch', {
+            method: 'POST', timeout: 90000,
+            body: { records: chunk, deletes: chunkDels, device: 'desktop' }
+          });
+        } catch(e){ threw = e; }
+
+        if (threw){
+          /* 网络层失败：重试一次，还不行就整批中止（退化成 50 个单条只会更糟） */
+          try {
+            res = await cloudFetch(base, tok, '/api/records-batch', {
+              method: 'POST', timeout: 90000,
+              body: { records: chunk, deletes: chunkDels, device: 'desktop' }
+            });
+            threw = null;
+          } catch(e2){
+            lastErr = '网络中断：' + (e2 && e2.message ? e2.message : e2);
+            break;
+          }
+        }
+
+        if (res && (res.status === 404 || res.status === 405)){
+          /* 服务器还是老版本，没有批量接口 → 从头退回逐条模式 */
+          useBatch = false;
+          continue;                        /* 不推进 i，用单条模式重做这一批 */
+        }
+
+        if (res && res.ok && res.json && res.json.ok){
+          done += (Number(res.json.saved) || 0);
+          i += CHUNK;
+          prog();
+          continue;
+        }
+
+        lastErr = '服务器返回 HTTP ' + (res ? res.status : '?')
+          + (res && res.text ? '：' + String(res.text).slice(0, 100) : '');
+        break;
+      }
+
+      /* ---- 单条模式（服务器没有批量接口时的退路） ---- */
+      for (var k = 0; k < chunk.length; k++){
+        try {
+          var r1 = await cloudFetch(base, tok, '/api/records', {
+            method: 'POST', timeout: 30000, body: chunk[k]
+          });
+          if (r1.ok && r1.json && r1.json.ok) done++; else failed.push(chunk[k].id);
+        } catch(e3){ failed.push(chunk[k].id); }
+        if ((k % 10) === 9) prog();
+      }
+      if (isLast && chunkDels.length){
+        for (var d = 0; d < chunkDels.length; d++){
+          try {
+            var rd = await cloudFetch(base, tok, '/api/records/' + encodeURIComponent(chunkDels[d]), { method: 'DELETE', timeout: 20000 });
+            if (!rd.ok && rd.status !== 404) failed.push('删除:' + chunkDels[d]);
+          } catch(e4){ failed.push('删除:' + chunkDels[d]); }
+        }
+      }
+      i += CHUNK;
+      prog();
+    }
+  } catch(e){
+    lastErr = String(e && e.message ? e.message : e);
+  } finally {
+    _cloudBusy = false;
+  }
+
+  /* ---- 收尾：水位线只在「没有硬失败」时推进，否则下次还得重推 ---- */
+  var hardFail = !!lastErr;
+  if (!hardFail && failed.length === 0){
+    setCloudWatermark(t0);
+    cloudStatus('✓ 上传完成：' + done + ' 条' + (dels.length ? '，删除 ' + dels.length + ' 条' : ''), '#1a7f37');
+    toast('☁ 上传完成：' + done + ' 条' + (useBatch ? '' : '（逐条模式）'));
+  } else {
+    cloudStatus('✗ 上传中断：成功 ' + done + ' / ' + total + ' 条'
+      + (failed.length ? '，失败 ' + failed.length + ' 条' : '')
+      + (lastErr ? '。' + lastErr : '') + '（水位线未推进，下次会重推）', '#e5484d');
+    toast('☁ 上传中断：成功 ' + done + ' 条' + (lastErr ? '，' + lastErr : ''));
+  }
+  if (!useBatch) cloudStatus((($('cloudStatus') || {}).textContent || '') + '｜本次用了逐条模式，建议重新部署 Pages 以启用批量接口', '#c77700');
+}
+
 function addDataTools(){
   if ($('dataTools')) return;
   var box = document.createElement('div');
@@ -2841,6 +3147,29 @@ function addDataTools(){
   p.id = 'ghPanel';
   p.innerHTML =
     '<div style="font-weight:700;margin-bottom:8px">⚙ 同步设置</div>' +
+    /* ── 折叠 0：云同步（Cloudflare Pages + D1）──
+       放在最前面，因为它是真正的增量通道（秒级）；下面那条 GitHub 是
+       手机端的数据来源（静态文件，推完要等约 1 分钟），两者职责不同。 */
+    '<div class="sync-sec">' +
+      '<div class="sync-hd" data-sync-toggle="syncBodyCloud">☁ 云同步（Cloudflare）<span class="sync-arrow">▸</span></div>' +
+      '<div class="sync-bd" id="syncBodyCloud" style="display:none">' +
+        '<label style="display:block;margin:4px 0">API 地址' +
+          '<input id="cloudApiBase" type="text" autocomplete="off" placeholder="' + CLOUD_DEFAULT_BASE + '" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+        '<label style="display:block;margin:4px 0">令牌 SYNC_TOKEN（仅存本机）' +
+          '<input id="cloudToken" type="password" autocomplete="new-password" style="width:100%;box-sizing:border-box;background:#fafafa;color:#111;border:1px solid #ccc"></label>' +
+        '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' +
+          '<button type="button" id="cloudSaveTest" style="padding:7px 12px;border:0;border-radius:7px;background:#3b6fd4;color:#fff;cursor:pointer;font-size:12px">保存并测试</button>' +
+          '<button type="button" id="cloudUploadBtn" style="padding:7px 12px;border:1px solid #2f7a5a;border-radius:7px;background:#2f7a5a;color:#fff;cursor:pointer;font-size:12px">上传</button>' +
+          '<button type="button" id="cloudFullBtn" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">全量上传</button>' +
+        '</div>' +
+        '<div id="cloudStatus" style="margin-top:8px;font-size:11px;line-height:1.6;color:#666"></div>' +
+        '<div style="font-size:10px;color:#888;line-height:1.6;margin-top:6px">' +
+          '「上传」只推<b>改过的</b>记录（按每条记录的最后修改时间判断），所以第一次点就等于全量。' +
+          '「全量上传」忽略判断、把所有记录重推一遍（数据对不上时用）。' +
+          '<br>这条通道<b>只上传</b>，绝不改动本地数据。手机上想看新内容，仍然要靠下面的 GitHub 通道推一次。' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
     /* ── 折叠 1：GitHub 数据同步（默认收起，可各自独立展开） ── */
     '<div class="sync-sec">' +
       '<div class="sync-hd" data-sync-toggle="syncBodyGh">GitHub 数据同步<span class="sync-arrow">▸</span></div>' +
@@ -2956,6 +3285,25 @@ function addDataTools(){
       });
     }
   } catch(e){}
+  /* 云同步：回填配置 + 绑定三个按钮 */
+  try {
+    var _cc = cloudConfig();
+    $('cloudApiBase').value = _cc.apiBase || CLOUD_DEFAULT_BASE;
+    $('cloudToken').value = _cc.token || '';
+    var _wm = cloudWatermark();
+    cloudStatus(_wm
+      ? '上次上传：' + new Date(_wm).toLocaleString()
+      : '还没上传过。第一次点「上传」会把全部记录推上去。', '#666');
+  } catch(e){}
+  if ($('cloudSaveTest')) $('cloudSaveTest').onclick = function(){
+    var b = String($('cloudApiBase').value || '').trim().replace(/\/+$/, '');
+    var t = String($('cloudToken').value || '').trim();
+    if (!b){ cloudStatus('请先填 API 地址', '#e5484d'); return; }
+    setCloudConfig({ apiBase: b, token: t });
+    cloudTest();
+  };
+  if ($('cloudUploadBtn')) $('cloudUploadBtn').onclick = function(){ cloudUpload(false); };
+  if ($('cloudFullBtn'))   $('cloudFullBtn').onclick   = function(){ cloudUpload(true);  };
   $('ghClose').onclick = function(){ p.style.display = 'none'; };
   /* v75fix：同步设置三段折叠（GitHub / 高德地图 / 查书代理）——默认收起，
      点击标题各自独立展开，互不排斥（允许同时展开多个） */
@@ -10356,10 +10704,19 @@ function closeSheet(){ $('sheetHost').hidden=true; $('sheetHost').innerHTML=''; 
 /* ============ v49：手机扫码录入书籍（ISBN 条码 / 二维码）→ 查书自动填表 ============ */
 function normIsbn(s){
   s=String(s||'').replace(/[\s-]/g,'').toUpperCase();
-  if (/^\d{10}$/.test(s)){
-    var sum=0; for(var i=0;i<9;i++) sum+=(i+1)*parseInt(s.charAt(i),10);
-    var c=(11-(sum%11))%11, check=(c===10?'X':String(c));
-    s='978'+s.slice(0,9)+check;
+  if (/^\d{9}[\dX]$/.test(s)){
+    /* 10 位 → 13 位：加 978 前缀，再按 ISBN-13 的加权规则(1,3,1,3…)重算校验位。
+       ⚠️ 2026-09-18 一次修掉这里两个 bug：
+       (a) 原来把 ISBN-10 的 mod 11 校验位直接当成第 13 位
+           （`s='978'+s.slice(0,9)+check`）—— 两套校验算法完全不同，算出来几乎必然
+           是错的，手输 10 位老书号永远查不到书。例：0306406152 原来转成
+           9780306406159（错），正确是 9780306406157。
+       (b) 原来的判断是 /^\d{10}$/，要求十位**全是数字**，于是末位是 X 的
+           ISBN-10（约每 11 本就有 1 本）直接返回空串、连查都不查。
+           例：080442957X 现在能正确转成 9780804429573。 */
+    var body='978'+s.slice(0,9), sum=0;
+    for (var i=0;i<12;i++) sum+=parseInt(body.charAt(i),10)*((i%2)?3:1);
+    s=body+String((10-(sum%10))%10);
   }
   return /^\d{13}$/.test(s) ? s : '';
 }
@@ -10503,6 +10860,38 @@ function bookCacheSet(key, val){
     localStorage.setItem(BOOK_CACHE_KEY, JSON.stringify(m));
   }catch(e){}
 }
+/* ---------- v96：优先走自家的服务端查书（国内唯一能通的路径）----------
+   为什么需要它：openlibrary.org / covers.openlibrary.org / r.jina.ai 在国内
+   全部被 DNS 污染（解析成 face:b00c 那个假 IP），下面那条「豆瓣 + OpenLibrary
+   + 京东 + 芸台购」的长链在国内基本全军覆没。Cloudflare 不在墙内，由它代查就通了。
+   服务端还会把封面地址改写成 /api/isbn-cover/{id}，因为原地址同样加载不出来。
+
+   返回 true 表示「这次真发起了请求」，false 表示没配令牌/没配地址 → 直接走老链。
+   结果照样交给 done()，所以和别的源一样会被写进本地缓存。 */
+function cloudLookupBook(isbn, cb){
+  var base=cloudBase(), tok=cloudToken();
+  if (!base || !tok){ cb(null); return false; }    /* 没配就静默走老路，不打扰用户 */
+  cloudFetch(base, tok, '/api/isbn/'+encodeURIComponent(isbn), { timeout:15000 })
+    .then(function(res){
+      /* 接口还没部署（404）、令牌不对（401）、查无此书 → 一律 cb(null) 退回老链，
+         绝不在查书过程中弹错误，免得打断用户填表 */
+      if (!res.ok || !res.json || !res.json.found || !res.json.book){ cb(null); return; }
+      var b=res.json.book;
+      if (!b['名称']){ cb(null); return; }
+      /* 服务端返回的就是中文键，这里只是规整 + 补上来源标记 */
+      cb({
+        ISBN:   String(b.ISBN   || isbn).trim(),
+        名称:   String(b['名称']   || '').trim(),
+        作者:   String(b['作者']   || '').trim(),
+        出版社: String(b['出版社'] || '').trim(),
+        出版年: String(b['出版年'] || '').trim(),
+        封面:   String(b['封面']   || '').trim(),
+        _src:   String(b._src || '云同步')
+      });
+    })
+    .catch(function(){ cb(null); });   /* 超时/断网 → 退回老链 */
+  return true;
+}
 function lookupBookByISBN(isbn, cb){
   isbn=normIsbn(String(isbn||''));
   if (!isbn){ cb(null); return; }
@@ -10564,6 +10953,14 @@ function lookupBookByISBN(isbn, cb){
         lookupGB(isbn, done);      /* 兜底：Google Books（国内基本不可达，且常 429） */
       });
   }
+
+  /* v96：先把自家的服务端查书挂上去。国内这是唯一能通的源，而且它通常最快
+     （Cloudflare 直连 OpenLibrary，约 1s）。命中即 done；老的那一长串源照旧
+     并行跑，「谁先出结果谁赢」的规则不变 —— 在国外或挂梯子时，豆瓣仍可能先
+     返回更全的中文元数据，那也照样采用。 */
+  cloudLookupBook(isbn, function(b){
+    if (b && b['名称'] && !settled) done(b);
+  });
 
   /* v80：豆瓣与 Open Library ①② 并行启动 —— 中文书 Open Library 常查不到，
      原来要等 OL ①② 都回来才去问豆瓣（代理首访 13–20s），整体被拉长。

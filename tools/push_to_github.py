@@ -46,7 +46,12 @@ SKIP_DIRS = {'data/orig', 'images/_orig', '.workbuddy', '.workbuddy-ai',
 SKIP_PREFIX = ('data/_bak_', 'data/_legacy_')
 SKIP_FILES = {'debug.log', 'yun_probe.js', 'serve.js', 'data/lifedesk.backup.json',
               '推送清单.md', '云同步部署手册.md'}
-SKIP_RE = [re.compile(r'\.bak'), re.compile(r'^_.*\.(js|html)$'), re.compile(r'\.log$')]
+SKIP_RE = [re.compile(r'\.bak'), re.compile(r'^_.*\.(js|mjs|cjs|html)$'), re.compile(r'\.log$')]
+
+# 白名单：这些路径永不忽略（命中即跳过所有上面的排除规则）。
+# cloud/pages-upload 里的 _worker.js 是 Cloudflare 规定的固定文件名，
+# 会被 SKIP_RE 的 ^_.*\.(js|mjs|cjs|html)$ 误伤 —— 必须放行，否则线上部署会缺文件。
+KEEP_PREFIX = ('cloud/pages-upload',)
 
 DRY = True
 DELETE_ORPHANS = False
@@ -120,6 +125,15 @@ def blob_sha(data):
 
 def ignored(rel):
     rel = rel.replace('\\', '/')
+
+    # ---- 白名单：先于所有排除规则，命中就直接「不忽略」 ----
+    # 背景：SKIP_RE 里那条 ^_.*\.(js|html)$ 是为了过滤本机的临时文件，
+    # 但它会误伤 Cloudflare 规定的 _worker.js —— 那个文件名不能改，
+    # 而且它是 Pages 部署的核心产物，必须进仓库。
+    for k in KEEP_PREFIX:
+        if rel == k or rel.startswith(k + '/'):
+            return False
+
     if rel in SKIP_FILES:
         return True
     for d in SKIP_DIRS:
