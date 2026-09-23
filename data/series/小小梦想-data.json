@@ -1,0 +1,26 @@
+{
+  "schema": 2,
+  "cat": "series",
+  "module": "series",
+  "rows": [
+    {
+      "_id": "l_muebyljmsnfgc",
+      "系列名称": "小小梦想",
+      "所属IP": "宝可梦",
+      "目标数量": 0,
+      "系列封面": [
+        {
+          "imageUrl": "data/images/series/小小梦想-封面/小小梦想-小小梦想-0001.jpg",
+          "viewport": {
+            "s": 0.7,
+            "x": -4,
+            "y": -56.333333333333336
+          }
+        }
+      ],
+      "说明": null,
+      "_upd": 1790181718973,
+      "_rev": 2
+    }
+  ]
+}
