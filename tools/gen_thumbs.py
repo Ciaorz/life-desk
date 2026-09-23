@@ -94,7 +94,9 @@ def main():
 
             # 幂等：已存在且不比源旧就跳过
             if ONLY_MISSING:
-                skip = os.path.exists(out_path)      # 只要在就放过，哪怕比源旧
+                # ⚠️ 不能只判存在性：0 字节的空文件也会被当成「已有」永久跳过，
+                #    导致手机上永远少这张封面（且不报错）。存在且 >0 字节才算补齐。
+                skip = os.path.exists(out_path) and os.path.getsize(out_path) > 0
             elif force:
                 skip = False                          # 参数变了 → 全部重刷
             else:
