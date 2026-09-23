@@ -436,8 +436,8 @@
           }
         ],
         "短评": null,
-        "_upd": 1789699895277,
-        "_rev": 1
+        "_upd": 1790185842560,
+        "_rev": 3
       },
       {
         "_id": "l_mu3rsegbwir4d",
@@ -1554,7 +1554,8 @@
     "ip/罗小黑-data.json",
     "series/30周年151金属徽章-data.json",
     "series/30周年冰箱贴-data.json",
-    "series/ROAD TRIP-data.json",
+    "series/ROAD TRIP 第一弹-data.json",
+    "series/Road Trip 第二弹-data.json",
     "series/什么是你的最爱？-data.json",
     "series/喵职档案-data.json",
     "series/小小梦想-data.json",
@@ -1563,5 +1564,26 @@
     "series/绘梦点睛 04 30周年皮卡丘手办套装-data.json"
   ],
   "layoutVersion": 3,
-  "fieldLayout": {}
+  "fieldLayout": {},
+  "customFields": {
+    "collection": [
+      {
+        "k": "帽子类型",
+        "t": "select",
+        "o": [
+          "渔夫帽",
+          "棒球帽",
+          "针织帽"
+        ],
+        "ph": "",
+        "multi": false,
+        "after": "小类",
+        "w": 2,
+        "scope": {
+          "type": "sub",
+          "value": "帽子"
+        }
+      }
+    ]
+  }
 }
