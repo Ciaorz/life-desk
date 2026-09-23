@@ -1,0 +1,26 @@
+{
+  "schema": 2,
+  "cat": "series",
+  "module": "series",
+  "rows": [
+    {
+      "_id": "l_muebtlpadt1wn",
+      "系列名称": "什么是你的最爱？",
+      "所属IP": "宝可梦",
+      "目标数量": 0,
+      "系列封面": [
+        {
+          "imageUrl": "data/images/series/什么是你的最爱？-封面/什么是你的最爱？-什么是你的最爱？-0001.jpg",
+          "viewport": {
+            "s": 1,
+            "x": 0,
+            "y": 0
+          }
+        }
+      ],
+      "说明": null,
+      "_upd": 1790181463582,
+      "_rev": 1
+    }
+  ]
+}
