@@ -643,18 +643,22 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .grp h4{font:700 14px/1 "Songti SC",serif;color:var(--muted);letter-spacing:.1em;margin-bottom:10px;
   display:flex;align-items:center;gap:8px}
 .grp h4 i{font-style:normal;font-size:11px;color:#a1978a}
-.dtop{display:grid;grid-template-columns:112px 1fr;gap:16px;margin-bottom:18px}
-.dtop .ph{width:112px;aspect-ratio:3/4;border-radius:14px;background-size:cover;background-position:center;
+/* v107：改成 flex 布局，封面固定宽度、文字列 flex:1 且 min-width:0 可换行，
+   从根上杜绝「名字/状态压到图片上」的重叠（grid 在窄屏长标题下容易挤歪）。 */
+.dtop{display:flex;gap:16px;align-items:flex-start;margin-bottom:18px}
+.dtop .ph{flex:0 0 112px;width:112px;aspect-ratio:3/4;border-radius:14px;background-size:cover;background-position:center;
   box-shadow:0 10px 24px rgba(63,48,36,.14);display:flex;align-items:center;justify-content:center}
 .dtop .ph b{font:700 36px/1 "Songti SC",serif;color:rgba(255,255,255,.92)}
-.dtop h3{font:700 20px/1.3 "Songti SC",serif}
+.dtop .dtinfo{flex:1 1 auto;min-width:0}
+.dtop h3{font:700 20px/1.3 "Songti SC",serif;word-break:break-word}
 .dtop .meta{margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .buybox{padding:15px 16px;border-radius:16px;background:#f7f2ea;border:1px solid rgba(111,89,67,.1)}
 .buybox h4{margin:0 0 12px;font:700 13px/1 "Songti SC",serif;letter-spacing:.06em}
 /* v96k：收集进度 —— 标题与统计同一行（去掉 h4 的下边距造成的换行） */
 .procline{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .procline h4{margin:0}
-.buygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+/* v107：固定两列（一排放两个），避免窄屏占太多纵向空间；不再用 auto-fit 自动多列 */
+.buygrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .buygrid div u{display:block;text-decoration:none;color:var(--muted);font-size:10.5px;
   letter-spacing:.12em;margin-bottom:4px}
 .buygrid div b{font-size:14.5px;font-weight:650}
@@ -763,7 +767,8 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .wall{grid-template-columns:repeat(auto-fill,minmax(calc(112px * var(--cs)),1fr));gap:calc(14px * var(--cs))}
   /* v96k：手机端基准 126px / 12px，同样按 --cs 缩放（系列卡 / IP 卡） */
   .ipgrid,.ipseries-grid{grid-template-columns:repeat(auto-fill,minmax(calc(126px * var(--cs)),1fr));gap:calc(12px * var(--cs))}
-  .dtop{grid-template-columns:86px 1fr;gap:12px}
+  .dtop{gap:12px}
+  .dtop .ph{flex-basis:86px}
   .iphero{grid-template-columns:64px 1fr;gap:12px}
   .iphero .ph{width:64px;height:64px;border-radius:14px}
   .buygrid{grid-template-columns:1fr 1fr}
@@ -3299,10 +3304,12 @@ input.search{margin-bottom:12px}
   /* 超窄屏：每个 side 内 3 个展柜改 2 列，卡片更大更好点 */
   .museum-side{ grid-template-columns: repeat(2, 1fr); }
   .searchwrap{ min-width: 0; width: 100%; }
-  .buygrid{ grid-template-columns: 1fr; }
+  /* 购入信息：窄屏也保持两列，省纵向空间（之前被上面的 1fr 覆盖成单列，已修正） */
+  .buygrid{ grid-template-columns: 1fr 1fr; }
   .npdlg-row{ gap: 5px; }
   /* 详情卡的封面在窄屏占太多高度 */
-  .dtop{ grid-template-columns: 72px 1fr; }
+  .dtop{ gap: 10px; }
+  .dtop .ph{ flex-basis: 72px; }
   /* 按钮再缩小一点以适应超窄屏 */
   .musedit-bar .r-btn{ padding: 8px 14px; font-size: 12px; }
   .avhall .mh .r-btn{ padding: 8px 14px; font-size: 12px; }

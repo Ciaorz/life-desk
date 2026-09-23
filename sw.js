@@ -38,7 +38,13 @@
        会被丢掉；现在两者都存（'opaque' 仍然不存）。
    ⚠️ 线上 sw.js 曾被手工上传成 v104，所以这次直接跳到 v106 —— bump 前先查线上版本号，
       撞版本号 = 手机沿用旧缓存、先跑一遍旧 app.js。 */
-const CACHE = 'lifedesk-v106-2026-09-24';
+/* v107（2026-09-24）：app.js 修了 topbar ⟳「重新拉取」按钮 —— 清掉 _ghCache 后才会真正
+   从 Cloudflare 重新全量拉数据（之前被内存缓存短路，点 ⟳ 只是重渲染旧快照）。
+   ⚠️ 只动了 app.js，SW 自身缓存行为没变；bump 纯粹是为了让手机端装上新 app.js。 */
+/* v108（2026-09-24）：app.js + style.css 改了藏品详情页布局 —— .dtop 由 grid 改 flex
+   （封面固定宽、文字列 min-width:0 防重叠），buygrid 统一两列（购入信息一排放两个）。
+   ⚠️ 同理，SW 缓存行为没变，bump 只为让手机端装上新 css/js。 */
+const CACHE = 'lifedesk-v108-2026-09-24';
 
 /* v96m：图片单独放一个「不随版本清理」的缓存桶。
    以前图片和代码共用 CACHE，每次部署 bump 版本号，activate 会把图片一起删光，

@@ -9129,8 +9129,10 @@ document.addEventListener('click', function(ev){
     if (key==='collection' && ui.collection.selMode){ toggleSel(node.getAttribute('data-id')); return; }
     openItemDetail(key, node.getAttribute('data-id')); return;
   }
-  if (act==='reload'){ reloadOne(key); return; }
-  if (act==='reloadall'){ loadAll(); toast('正在重新拉取线上数据'); return; }
+  /* v106：清掉内存缓存再拉，否则 fetchAll 会因 _ghCache 已存在而直接返回旧快照、
+     不再打 Cloudflare。现在点 ⟳ 才会真正从云端重新拉取（gh 模式走 /api/sync?since=0）。 */
+  if (act==='reload'){ _ghCache=null; _ghLoading=null; reloadOne(key); return; }
+  if (act==='reloadall'){ _ghCache=null; _ghLoading=null; loadAll(); toast('正在重新拉取线上数据'); return; }
   /* v78：批量编辑 */
   if (act==='batchmode'){ ui.collection.selMode=!ui.collection.selMode; if(!ui.collection.selMode) ui.collection.sel={}; render(); return; }
   if (act==='batchselall'){
@@ -12485,7 +12487,7 @@ function openItemDetail(key, id){
     '</div></div>'+
     '<div class="dtop">'+
       '<div class="ph" style="'+coverStyle(row,title)+'">'+(hasCover(row)?'':'<b>'+esc(String(title).slice(0,1))+'</b>')+'</div>'+
-      '<div><h3>'+esc(title)+'</h3><div class="meta">'+statusPill(row['状态'])+
+      '<div class="dtinfo"><h3>'+esc(title)+'</h3><div class="meta">'+statusPill(row['状态'])+
         '<span class="pill s0">'+esc(cat)+(sub?' · '+esc(sub):'')+'</span>'+
         (num(row['星级'])?'<span class="stars">'+stars(row['星级'])+'</span>':'')+
         (ipName?'<span class="pill s2" data-gotoip="'+esc(ipName)+'" style="cursor:pointer">IP · '+esc(ipName)+'</span>':'')+
