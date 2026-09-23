@@ -3534,13 +3534,16 @@ function addDataTools(){
           '<button type="button" id="cloudFullPullBtn" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">全量下载</button>' +
         '</div>' +
         '<div id="cloudStatus" style="margin-top:8px;font-size:11px;line-height:1.6;color:#666;white-space:pre-line"></div>' +
+        '<div id="cloudSrcLine" style="margin-top:6px;font-size:11px;line-height:1.6;color:#666"></div>' +
         '<div style="font-size:10px;color:#888;line-height:1.6;margin-top:6px">' +
           '「上传」只推<b>改过的</b>记录（按每条记录的最后修改时间判断），所以第一次点就等于全量。' +
           '「全量上传」忽略判断、把所有记录重推一遍（数据对不上时用）。' +
           '<br>「下载」把云端<b>改过的</b>记录合并进本机；「全量下载」忽略判断、把云端全部记录拉下来对一遍。' +
           '<br>合并是<b>字段并集</b>：只有一边有的字段一律保留（手机改状态、电脑改价格互不影响）；' +
           '同一个字段被两边都改过才算冲突，冲突时较新的一方赢。本机独有的字段<b>永远不会被云端抹掉</b>，本机删过的也不会被复活。' +
-          '<br>上传和下载各自记一条水位线，互不干扰。手机上想看新内容，仍然要靠下面的 GitHub 通道推一次。' +
+          '<br>上传和下载各自记一条水位线，互不干扰。' +
+          '<br><b>手机端（含网页版）现在直接读 Cloudflare</b>：填好地址和令牌保存后，' +
+          '打开页面就会自动从云端取最新记录，不用再靠 GitHub 推一遍。' +
         '</div>' +
       '</div>' +
     '</div>' +
@@ -3672,6 +3675,8 @@ function addDataTools(){
       + '\n' + (_dl
       ? '上次下载：' + new Date(_dl).toLocaleString()
       : '还没下载过。第一次点「下载」会把云端全部记录合并进来。'), '#666');
+    /* 本次数据来源（cloud:N / gh / api）—— 单独一行，加载完成后由 setLoadSrc() 更新 */
+    try { cloudSrcLine(localStorage.getItem('lifedesk_load_src') || ''); } catch(e){}
   } catch(e){}
   if ($('cloudSaveTest')) $('cloudSaveTest').onclick = function(){
     var b = String($('cloudApiBase').value || '').trim().replace(/\/+$/, '');
@@ -5375,9 +5380,37 @@ function stripTombstoned(data){
   return data;
 }
 
-/* 诊断用：记下本次是从哪儿加载的（cloud:N / gh / api / cache），手机上排障用得上。 */
+/* 把「本次数据来自哪儿」写进 ☁ 面板那行小字。
+   为什么单独一个元素、而不是塞进 #cloudStatus：面板是在 afterBoot() 里、
+   早于 loadAll() 建好的，那时还不知道本次会走 Cloudflare 还是 GitHub。
+   #cloudStatus 会被 cloudTest/上传/下载反复整段重写，塞进去会被冲掉；
+   单独一个 #cloudSrcLine 由 setLoadSrc() 在加载完成后写入，稳定不会被覆盖。
+   面板还没建 / 没打开（$ 拿不到元素）时静默跳过。 */
+function cloudSrcLine(v){
+  var el = $('cloudSrcLine');
+  if (!el) return;
+  var s = String(v == null ? '' : v);
+  if (s.indexOf('cloud:') === 0){
+    el.textContent = '✓ 本次数据来自 Cloudflare（云端 ' + s.slice(6) + ' 条）';
+    el.style.color = '#1a7f37';
+  } else if (s === 'gh'){
+    el.textContent = '当前数据来自 GitHub 兜底 —— 填好令牌并保存后，就会改读 Cloudflare。';
+    el.style.color = '#c77700';
+  } else if (s === 'api'){
+    el.textContent = '当前数据来自 GitHub API 兜底（GitHub Pages 也没拿到）。';
+    el.style.color = '#c77700';
+  } else if (s){
+    el.textContent = '当前数据来源：' + s;
+    el.style.color = '#666';
+  } else {
+    el.textContent = '';
+  }
+}
+
+/* 诊断用：记下本次是从哪儿加载的（cloud:N / gh / api），手机上排障用得上。 */
 function setLoadSrc(v){
   try { localStorage.setItem('lifedesk_load_src', String(v)); } catch(e){}
+  try { cloudSrcLine(v); } catch(e){}
 }
 
 /* ============ 读取 ============ */
