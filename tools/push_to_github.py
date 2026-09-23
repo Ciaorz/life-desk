@@ -1,7 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-push_to_github.py —— 把本机改动一次性推到 GitHub（含清理线上旧文件）
+push_to_github.py —— 把本机「代码/排版」改动一次性推到 GitHub（含清理线上旧文件）
+
+⚠️ 自 2026-09-24（③）起：**data/ 不再推送**。
+   手机端的数据与封面已从 Cloudflare（D1+R2）读取，GitHub 只托管静态站点本身。
+   线上 data/ 保留为「冻结兜底」快照（Cloudflare 宕机时手机仍可读到旧数据），不会被本脚本删除。
+   想推数据？请用 app.js 的 ☁ 面板「上传」到 Cloudflare，而不是走 GitHub。
 
 为什么需要：
   网页拖拽上传有两个硬限制：① 单次最多 100 个文件；② 只能加，不能删。
@@ -41,7 +46,11 @@ BRANCH = 'main'
 API = 'https://api.github.com'
 
 # 与 .gitignore 对齐
-SKIP_DIRS = {'data/orig', 'images/_orig', '.workbuddy', '.workbuddy-ai',
+# ③ 停「推数据到 GitHub」（2026-09-24 起）：data/ 不再随推送同步。
+#    手机端的数据与封面现在都从 Cloudflare（D1+R2）出，GitHub 只托管静态站点代码/排版。
+#    线上 data/ 会停留在最后一次推送的快照，当作「冻结兜底」（Cloudflare 宕机时手机仍能读到旧数据）。
+#    ⚠️ 因此下面 orphans 的计算必须排除 ignored 路径，否则 --delete-orphans 会把整座 data/ 删光。
+SKIP_DIRS = {'data', 'data/orig', 'images/_orig', '.workbuddy', '.workbuddy-ai',
              'data/_bak_optimize_20260918',
              # Python 字节码缓存：跑一次 import / py_compile 就会生成，
              # 是产物不是源码，别让它反复污染仓库。
@@ -219,7 +228,9 @@ def main():
             todo.append((rel, data, sha, '新增'))
         elif r['sha'] != sha:
             todo.append((rel, data, sha, '改动'))
-    orphans = sorted(k for k in remote if k not in loc)
+    # 只把「我们仍在管理」的线上文件当 orphan：ignored 的路径（data/ 等）是故意不碰的，
+    # 绝不能因为没出现在本机 loc 里就被当成多余删掉（否则会把冻结兜底的数据清光）。
+    orphans = sorted(k for k in remote if k not in loc and not ignored(k))
 
     nb = sum(len(d) for _, d, _, _ in todo)
     ob = sum(remote[k].get('size', 0) for k in orphans)
@@ -271,7 +282,7 @@ def main():
         return 1
 
     # 5) 建 commit
-    msg = '同步本机数据：新增/更新 %d 个文件' % len(todo)
+    msg = '同步本机改动：新增/更新 %d 个文件（data/ 已改为仅走 Cloudflare）' % len(todo)
     if DELETE_ORPHANS and orphans:
         msg += '，清理 %d 个旧文件' % len(orphans)
     st, newcommit = api('POST', '/repos/%s/%s/git/commits' % (OWNER, REPO), token,
