@@ -5,8 +5,14 @@
 
 为什么只推 data/thumbs（不推 data/images）
 ------------------------------------------
-- 手机端 `USE_THUMBS` 恒为 true，渲染封面时请求的就是 `data/thumbs/**.webp`。
-- `data/thumbs` 实测 1438 个 / 21.6 MB；`data/images` 是 1446 个 / 105 MB（原图）。
+- 手机端渲染封面时请求的就是 `data/thumbs/**.webp`，原图在手机上根本不会被请求。
+  机制：`USE_THUMBS` = localStorage['useThumbs'] 覆盖，否则取 `IS_MOBILE`；
+  而 `IS_MOBILE` 读的 `window.__IS_MOBILE__` 是 index.html <head> 里那段设备检测设的，
+  app.js 是 body 里**动态插入**加载的（index.html:188），所以顺序没问题、手机上就是 true。
+  （别被「app.js 第 4 行就读取了」误导成「永远 false」——那是加载顺序搞反了。）
+- 结论：**data/thumbs 里一张都不能少**，少一张手机上就是一张裂图（而且不报错）。
+  补缺用：`python tools/gen_thumbs.py --missing-only`（只补缺的，不重刷旧的）。
+- `data/thumbs` 实测 1445 个 / 21.7 MB；`data/images` 是 1445 个 / 98 MB（原图）。
   手机根本用不到原图，推上去只是白烧流量和 R2 空间。
 - 桌面端是 FSA 模式、直接读本地盘，也不需要云端图。
 - 万一以后要原图（比如网页版没有本地目录），再单独跑一次 `--dir data/images` 就行。
@@ -74,6 +80,10 @@ def read_token():
 
 
 def http(path, method='GET', body=None, token=None, timeout=180):
+    # ⚠️ 这个自定义 UA 不是装饰，是必须的：
+    #    Cloudflare 会把 Python 默认 UA（Python-urllib/3.x）当成机器人挡掉，
+    #    返回一页 HTML 的 403「error code: 1010」——不是 worker 的响应。
+    #    排查时如果看到 1010 / HTML，先怀疑 UA，别怀疑 R2 里的对象。
     headers = {'User-Agent': 'life-desk-r2-push/1.0'}
     if token:
         headers['Authorization'] = 'Bearer ' + token

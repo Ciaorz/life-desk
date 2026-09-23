@@ -42,7 +42,10 @@ API = 'https://api.github.com'
 
 # 与 .gitignore 对齐
 SKIP_DIRS = {'data/orig', 'images/_orig', '.workbuddy', '.workbuddy-ai',
-             'data/_bak_optimize_20260918'}
+             'data/_bak_optimize_20260918',
+             # Python 字节码缓存：跑一次 import / py_compile 就会生成，
+             # 是产物不是源码，别让它反复污染仓库。
+             '__pycache__'}
 SKIP_PREFIX = ('data/_bak_', 'data/_legacy_')
 SKIP_FILES = {'debug.log', 'yun_probe.js', 'serve.js', 'data/lifedesk.backup.json',
               '推送清单.md', '云同步部署手册.md',

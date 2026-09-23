@@ -52,6 +52,10 @@ yun_probe.js
 # key → 字节数。删了只是下次要把封面重传一遍，内容一模一样。
 tools/.r2_uploaded.json
 
+# ===== Python 字节码缓存（跑 import / py_compile 就会生成）=====
+__pycache__/
+*.pyc
+
 # ===== 编辑器与系统 =====
 .DS_Store
 Thumbs.db

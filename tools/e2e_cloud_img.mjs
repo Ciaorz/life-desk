@@ -11,9 +11,16 @@
  * 它做什么（全自动）：
  *   ① 清空 localStorage / IndexedDB / SW / Cache Storage（模拟手机第一次打开）
  *   ② 配好 Cloudflare 地址 + 令牌，刷新
- *   ③ 进「藏品馆」让封面真的渲染出来
+ *   ③ 进「藏品馆」，**再点一个分类磁贴**（[data-act="zone"]），封面才真的渲染出来
  *   ④ 用 CDP Network 事件收集所有封面请求（/api/img/** 或 /data/thumbs|images/**）与状态码
  *   ⑤ 断言：每一条封面请求都是 200；请求路径与面板那行「封面从哪来」自洽
+ *
+ * ⚠️ 两个踩过的坑，改这个脚本前先看：
+ *   · 藏品馆**首页没有封面**，只有分类磁贴（手办/周边/杯盏…）。
+ *     只点到首页就断言，会得到「封面请求 0 个」的假失败。必须再点一层 zone。
+ *   · 客户端自己会发一次探测请求 cloudImgProbe()（GET 一个不存在的
+ *     /api/img/data/thumbs/__probe__.webp）。worker 没重拖时它**必然 401**，
+ *     那是设计好的信号。统计封面时必须把 __probe__ 摘掉，否则断言永远红。
  *
  * ⚠️ 这个测试**两种状态都算通过**，因为客户端有「免认证探测」兜底：
  *      · worker 已重拖（读免认证）→ 封面走 /api/img/**，面板显示「来自 Cloudflare R2」
@@ -100,14 +107,18 @@ async function connect() {
 
 /* ---------- 页面侧探查 ---------- */
 const PROBE = `(function(){
-  var covers = document.querySelectorAll('[style*="background-image"]');
+  var bgs = document.querySelectorAll('[style*="background-image"]');
   var n = 0, api = 0, rel = 0, sample = [];
-  for (var i = 0; i < covers.length; i++){
-    var s = covers[i].getAttribute('style') || '';
-    if (s.indexOf('background-image') < 0) continue;
+  for (var i = 0; i < bgs.length; i++){
+    var s = bgs[i].getAttribute('style') || '';
+    var isApi = s.indexOf('/api/img/') >= 0;
+    var isRel = s.indexOf('data/thumbs/') >= 0 || s.indexOf('data/images/') >= 0;
+    /* 只认「封面」。页面上还有一堆模块装饰图（images/museum-bg.png 之类），
+       它们也带 background-image，混进来会让「渲染出封面了吗」永远为真。 */
+    if (!isApi && !isRel) continue;
     n++;
-    if (s.indexOf('/api/img/') >= 0) { api++; if (sample.length < 3) sample.push(s.slice(0, 130)); }
-    else if (s.indexOf('data/thumbs/') >= 0 || s.indexOf('data/images/') >= 0) { rel++; if (sample.length < 3) sample.push(s.slice(0, 130)); }
+    if (isApi) api++; else rel++;
+    if (sample.length < 3) sample.push(s.slice(0, 130));
   }
   var imgs = document.querySelectorAll('img[src]');
   var imgApi = 0, imgRel = 0;
@@ -120,6 +131,7 @@ const PROBE = `(function(){
     imgLine: (document.getElementById('cloudImgLine') || {}).textContent || '',
     srcLine: (document.getElementById('cloudSrcLine') || {}).textContent || '',
     loadSrc: localStorage.getItem('lifedesk_load_src') || '',
+    bgAll: bgs.length,
     covers: n, coverApi: api, coverRel: rel, sample: sample,
     imgTags: imgs.length, imgApi: imgApi, imgRel: imgRel,
   };
@@ -189,7 +201,10 @@ try {
   ok(/Cloudflare R2/.test(boot.imgLine) || /GitHub 仓库/.test(boot.imgLine),
     '2.3 封面来源行说的是这两种之一（不能还在「正在探测」）', boot.imgLine);
 
-  console.log('\n=== 3. 进「藏品馆」把封面渲染出来 ===');
+  console.log('\n=== 3. 进「藏品馆」→ 再点一个分类，把封面渲染出来 ===');
+  /* 踩过的坑：藏品馆首页只有分类磁贴（手办 / 周边 / 杯盏…），
+     封面要再往里点一层才出来 —— 分类磁贴的标记是 [data-act="zone"][data-v="手办"]。
+     只停在首页的话，页面上一张封面都没有，测试会误判成「封面全没发请求」。 */
   await cdp.eval(`(function(){
     var el = document.querySelector('[data-act="go"][data-key="collection"]');
     if (!el){
@@ -202,18 +217,48 @@ try {
     return !!el;
   })()`);
   await sleep(7000);
-  const after = await cdp.eval(PROBE);
-  console.log('  封面元素 ' + after.covers + ' 个（api/img ' + after.coverApi + ' / 相对路径 ' + after.coverRel + '）');
+
+  const zone = await cdp.eval(`(function(){
+    var z = document.querySelector('[data-act="zone"]');
+    if (!z) return '';
+    z.click();
+    return z.getAttribute('data-v') || '?';
+  })()`);
+  console.log('  点了分类：' + (zone || '(这层没有分类磁贴)'));
+  await sleep(8000);
+
+  let after = await cdp.eval(PROBE);
+  if (after.covers + after.imgTags === 0) {
+    /* 兜底：换个确定会渲染封面的模块（遐方坞 / 影音厅） */
+    console.log('  藏品馆这层没渲染出封面，改去「遐方坞」兜底…');
+    await cdp.eval(`(function(){
+      var el = document.querySelector('[data-act="go"][data-key="travel"]');
+      if (el) el.click();
+      return !!el;
+    })()`);
+    await sleep(8000);
+    after = await cdp.eval(PROBE);
+  }
+  console.log('  封面元素 ' + after.covers + ' 个（api/img ' + after.coverApi + ' / 相对路径 ' + after.coverRel + '）'
+    + '；带 background-image 的元素共 ' + after.bgAll + ' 个（含模块装饰图，不算封面）');
   console.log('  <img> ' + after.imgTags + ' 个（api/img ' + after.imgApi + ' / 相对路径 ' + after.imgRel + '）');
   after.sample.forEach((s) => console.log('    例：' + s));
 
   console.log('\n=== 4. 逐条核对封面请求的真实状态码 ===');
   await sleep(3000);                            /* 等懒加载把图拉完 */
-  const resp = collectImageResponses(cdp);
+  const allReq = collectImageResponses(cdp);
+  /* ⚠️ 必须把客户端自己的探测请求摘掉：
+     cloudImgProbe() 会故意 GET 一个不存在的 key（__probe__.webp）来判断
+     「worker 开通了免认证读图没有」。worker 还没重拖时它必然 401 ——
+     那是设计好的信号，不是封面失败。混进来会让断言永远红。 */
+  const probes = allReq.filter((r) => r.url.indexOf('__probe__') >= 0);
+  const resp = allReq.filter((r) => r.url.indexOf('__probe__') < 0);
   const bad = resp.filter((r) => r.status !== 200 && r.status !== 304);
   const viaApi = resp.filter((r) => r.url.indexOf('/api/img/') >= 0);
   const viaStatic = resp.filter((r) => r.url.indexOf('/api/img/') < 0);
-  console.log('  封面请求共 ' + resp.length + ' 个：/api/img ' + viaApi.length + ' 个，静态 /data 路径 ' + viaStatic.length + ' 个');
+  const viaThumb = resp.filter((r) => r.url.indexOf('/data/thumbs/') >= 0);
+  console.log('  探测请求 ' + probes.length + ' 个（状态 ' + probes.map((r) => r.status).join(',') + ' —— 401 属正常，说明 worker 还没重拖）');
+  console.log('  封面请求共 ' + resp.length + ' 个：/api/img ' + viaApi.length + ' 个，静态 /data 路径 ' + viaStatic.length + ' 个，其中缩略图 ' + viaThumb.length + ' 个');
   if (bad.length) {
     console.log('  非 200 的：');
     bad.slice(0, 8).forEach((r) => console.log('    ' + r.status + '  ' + r.url.slice(0, 120)));
@@ -221,6 +266,10 @@ try {
   ok(resp.length > 0, '4.1 ★ 真的发出了封面请求（' + resp.length + ' 个）');
   ok(bad.length === 0, '4.2 ★★ 所有封面响应都是 200（没有一个 401/404 —— 这就是「封面全裂」的判据）');
   ok(!resp.some((r) => r.status === 401), '4.3 特别确认没有 401（CSS 背景图带不了令牌头）');
+  /* 404 单独拎出来：data/thumbs 里少一张缩略图，手机上就是一张裂图，
+     而且因为「不报错」所以极难发现 —— 正是这条断言在盯它。 */
+  const nf = resp.filter((r) => r.status === 404);
+  ok(nf.length === 0, '4.3b 没有 404（缩略图一张都不能缺）', nf.slice(0, 3).map((r) => r.url.slice(-60)).join(' | '));
 
   const saysR2 = /Cloudflare R2/.test(boot.imgLine);
   if (saysR2) {
@@ -235,6 +284,9 @@ try {
   }
 
   ok(after.covers + after.imgTags > 0, '4.9 ★ 页面上确实渲染出了封面（' + (after.covers + after.imgTags) + ' 个）');
+  /* 手机要是去拉 data/images 原图（105MB）而不是 data/thumbs（21MB），流量会翻 5 倍 */
+  ok(viaThumb.length > 0, '4.10 封面走的是缩略图 data/thumbs，不是原图', viaThumb.length + '/' + resp.length);
+
 
   console.log('\n=== 5. 页面异常 ===');
   const ORIGIN = new URL(SITE).origin;
