@@ -136,9 +136,65 @@ await check('401 响应也带 CORS 头（否则手机端只会看到 CORS 报错
   const r = await call(makeEnv(), '/api/stats');
   assert(r.headers.get('access-control-allow-origin') === '*', '缺 CORS 头');
 });
-await check('/api/img 仍然要令牌（别被 isbn-cover 的豁免误伤）', async () => {
-  const r = await call(makeEnv(), '/api/img/abc');
+await check('/api/img 的【读】刻意免认证（封面是 CSS 背景图，带不了 Authorization 头）', async () => {
+  const r = await call(makeEnv(), '/api/img/data/thumbs/%E5%BE%BD%E7%AB%A0/a.webp');
+  assert(r.status !== 401, '不该是 401（否则手机端封面会全裂），实际 ' + r.status);
+  assert(r.status === 404, '假 R2 里没这个对象 → 应为 404，实际 ' + r.status);
+});
+await check('HEAD /api/img 同样免认证', async () => {
+  const r = await call(makeEnv(), '/api/img/data/thumbs/x/a.webp', { method: 'HEAD' });
+  assert(r.status !== 401, 'HEAD 也不该 401，实际 ' + r.status);
+});
+await check('★ PUT /api/img 不带令牌 → 401（写操作一个都不能松）', async () => {
+  const r = await call(makeEnv(), '/api/img/data/thumbs/x/a.webp', { method: 'PUT', body: 'x' });
   assert(r.status === 401, '应为 401，实际 ' + r.status);
+});
+await check('★ POST /api/img 不带令牌 → 401', async () => {
+  const r = await call(makeEnv(), '/api/img/data/thumbs/x/a.webp', { method: 'POST', body: 'x' });
+  assert(r.status === 401, '应为 401，实际 ' + r.status);
+});
+await check('★ /api/img-batch 不带令牌 → 401（别被 /api/img 的读豁免误伤）', async () => {
+  const r = await call(makeEnv(), '/api/img-batch', { method: 'POST', body: '{"items":[]}' });
+  assert(r.status === 401, '应为 401，实际 ' + r.status);
+});
+await check('★ 读的 key 必须是 data/images|thumbs 开头（不许当开放代理）', async () => {
+  const env = makeEnv();
+  for (const bad of ['/api/img/etc/passwd', '/api/img/data/other/a.webp', '/api/img/', '/api/img/data/images']) {
+    const r = await call(env, bad);
+    assert(r.status === 400, bad + ' 应被拒（400），实际 ' + r.status);
+  }
+});
+await check('带令牌 PUT /api/img → ok:true 且真的写进 R2', async () => {
+  const env = makeEnv();
+  const r = await call(env, '/api/img/data/thumbs/x/a.webp', {
+    method: 'PUT', headers: { authorization: 'Bearer ' + TOKEN }, body: 'fake-bytes',
+  });
+  assert(r.status === 200, '应为 200，实际 ' + r.status);
+  const j = await r.json();
+  assert(j.ok === true, 'ok 应为 true');
+  assert(env.IMG.puts.includes('data/thumbs/x/a.webp'), 'R2 没收到这个 key：' + JSON.stringify(env.IMG.puts));
+});
+await check('带令牌 /api/img-batch 但 key 非法 → 拒绝（令牌泄露也写不进任意 key）', async () => {
+  const env = makeEnv();
+  const r = await call(env, '/api/img-batch', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + TOKEN },
+    body: JSON.stringify({ items: [{ key: 'evil/x.bin', data: 'AAAA' }] }),
+  });
+  assert(r.status === 400, '应为 400，实际 ' + r.status);
+  assert(env.IMG.puts.length === 0, '不该写进 R2：' + JSON.stringify(env.IMG.puts));
+});
+await check('带令牌 /api/img-batch 且 key 合法 → 写入成功', async () => {
+  const env = makeEnv();
+  const r = await call(env, '/api/img-batch', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + TOKEN },
+    body: JSON.stringify({ items: [{ key: 'data/thumbs/x/a.webp', data: 'AAAA', type: 'image/webp' }] }),
+  });
+  assert(r.status === 200, '应为 200，实际 ' + r.status);
+  const j = await r.json();
+  assert(j.uploaded === 1, 'uploaded 应为 1，实际 ' + j.uploaded);
+  assert(env.IMG.puts.includes('data/thumbs/x/a.webp'), 'R2 没收到这个 key');
 });
 
 console.log('\n[3] D1 绑定与业务逻辑');

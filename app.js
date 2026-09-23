@@ -1276,11 +1276,72 @@ function normalizeImgPath(u){
   if (u.indexOf(IMG_DIR + '/') === 0) return DATA_PREFIX + '/' + u;  /* 旧路径补前缀 */
   return u;
 }
+/* ---------- 封面：非 FSA 模式改从 Cloudflare R2 取（2026-09-24） ----------
+   记录里存的是相对路径（data/images/x/a.jpg 或 data/thumbs/x/a.webp）。
+   · FSA（电脑端连了本地目录）：由 resolveImagesFor() 预解析成 blob: 塞进 _imgUrlCache，
+     本地读盘不花流量，走不到下面这段。
+   · 手机 / 网页版：图片在 Cloudflare R2 上，**key 就是那条相对路径本身**
+     （上传见 tools/push_images_to_r2.py，两边不用各维护一套映射）。
+
+   ⚠️ R2 上【只放缩略图】（1437 个 / 21.6MB），不放 105MB 原图 → 所以这里先 thumbOf()
+     把 data/images/x/a.jpg 折成 data/thumbs/x/a.webp。这正是手机端 USE_THUMBS 想要的形态，
+     顺带让「网页版（没有本地目录）也能看图」而不必把原图推上云。 */
+var _cloudImgBase = null;   /* 缓存 cloudBase()：渲染时会被调用成百上千次，别每次都读 localStorage */
+function cloudImgUrl(rel){
+  if (!rel) return '';
+  if (_cloudImgBase === null){
+    try { _cloudImgBase = cloudBase() || ''; } catch(e){ _cloudImgBase = ''; }
+  }
+  if (!_cloudImgBase) return '';                    /* 没配 Cloudflare → 交给调用方走相对路径 */
+  /* 先补 data/ 前缀（旧数据存的是 images/...），再折成缩略图。
+     两步都幂等，所以从 resolveImgUrl 传进来时已经规范化过也无害。 */
+  var key = thumbOf(normalizeImgPath(String(rel)));
+  return _cloudImgBase + '/api/img/' + key.split('/').map(encodeURIComponent).join('/');
+}
+
+/* 一次性探测「/api/img 的读是不是免认证」。
+   为什么必须探：worker 是用户手工拖进 Cloudflare Pages 的，客户端完全可能先上线。
+   不探的话，worker 还是旧版（读要令牌）时所有封面会裂成一片 401 白板 ——
+   因为 CSS background-image / <img src> 都带不了 Authorization 头。
+   探测方式：请求一个不存在的 key。
+     401/403 = 还没免认证 → 不切；404 = 已免认证（进到业务分支了）→ 切；网络错 = 不切。
+   结果只在内存里缓存一次（一次页面加载探一次，成本约 1 个 404 请求）。 */
+var _cloudImgOk = null;
+function cloudImgProbe(cb){
+  cb = cb || function(){};
+  if (_cloudImgOk !== null){ cb(_cloudImgOk); return; }
+  var base = '';
+  try { base = cloudBase() || ''; } catch(e){}
+  if (!base){ _cloudImgOk = false; cloudImgLine(); cb(false); return; }
+  function done(v){ _cloudImgOk = v; try { cloudImgLine(); } catch(e){} cb(v); }
+  fetch(base + '/api/img/data/thumbs/__probe__.webp', { cache: 'no-store' })
+    .then(function(r){ done(r.status !== 401 && r.status !== 403); })
+    .catch(function(){ done(false); });
+}
+/* ☁ 面板里那行「封面从哪来」 */
+function cloudImgLine(){
+  var el = $('cloudImgLine'); if (!el) return;
+  if (_cloudImgOk === null){ el.textContent = '封面：正在探测云端图片接口…'; el.style.color = '#666'; return; }
+  if (_cloudImgOk){
+    el.textContent = '✓ 封面：来自 Cloudflare R2（手机/网页端不用再下 GitHub 仓库里的图）';
+    el.style.color = '#1a7f37';
+  } else {
+    el.textContent = '封面：走 GitHub 仓库 —— Cloudflare 的图片读接口还没开通（需要重新拖一次 _worker.js）。';
+    el.style.color = '#c77700';
+  }
+}
+
 function resolveImgUrl(u){
   u = normalizeImgPath(u);
   if (!u) return '';
   if (/^(data|blob):/.test(u) || /^https?:/i.test(u) || u.indexOf('//') === 0) return u;
-  return _imgUrlCache[u] || u;         /* 未解析完时先返回原值，不至于整块空白 */
+  if (_imgUrlCache[u]) return _imgUrlCache[u];
+  /* 非 FSA（手机 / 网页版）+ 云端图片接口可用 → 封面从 Cloudflare R2 取 */
+  if (!_fsaHandle && _cloudImgOk){
+    var cu = cloudImgUrl(u);
+    if (cu) return cu;
+  }
+  return u;                           /* 未解析完 / 没配 Cloudflare → 相对路径（GitHub Pages） */
 }
 /* v67：是不是「还没落盘」的图（外链网址 / base64）。是的话才需要「存进本地图库」。 */
 function imgIsRemote(u){
@@ -2804,6 +2865,8 @@ function cloudConfig(){
 }
 function setCloudConfig(cfg){
   try { localStorage.setItem(CLOUD_KEY, JSON.stringify(cfg || {})); } catch(e){}
+  /* 地址/令牌可能变了：封面基址缓存和「图片接口可用吗」的探测结果都要作废重来 */
+  try { _cloudImgBase = null; _cloudImgOk = null; } catch(e){}
 }
 function cloudWatermark(){
   try { return Number(localStorage.getItem(CLOUD_WM_KEY) || 0) || 0; } catch(e){ return 0; }
@@ -3535,6 +3598,7 @@ function addDataTools(){
         '</div>' +
         '<div id="cloudStatus" style="margin-top:8px;font-size:11px;line-height:1.6;color:#666;white-space:pre-line"></div>' +
         '<div id="cloudSrcLine" style="margin-top:6px;font-size:11px;line-height:1.6;color:#666"></div>' +
+        '<div id="cloudImgLine" style="margin-top:4px;font-size:11px;line-height:1.6;color:#666"></div>' +
         '<div style="font-size:10px;color:#888;line-height:1.6;margin-top:6px">' +
           '「上传」只推<b>改过的</b>记录（按每条记录的最后修改时间判断），所以第一次点就等于全量。' +
           '「全量上传」忽略判断、把所有记录重推一遍（数据对不上时用）。' +
@@ -3677,6 +3741,8 @@ function addDataTools(){
       : '还没下载过。第一次点「下载」会把云端全部记录合并进来。'), '#666');
     /* 本次数据来源（cloud:N / gh / api）—— 单独一行，加载完成后由 setLoadSrc() 更新 */
     try { cloudSrcLine(localStorage.getItem('lifedesk_load_src') || ''); } catch(e){}
+    /* 封面来源（Cloudflare R2 / GitHub 仓库）—— 由 cloudImgProbe() 探测后更新 */
+    try { cloudImgLine(); } catch(e){}
   } catch(e){}
   if ($('cloudSaveTest')) $('cloudSaveTest').onclick = function(){
     var b = String($('cloudApiBase').value || '').trim().replace(/\/+$/, '');
@@ -3684,6 +3750,8 @@ function addDataTools(){
     if (!b){ cloudStatus('请先填 API 地址', '#e5484d'); return; }
     setCloudConfig({ apiBase: b, token: t });
     cloudTest();
+    /* 配置可能刚填好：立刻重探一次图片接口，通了就把封面重绘成 R2 地址 */
+    cloudImgProbe(function(ok){ if (ok){ try { renderSoon(); } catch(e){} } });
   };
   if ($('cloudUploadBtn'))   $('cloudUploadBtn').onclick   = function(){ cloudUpload(false); };
   if ($('cloudFullBtn'))     $('cloudFullBtn').onclick     = function(){ cloudUpload(true);  };
@@ -12970,6 +13038,10 @@ function __boot(){
     loadNotes(); /* v59：启动时读本地拾纪 */
     bootBanner();
     addDataTools();
+    /* 2026-09-24：先探一次「封面能不能从 Cloudflare R2 取」。
+       探通了再 renderSoon() 重绘一遍，把封面从 GitHub 相对路径切成 R2 地址。
+       探测是异步的，所以首屏可能先用相对路径画一遍 —— 两条路都能出图，不会白屏。 */
+    try { cloudImgProbe(function(ok){ if (ok){ try { renderSoon(); } catch(e){} } }); } catch(e){}
     render();
     loadAll();  /* db / gh / local / localfile 四种模式都经 fetchAll 分发，统一初始加载 */
     initGhStatus();

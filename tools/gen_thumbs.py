@@ -7,7 +7,13 @@ v95：为 data/images 下的封面生成 WebP 缩略图，输出到平行目录 
 
 - 幂等：目标已存在且不比源旧则跳过，可反复运行；新增图片后再跑一次即可。
 - 目录结构镜像：data/images/series/xx/a.png -> data/thumbs/series/xx/a.webp
-- 用法：python tools/gen_thumbs.py [长边像素，默认 400]
+- 用法：python tools/gen_thumbs.py [长边像素，默认 400] [--missing-only]
+
+  --missing-only  只补「完全没有缩略图」的，不去管「有但比源旧」的。
+                  什么时候用它：手机上封面改从 Cloudflare R2 取，靠 thumbOf()
+                  折算路径，所以「一张都不能少」；而"比源旧"往往只是当年换了
+                  编码方式（实测 MAD 5~7，肉眼一样），全量重刷纯属白折腾
+                  —— 1269 张要跑十几分钟，还会让 R2/GitHub 平白多出一堆新字节。
 """
 import os
 import sys
@@ -19,7 +25,10 @@ SRC = os.path.join(ROOT, 'data', 'images')
 DST = os.path.join(ROOT, 'data', 'thumbs')
 EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
 
-LONG_EDGE = int(sys.argv[1]) if len(sys.argv) > 1 else 400
+# 参数只认纯数字，别把 --missing-only 当成像素值塞进 int()
+ONLY_MISSING = '--missing-only' in sys.argv
+_nums = [a for a in sys.argv[1:] if a.isdigit()]
+LONG_EDGE = int(_nums[0]) if _nums else 400
 QUALITY = 82
 METHOD = 6  # 压缩越强越慢，6 是速度/体积的较好平衡
 
@@ -60,7 +69,10 @@ def main():
         return 1
 
     force = need_force()
-    if force:
+    if force and ONLY_MISSING:
+        print('参数已变更，但 --missing-only 只补缺的，不重刷旧的')
+        force = False
+    elif force:
         print('参数已变更（或首次运行），将重新生成全部缩略图')
 
     made = skipped = failed = 0
@@ -81,7 +93,14 @@ def main():
             src_total += src_size
 
             # 幂等：已存在且不比源旧就跳过
-            if (not force) and os.path.exists(out_path) and os.path.getmtime(out_path) >= os.path.getmtime(src_path):
+            if ONLY_MISSING:
+                skip = os.path.exists(out_path)      # 只要在就放过，哪怕比源旧
+            elif force:
+                skip = False                          # 参数变了 → 全部重刷
+            else:
+                skip = (os.path.exists(out_path)
+                        and os.path.getmtime(out_path) >= os.path.getmtime(src_path))
+            if skip:
                 dst_total += os.path.getsize(out_path)
                 skipped += 1
                 continue

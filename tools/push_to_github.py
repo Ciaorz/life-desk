@@ -45,7 +45,10 @@ SKIP_DIRS = {'data/orig', 'images/_orig', '.workbuddy', '.workbuddy-ai',
              'data/_bak_optimize_20260918'}
 SKIP_PREFIX = ('data/_bak_', 'data/_legacy_')
 SKIP_FILES = {'debug.log', 'yun_probe.js', 'serve.js', 'data/lifedesk.backup.json',
-              '推送清单.md', '云同步部署手册.md'}
+              '推送清单.md', '云同步部署手册.md',
+              # R2 上传台账：本机续传用的缓存（key→size），不是源码。
+              # 换了机器/删了它，最多是重传一遍封面，内容完全一样。
+              'tools/.r2_uploaded.json'}
 SKIP_RE = [re.compile(r'\.bak'), re.compile(r'^_.*\.(js|mjs|cjs|html)$'), re.compile(r'\.log$')]
 
 # 白名单：这些路径永不忽略（命中即跳过所有上面的排除规则）。

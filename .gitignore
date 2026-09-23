@@ -48,6 +48,10 @@ yun_probe.js
 .workbuddy/
 .workbuddy-ai/
 
+# ===== v106：R2 封面上传台账（本机续传缓存，不是源码）=====
+# key → 字节数。删了只是下次要把封面重传一遍，内容一模一样。
+tools/.r2_uploaded.json
+
 # ===== 编辑器与系统 =====
 .DS_Store
 Thumbs.db

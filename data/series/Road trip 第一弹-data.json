@@ -10,7 +10,7 @@
       "目标数量": 0,
       "系列封面": [
         {
-          "imageUrl": "data/images/series/Road trip 第一弹-封面/ROAD TRIP-ROAD TRIP-0002.jpg",
+          "imageUrl": "data/images/series/Road trip 第一弹-封面/Road trip 第一弹-Road trip 第一弹-0001.jpg",
           "viewport": {
             "s": 1,
             "x": 0,
@@ -19,8 +19,8 @@
         }
       ],
       "说明": null,
-      "_upd": 1790191236290,
-      "_rev": 4
+      "_upd": 1790191421665,
+      "_rev": 5
     }
   ]
 }

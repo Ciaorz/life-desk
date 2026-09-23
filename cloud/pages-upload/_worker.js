@@ -110,14 +110,26 @@ async function handleApi(request, env) {
        封面是公开图片，而且必须能被 <img src> 和普通 fetch 直接取用 ——
        这两种请求都带不了 Authorization 头，一加认证，所有封面会全裂成 401。
        「不许当开放代理」这件事由「id 必须是纯数字」的校验兜住，不靠认证。
-       （/api/isbn 查书本身仍然要令牌，因为会消耗上游配额。） */
+       （/api/isbn 查书本身仍然要令牌，因为会消耗上游配额。）
+
+     ⚠️ /api/img/* 的【读】同样刻意不认证（2026-09-24 加，和上面同一个坑）：
+       封面从 GitHub 仓库搬到 R2 之后，手机端渲染走的是
+       `background-image: url(https://.../api/img/data/thumbs/xx.webp)` ——
+       CSS 背景图和 <img src> 一样带不了 Authorization 头，认证就是全裂 401。
+       【写】一个都不能松：PUT/POST /api/img/* 和 /api/img-batch 仍然要令牌，
+       否则任何人都能往你的 R2 里塞垃圾、把你的免费额度刷爆。
+       防滥用靠「key 必须以 data/ 开头」的白名单（见下面 imgKeyOk），不靠认证。 */
+  const imgReadOnly = p.startsWith('/api/img/')
+    && !p.startsWith('/api/img-batch')
+    && (request.method === 'GET' || request.method === 'HEAD');
   const needAuth = (p.startsWith('/api/sync')
     || p.startsWith('/api/records')
     || p.startsWith('/api/img')
     || p.startsWith('/api/meta')
     || p.startsWith('/api/stats')
     || p.startsWith('/api/isbn'))
-    && !p.startsWith('/api/isbn-cover');
+    && !p.startsWith('/api/isbn-cover')
+    && !imgReadOnly;
   if (needAuth && !(REQUIRE_READ_AUTH ? authorized(request, env) : (request.method === 'GET' || authorized(request, env)))) {
     return fail('unauthorized', 401);
   }
@@ -332,10 +344,17 @@ async function handleApi(request, env) {
       return json({ ok: true, key: body.key, updated_at: now });
     }
 
-    /* ================= 图片：R2 读写 ================= */
+    /* ================= 图片：R2 读写 =================
+     * 读（GET/HEAD）不需要令牌 —— CSS 背景图 / <img src> 带不了 Authorization 头，
+     * 一认证封面就全裂 401（见上方 imgReadOnly 的注释）。
+     * 所以「不许拿这个接口当任意文件的开放代理」必须靠 key 白名单兜住：
+     *   key 只能是 data/ 开头，且落在 images/ 或 thumbs/ 这两个目录下。
+     * 写（PUT/POST）仍然要令牌，由上面的 needAuth 拦住。 */
     if (p.startsWith('/api/img/')) {
       const key = decodeURIComponent(p.slice('/api/img/'.length));
       if (!key || key.includes('..')) return fail('非法路径');
+      /* 只放行本项目自己的封面路径；其余一律拒绝（防止被当成开放代理刷流量） */
+      if (!/^data\/(images|thumbs)\/.+/.test(key)) return fail('非法路径');
 
       if (request.method === 'GET' || request.method === 'HEAD') {
         const obj = await env.IMG.get(key);
@@ -362,6 +381,12 @@ async function handleApi(request, env) {
     if (p === '/api/img-batch' && request.method === 'POST') {
       const body = await request.json().catch(() => null);
       if (!body || !Array.isArray(body.items)) return fail('需要 items 数组');
+      /* 这个接口要令牌，理论上不会被滥用；但白名单校验照样加一道 ——
+         令牌万一泄露，至少不能拿它往 R2 里写任意 key。 */
+      if (!body.items.every((it) => it && typeof it.key === 'string'
+        && /^data\/(images|thumbs)\/.+/.test(it.key) && !it.key.includes('..'))) {
+        return fail('items 里有非法 key');
+      }
       let ok = 0;
       const failed = [];
       for (const it of body.items) {
