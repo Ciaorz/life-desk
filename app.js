@@ -5170,6 +5170,8 @@ var ui = {
     /* v102：封面墙的分组方式 —— 'series'=按系列出卡（默认，点进系列详情）；
        'item'=直接把符合条件的物品平铺成卡片（找具体东西时用，如搜「渔夫帽」、看全部隐藏款）。 */
     wallGroup:'series',
+    /* v102：按类别页的 IP 下拉筛选 —— ''=全部 IP，否则只看该 IP 的东西 */
+    ipf:'',
     /* wallGroupAuto：true 表示当前「按物品」是系统自动切过去的（搜了词 / 勾了隐藏款），
        不是用户手动点的。这样清空搜索、取消隐藏款时能自动收回「按系列」，
        避免留下上千条物品平铺；而用户手动点过的选择不会被覆盖。 */
@@ -5260,6 +5262,124 @@ function initGhStatus(){
   setGhStatus((GH && GH.token) ? 'synced' : 'noconn');
 }
 
+/* ============ 手机端加载源：直读 Cloudflare ============
+   背景（2026-09-18 定案）：数据（记录 + 封面）以 Cloudflare（D1 + R2）为准，
+   GitHub 只放页面代码与排版。手机端（MODE==='gh'）过去读 location.origin + '/data/'，
+   那是 GitHub Pages 上的静态 JSON —— 记录一多就要拉 40+ 个文件
+   （实测全量 47 个请求 / 1085KB / 9.07 秒）。改成读 /api/sync?since=0 后
+   1 个请求 / 1.37 秒，快约 6.6 倍，而且拿到的就是权威那一份，
+   不会再出现「GitHub 落后于 D1」的不一致。
+
+   合并规则与刷新路径完全一致（复用 mergeLoadData 的字段并集），额外补一条
+   【刷新路径也认删除】：桌面在云端软删一条后，手机刷新就该跟着消失。
+   以前不敢这么做，是因为 GitHub 那条链没有可靠的删除信号；D1 的 deleted 标记
+   + updated_at 是权威的。为了不误伤，只在「云端删除时间 >= 本机 _upd」时才删，
+   本机删得更晚的一律保留（与 cloudMergePlan 同一条规矩）。
+
+   没配令牌 / 网络失败 → 返回 null，调用方回退 GitHub Pages，行为与改动前一致。
+   ============================================================ */
+
+/* 把 /api/sync 返回的 D1 行转成加载用的 { module:[rows] } 快照（形状同 ghStaticLoadV2）。
+   纯函数。墓碑里的 id 一律不收 —— 那是本机删掉、还没来得及推上去的。 */
+function cloudRowsToSnap(rows){
+  var out = {}, tombs = cloudTombstoneMap();
+  (rows || []).forEach(function(r){
+    var mk = String((r && r.module) || '');
+    var id = String((r && r.id) || '');
+    if (!mk || !id) return;
+    if (tombs[id]) return;                 /* 本机删过、云端还不知道 → 绝不复活 */
+    if (r.deleted) return;                 /* 云端软删 → 不进快照（删除在 mergeLoadRows 里处理） */
+    var d = (r.data && typeof r.data === 'object') ? r.data : {};
+    var rec = {};
+    Object.keys(d).forEach(function(k){ rec[k] = d[k]; });
+    rec._id = id;
+    rec._upd = Number(d._upd) || Number(r.updated_at) || 0;
+    rec._rev = Math.max(Number(d._rev) || 0, Number(r.rev) || 0);
+    if (!out[mk]) out[mk] = [];
+    out[mk].push(rec);
+  });
+  return out;
+}
+
+/* 拉云端全量（分页，含 deleted 行）。成功返回行数组；没配令牌 / 拿不到 → null。 */
+async function cloudLoadAllRows(){
+  var base = cloudBase(), tok = cloudToken();
+  if (!base || !tok) return null;          /* 手机还没填令牌 → 交给 GitHub 兜底 */
+  var since = 0, nextSince = 0, uniq = [], seen = {}, pages = 0;
+  try {
+    while (pages < 40){
+      var res = await cloudFetch(base, tok,
+        '/api/sync?since=' + encodeURIComponent(since) + '&limit=2000', { timeout: 45000 });
+      if (!res.ok || !res.json || !res.json.ok) return null;
+      var rows = res.json.rows || [];
+      var added = 0;
+      rows.forEach(function(r){
+        var k = String(r.id);
+        if (!seen[k]){ seen[k] = 1; uniq.push(r); added++; }
+      });
+      pages++;
+      if (!rows.length || !res.json.hasMore) break;
+      if (!added) break;                   /* 同一批时间戳完全相同 → 防死循环，本次到此为止 */
+      nextSince = Number(res.json.nextSince) || nextSince;
+      since = Math.max(0, nextSince - 1);  /* 往回退 1 毫秒重叠取：宁可重复（幂等），不可漏 */
+    }
+  } catch(e){ return null; }
+  return uniq.length ? uniq : null;        /* 空云端 → 也算没拿到，走回退 */
+}
+
+/* 云端行 + 本机快照 → 合并后的 { module:[rows] }。纯函数、幂等。 */
+function mergeLoadRows(localData, rows){
+  var active = [], dels = {};
+  (rows || []).forEach(function(r){
+    if (!r) return;
+    if (r.deleted) dels[String(r.id)] = Number(r.updated_at) || 0;
+    else active.push(r);
+  });
+  var merged = mergeLoadData(localData, cloudRowsToSnap(active));
+  var ids = Object.keys(dels);
+  if (!ids.length) return stripTombstoned(merged);
+  var tombs = cloudTombstoneMap();
+  ids.forEach(function(id){
+    if (tombs[id]) return;                 /* 本机自己删的，已经在墓碑里处理过 */
+    var cut = dels[id];
+    Object.keys(merged).forEach(function(mk){
+      var rr = merged[mk] || [];
+      for (var i = 0; i < rr.length; i++){
+        if (String(rr[i]._id) === id){
+          if ((Number(rr[i]._upd) || 0) > cut) return;   /* 本机删完之后又改过 → 保留本机 */
+          rr.splice(i, 1);
+          return;
+        }
+      }
+    });
+  });
+  return stripTombstoned(merged);
+}
+
+/* 把「本机墓碑里记着的 id」从合并结果里剔掉。就地改（入参一定是 mergeLoadData 刚造出来的新对象）。
+   为什么必须有这一步：mergeLoadData 只做并集、不认删除，于是「本机删过、云端还不知道」
+   的记录会被「本机独有的保本机」这条规则原样留下来 —— 看起来像复活了。
+   正常情况下删记录时 localCacheSet() 已经把本机快照里的它去掉了，但快照可能落后一步
+   （比如删除后没落盘就刷新），这一步兜底，保证墓碑记录无论从哪边来都不出现。
+   O(行数)，纯遍历，幂等。 */
+function stripTombstoned(data){
+  var tombs = cloudTombstoneMap();
+  if (!Object.keys(tombs).length) return data;
+  Object.keys(data || {}).forEach(function(mk){
+    var rr = data[mk] || [];
+    for (var i = rr.length - 1; i >= 0; i--){
+      if (tombs[String((rr[i] && rr[i]._id) || '')]) rr.splice(i, 1);
+    }
+    data[mk] = rr;
+  });
+  return data;
+}
+
+/* 诊断用：记下本次是从哪儿加载的（cloud:N / gh / api / cache），手机上排障用得上。 */
+function setLoadSrc(v){
+  try { localStorage.setItem('lifedesk_load_src', String(v)); } catch(e){}
+}
+
 /* ============ 读取 ============ */
 function fetchAll(key, cb){
   if (MODE === 'localfile'){
@@ -5296,14 +5416,29 @@ function fetchAll(key, cb){
       if (!local || !Object.keys(local).length) local = localCacheGet();
       var hadLocal = !!(local && Object.keys(local).length);
       if (hadLocal) settle(local);          /* 先用本机数据把画面顶起来 */
-      /* ② 后台拉最新（每个请求带 8 秒超时 + 重试，不会再被单个挂起请求拖死） */
-      var st = await ghStaticLoadV2();
-      if (st && Object.keys(st).length){
-        /* v103fix：刷新即丢根治 —— 绝不让云端整份覆盖本机快照。
-           本机 IndexedDB 里可能有手机刚录、还没推到云端的记录（见下方 5539 注释），
-           直接 idbSet(st) 会把它们冲掉。改成【并集】合并：本机独有的记录保本机、
-           云端新增的补进来、两边都有的按字段较新者赢。 */
-        var merged = mergeLoadData(local, st);
+      /* ② 后台拉最新（每个请求带超时 + 重试，不会再被单个挂起请求拖死）。
+         2026-09-18：数据权威源改成 Cloudflare（D1）—— 手机端直读 /api/sync，
+         1 个请求就把 1400+ 条全取回来（实测 1.37 秒 vs GitHub 47 个文件 9.07 秒）。
+         没配令牌 / 云端拿不到 → 自动回退 GitHub Pages，行为与改动前完全一致。 */
+      var merged = null, src = '';
+      var crows = await cloudLoadAllRows();
+      if (crows){
+        /* 云端权威 + 字段并集 + 认云端删除。本机刚录、还没推的记录由并集保住。 */
+        merged = mergeLoadRows(local, crows);
+        src = 'cloud:' + crows.length;
+      } else {
+        var st = await ghStaticLoadV2();
+        if (st && Object.keys(st).length){
+          /* v103fix：刷新即丢根治 —— 绝不让云端整份覆盖本机快照。
+             本机 IndexedDB 里可能有手机刚录、还没推到云端的记录（见下方 5539 注释），
+             直接 idbSet(st) 会把它们冲掉。改成【并集】合并：本机独有的记录保本机、
+             云端新增的补进来、两边都有的按字段较新者赢。 */
+          merged = stripTombstoned(mergeLoadData(local, st));
+          src = 'gh';
+        }
+      }
+      if (merged && Object.keys(merged).length){
+        setLoadSrc(src);
         _ghCache = merged;
         idbSet(merged);                      /* 落盘 IndexedDB：这才是真正「存在手机上」 */
         localCacheSetFrom(merged);           /* 仍试写 localStorage（小数据可用，超限静默忽略） */
@@ -5315,12 +5450,12 @@ function fetchAll(key, cb){
         }
         return;
       }
-      /* ③ 网络拿不到：本机已有数据 → 到此为止（保持正常可用，不报「读取失败」） */
+      /* ③ 两条链都拿不到：本机已有数据 → 到此为止（保持正常可用，不报「读取失败」） */
       if (hadLocal) return;
       try {
         ghGetAll(function(all, sha, err){
           var got = (all && Object.keys(all).length) ? all : null;
-          if (got){ _ghCache = got; idbSet(got); localCacheSetFrom(got); }
+          if (got){ _ghCache = got; idbSet(got); localCacheSetFrom(got); setLoadSrc('api'); }
           else { _ghCache = {}; }
           settle(_ghCache);
         });
@@ -5758,6 +5893,8 @@ function filtered(key){
     rows=rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
     if (f.cat) rows=rows.filter(function(r){ return r['大类']===f.cat; });
     if (f.sub) rows=rows.filter(function(r){ return r['小类']===f.sub; });
+    /* v102：IP 下拉筛选 —— 一个类目里可能混着多个 IP，选中后只看这个 IP 的东西 */
+    if (f.ipf) rows=rows.filter(function(r){ return (r['IP']||'')===f.ipf; });
     if (f.hidden) rows=rows.filter(function(r){ return !!r['隐藏款']; });   /* v96p：隐藏款筛选 */
     if (q) rows=rows.filter(function(r){
       return ((r['名称']||'')+' '+(r['IP']||'')+' '+(r['系列']||'')+' '+(r['编号']||'')+' '+(r['存储地点']||'')+' '+(r['购入渠道']||'')+' '+(r['短评']||'')).toLowerCase().indexOf(q)>=0; });
@@ -6217,7 +6354,12 @@ function renderCatMode(){
        省下一整行；六大类 chip 独占一行，用 6 等分网格强制不折行并变窄。 */
     '<div class="catbar">'+
       '<button class="chip'+(f.cat?'':' on')+'" type="button" data-act="f" data-k="cat" data-v="">全部</button>'+
-      '<div class="searchwrap" style="flex:1;min-width:0;margin-bottom:0;display:flex"><input class="search" autocomplete="off" id="q_collection" placeholder="搜名称 / IP / 系列 / 地点 / 短评" value="'+esc(f.q)+'"></div>'+
+      /* v102：搜索栏内加「搜索」按钮 —— 输入时只存草稿(qDraft)，点按钮才真正执行搜索；
+         回车不再触发搜索（与按钮分开），避免打字过程中不断重绘。 */
+      '<div class="searchwrap" style="flex:1;min-width:0;margin-bottom:0;display:flex">'+
+        '<input class="search" autocomplete="off" id="q_collection" placeholder="搜名称 / IP / 系列 / 地点 / 短评" value="'+esc(f.qDraft!=null?f.qDraft:f.q)+'">'+
+        '<button type="button" class="searchgo" data-act="dosearch" data-k="collection" title="执行搜索">搜索</button>'+
+      '</div>'+
     '</div>'+
     '<div class="chips cat6">'+
     CATS.map(function(t){
@@ -6229,14 +6371,19 @@ function renderCatMode(){
   (SUBS[f.cat]||[]).forEach(function(x){ used[x]=1; });
   s.rows.forEach(function(r){ if (r['大类']===f.cat && r['小类']) used[r['小类']]=1; });
   var subList=Object.keys(used);
-  /* v96p：隐藏款筛选（仅当数据里存在隐藏款 item 才展示；不污染没有隐藏款的分类） */
+  /* v96p：隐藏款筛选 —— 仅当数据里存在隐藏款 item 才展示（不污染没有隐藏款的分类）。
+     v102：由「全部 / 只看隐藏款」两个 chip 改成**一个切换按钮**（默认就是全部，
+           点一次选中、再点一次取消），并移到下方工具栏「按系列 / 按物品」后面。 */
   var hasHidden = s.rows.some(function(r){ return !!r['隐藏款']; });
-  if (hasHidden){
-    h += '<div class="subchips">'+
-      '<button class="chip'+(f.hidden?'':' on')+'" type="button" data-act="f" data-k="hidden" data-v="">全部</button>'+
-      '<button class="chip'+(f.hidden==='1'?' on':'')+'" type="button" data-act="f" data-k="hidden" data-v="1">只看隐藏款</button>'+
-      '</div>';
-  }
+  /* v102：IP 下拉的候选 —— 按当前大类 / 小类取真实出现过的 IP。
+     刻意不叠加 IP 自身的筛选，否则选中某个 IP 后列表会塌成只剩它一个，就切不回去了。 */
+  var _ipSeen = {};
+  s.rows.forEach(function(r){
+    if (f.cat && r['大类']!==f.cat) return;
+    if (f.sub && r['小类']!==f.sub) return;
+    if (r['IP']) _ipSeen[r['IP']] = 1;
+  });
+  var ipList = Object.keys(_ipSeen).sort(function(a,b){ return String(a).localeCompare(String(b),'zh'); });
   if (f.cat && subList.length){
     h += '<div class="subchips">'+
       '<button class="chip'+(f.sub?'':' on')+'" type="button" data-act="f" data-k="sub" data-v="">不限</button>'+
@@ -6245,17 +6392,26 @@ function renderCatMode(){
       }).join('')+'</div>';
   }
   h += '<div class="segline" style="margin-top:14px">'+
-    '<div class="seg"><button type="button" data-act="view" data-v="wall" class="'+(f.view==='wall'?'on':'')+'">封面墙</button>'+
-    '<button type="button" data-act="view" data-v="list" class="'+(f.view==='list'?'on':'')+'">列表</button></div>'+
     /* v102：封面墙分组方式 —— 按系列（出系列卡，点进详情）/ 按物品（直接平铺符合条件的物品）。
-       走通用筛选通道 data-act="f" data-k="wallGroup"，无需新增事件分支。 */
-    (f.view==='wall' ? '<div class="seg" title="封面墙上显示什么：系列卡，还是符合条件的物品本身">'+
+       走通用筛选通道 data-act="f" data-k="wallGroup"，无需新增事件分支。
+       （列表模式已移除，恒为封面墙，故不再需要「封面墙 / 列表」切换） */
+    '<div class="seg" title="封面墙上显示什么：系列卡，还是符合条件的物品本身">'+
       '<button type="button" data-act="f" data-k="wallGroup" data-v="series" class="'+((f.wallGroup||'series')==='series'?'on':'')+'">按系列</button>'+
       '<button type="button" data-act="f" data-k="wallGroup" data-v="item" class="'+((f.wallGroup||'series')==='item'?'on':'')+'">按物品</button>'+
-    '</div>' : '')+
+    '</div>'+
+    /* v102：IP 下拉 —— 一个类目里常混着多个 IP，选一个就只看它的东西。
+       选项取自「当前大类/小类」下真实出现过的 IP（不含 IP 自身的筛选，避免选中后列表塌陷成只剩它自己）。 */
+    (ipList.length ? '<select id="ipFilterSel" class="ipfilter" title="只看某个 IP">'+
+      '<option value="">全部 IP</option>'+
+      ipList.map(function(n){
+        return '<option value="'+esc(n)+'"'+(f.ipf===n?' selected':'')+'>'+esc(n)+'</option>';
+      }).join('')+'</select>' : '')+
+    /* v102：隐藏款切换按钮 —— 紧随分组方式之后；默认（未选中）即「全部」，点一次选中、再点取消。 */
+    (hasHidden ? '<button type="button" class="chip'+(f.hidden==='1'?' on':'')+'" data-act="f" data-k="hidden"'+
+      ' data-v="'+(f.hidden==='1'?'':'1')+'" title="'+(f.hidden==='1'?'取消，显示全部':'只看隐藏款')+'">隐藏款</button>' : '')+
     '<button class="btn ghost sm" type="button" data-act="collhall">← 返回展厅</button>'+
-    '<button class="btn ghost sm" type="button" data-act="locmgr">管理存储地点</button>'+
-    /* v96k：展示卡缩放滑杆，桌面端接在「管理存储地点」后面；手机端由 CSS 换行到下方靠右、占容器一半 */
+    /* v102：「管理存储地点」已移到 topbar，这里不再重复出现。 */
+    /* v96k：展示卡缩放滑杆；手机端由 CSS 换行到下方靠右、占容器一半 */
     cardScaleHTML('cslider-cat')+'</div>';
   if (s.status==='loading'){ h += emptyHTML('正在读线上数据…','第一次打开会稍微等一下。'); return h+'</section>'; }
   if (s.status==='error'){ h += emptyHTML('没能读到数据','点上面的「重试」再拉一次。'); return h+'</section>'; }
@@ -6327,7 +6483,11 @@ function renderPagedWall(rows, label){
   var p = Math.max(1, Math.min(f.page || 1, totalPages));
   var start = (p - 1) * ps;
   var pageRows = rows.slice(start, start + ps);
-  var h = '<div class="grp"><h4>'+esc(label)+' <em>'+total+'</em></h>';
+  /* v102 修 bug：这里原本写成 </h>（漏了 4），<h4> 没闭合。
+     而 .grp h4 是 display:flex —— 未闭合会把下面的「分页控制栏」和 .wall 卡片墙
+     全变成这个标题的 flex 子项，卡片墙被挤成一条窄条，里面的 grid 只剩一列，
+     于是物品全竖着排一列（条目 >200 触发分页时才会走到这个分支）。 */
+  var h = '<div class="grp"><h4>'+esc(label)+' <em>'+total+'</em></h4>';
 
   /* 分页控制栏 */
   h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 12px;font-size:11.5px;color:var(--muted)">';
@@ -8430,6 +8590,23 @@ function bindCardScalers(root){
     });
   });
 }
+/* v102：把「执行搜索」抽成函数，供「搜索」按钮与搜索框的「×」清空按钮共用。
+   传空字符串 = 取消按搜索词筛选、恢复全部（这才是 × 该有的效果）。
+   藏品馆的搜索是「点按钮才生效」的，× 只派发 input/change 清不掉已生效的 q，
+   所以清空时必须走这里真正把 q 置空并重绘。 */
+function applyCollectionSearch(val){
+  var v = (val == null) ? '' : String(val);
+  ui.collection.q = v;
+  ui.collection.qDraft = v;
+  ui.collection.page = 1;
+  /* 有搜索词 → 自动切「按物品」；清空 → 自动收回「按系列」（免得留下上千条平铺）。
+     用户手动点过分组按钮（wallGroupAuto=false）则不被覆盖。 */
+  if (v.trim()){
+    if (!ui.collection.wallGroupAuto){ ui.collection.wallGroup='item'; ui.collection.wallGroupAuto=true; }
+  } else if (ui.collection.wallGroupAuto){
+    ui.collection.wallGroup='series'; ui.collection.wallGroupAuto=false;
+  }
+}
 function bindStage(){
   var stage=$('stage');
   /* v58：给所有搜索框加「×」一键清空按钮（自动包裹，无需每个页面单独处理）
@@ -8461,6 +8638,14 @@ function bindStage(){
       inp.dispatchEvent(new Event('input'));
       inp.dispatchEvent(new Event('change'));
       btn.hidden=true; inp.focus();
+      /* v102：藏品馆是「点搜索按钮才生效」，只派发 input/change 不会清掉已生效的 q，
+         那样输入框空了、列表却仍按旧词筛选，回不到「全部」。
+         这里补一次「以空词搜索」，真正取消筛选；render 后重新聚焦新输入框。 */
+      if (inp.id === 'q_collection'){
+        applyCollectionSearch('');
+        render();
+        var n2 = $('q_collection'); if (n2) n2.focus();
+      }
     };
     wrap.appendChild(btn);
     inp.addEventListener('input', function(){ btn.hidden=!inp.value; });
@@ -8520,26 +8705,31 @@ plus.addEventListener('click', function(e) {
   ['yearSel'].forEach(function(id){
     var n=$(id); if (n) n.addEventListener('change', function(){ ui.year=n.value; render(); });
   });
+  /* v102：按类别页的 IP 下拉 —— 选中即只显示该 IP（空值=全部 IP） */
+  ['ipFilterSel'].forEach(function(id){
+    var n=$(id);
+    if (n) n.addEventListener('change', function(){
+      ui.collection.ipf = n.value || '';
+      ui.collection.page = 1;
+      render();
+    });
+  });
   ['collection','travel','study','food','recipe','idea','av','checkin'].forEach(function(k){
     var n=$('q_'+k);
     if (n){
       var inView = function(){ return ui.view===k || (k==='checkin' && ui.view==='travel'); };
       n.addEventListener('input', function(){
-        ui[k].q=n.value;
-        /* v102：藏品馆一输入搜索词就自动切「按物品」（打字的意图通常是找具体的东西，
-           如搜「渔夫帽」要看那 4 顶）；清空搜索框则自动收回「按系列」，
-           免得留下上千条物品平铺。用户手动点过分组按钮则不被覆盖。 */
-        if (k==='collection'){
-          if (n.value.trim()){
-            if (!ui.collection.wallGroupAuto){ ui.collection.wallGroup='item'; ui.collection.wallGroupAuto=true; }
-          } else if (ui.collection.wallGroupAuto){
-            ui.collection.wallGroup='series'; ui.collection.wallGroupAuto=false;
-          }
-        }
+        /* v102：藏品馆改成「点搜索按钮才执行」 —— 输入过程中只存草稿，不碰生效的 q、也不重绘；
+           其它模块维持原来的即时过滤。 */
+        if (k==='collection'){ ui.collection.qDraft = n.value; }
+        else { ui[k].q = n.value; }
       });
       n.addEventListener('keydown', function(e){ if(e.key==='Enter'){ n.blur(); } });
-      n.addEventListener('change', function(){ if (inView()) render(); });
-      n.addEventListener('blur', function(){ if (inView() && ui[k].q!==n.value) render(); });
+      /* 藏品馆的搜索改由「搜索」按钮触发（act=dosearch），这里不再自动重绘 */
+      if (k!=='collection'){
+        n.addEventListener('change', function(){ if (inView()) render(); });
+        n.addEventListener('blur', function(){ if (inView() && ui[k].q!==n.value) render(); });
+      }
     }
   });
   /* v59：拾纪电子纸——渲染后启用 contenteditable、失焦保存 */
@@ -9254,7 +9444,7 @@ document.addEventListener('click', function(ev){
   if (act==='mback'){ if (ui.collection.sub){ ui.collection.sub=''; } else { ui.collection.cat=''; } render(); return; }
   if (act==='collclassic'){ ui.collection.classic=true; render(); return; }
   /* v96g：经典列表 → 返回 3D 展厅（清掉类目筛选，回到六大类入口） */
-  if (act==='collhall'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; ui.collection.seriesId=null; ui.collection.ipId=null; ui.collection.seriesWall=''; render(); return; }
+  if (act==='collhall'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; ui.collection.seriesId=null; ui.collection.ipId=null; ui.collection.seriesWall=''; ui.collection.ipf=''; render(); return; }
   if (act==='musedit'){ ui.collection.editing=!ui.collection.editing; render(); return; }
   if (act==='musreset'){ MUSEUM_LAYOUT={}; saveMuseumLayout(); ui.collection.editing=false; render(); toast('已重置展厅布局'); return; }
   if (act==='avzone'){ ui.av.cat=node.getAttribute('data-v'); ui.av.sub=''; render(); return; }
@@ -9373,6 +9563,20 @@ document.addEventListener('click', function(ev){
   if (act==='studiedit'){ rCloseOverlay(); openForm('study', node.getAttribute('data-id')); return; }
   if (act==='recipeedit'){ rCloseOverlay(); openForm('recipe', node.getAttribute('data-id')); return; }
   if (act==='ideaedit'){ rCloseOverlay(); openForm('idea', node.getAttribute('data-id')); return; }
+  /* v102：搜索栏上的「搜索」按钮 —— 把输入框里的草稿正式生效并执行搜索。
+     与回车分开：回车只失焦，不触发搜索（打字过程中也不再反复重绘）。 */
+  if (act==='dosearch'){
+    var sk = node.getAttribute('data-k') || ui.view;
+    if (ui[sk]){
+      var sinp = $('q_'+sk);
+      var sv = sinp ? sinp.value : '';
+      /* 藏品馆走统一函数（含「按物品 / 按系列」的自动切换）；其它模块维持直接赋值 */
+      if (sk==='collection') applyCollectionSearch(sv);
+      else ui[sk].q = sv;
+      render();
+    }
+    return;
+  }
   if (act==='f'){
     var k=node.getAttribute('data-k'), v=node.getAttribute('data-v');
     if (k==='star') ui.idea.star = !ui.idea.star;
@@ -9384,6 +9588,9 @@ document.addEventListener('click', function(ev){
            按系列分组会把它们藏进系列卡）；取消勾选时自动收回「按系列」。
            用户手动点过分组按钮（wallGroupAuto=false）则不被自动逻辑覆盖。 */
         if (k==='wallGroup'){ ui.collection.wallGroupAuto = false; }
+        /* v102：换大类 / 小类时清掉 IP 筛选 —— 原先选的 IP 往往不属于新类目，
+           留着会把列表筛成空的（下拉里也没有它，看起来像「东西不见了」）。 */
+        if (k==='cat' || k==='sub'){ ui.collection.ipf = ''; }
         if (k==='hidden'){
           if (v==='1'){
             if (!ui.collection.wallGroupAuto){ ui.collection.wallGroup='item'; ui.collection.wallGroupAuto=true; }
@@ -12629,6 +12836,51 @@ function bootBanner(){
   if (MODE === 'localfile') writeReadme();
 }
 document.addEventListener('keydown', function(e){ if(e.key==='Escape' && !$('sheetHost').hidden) closeSheet(); });
+
+/* ===== v102：手机端「从左边缘右滑 → 返回上一页」 =====
+   逐级后退：先关浮层 / 录入面板，再退系列 → IP → 小类 → 大类 → 展厅。
+   已经是最上层时不做任何事（不会误退出站点，也不会用 history.back 把人送出应用）。 */
+function goBackOne(){
+  /* ① 录入 / 编辑面板开着 → 先关它（和 Esc 一个效果） */
+  var sh = $('sheetHost');
+  if (sh && !sh.hidden){ closeSheet(); render(); return true; }
+  /* ② 页面管理等浮层 → 关掉 */
+  if (ui.pagemgmt && ui.pagemgmt.module){ ui.pagemgmt = { module:'', panel:'fields' }; render(); return true; }
+  /* ③ 藏品馆内逐级后退 */
+  if (ui.view === 'collection'){
+    var c = ui.collection;
+    if (c.seriesId){ c.seriesId = null; render(); return true; }
+    if (c.ipId){ c.ipId = null; render(); return true; }
+    if (c.seriesWall){ c.seriesWall = ''; render(); return true; }
+    if (c.sub){ c.sub = ''; render(); return true; }
+    if (c.cat){ c.cat = ''; render(); return true; }
+    if (c.classic){ c.classic = false; render(); return true; }
+  }
+  return false;      /* 没有可退的层级 */
+}
+(function(){
+  if (!('ontouchstart' in window)) return;      /* 桌面无触摸，直接不装 */
+  var EDGE = 28;        /* 只认从屏幕最左 28px 内开始的滑动 */
+  var MIN_DX = 60;      /* 至少右滑 60px 才算返回 */
+  var MAX_DY = 40;      /* 上下偏移超过 40px 就当成滚动/别的意图，不触发 */
+  var sx = 0, sy = 0, tracking = false;
+  window.addEventListener('touchstart', function(e){
+    if (!e.touches || e.touches.length !== 1){ tracking = false; return; }
+    var t = e.touches[0];
+    sx = t.clientX; sy = t.clientY;
+    tracking = (sx <= EDGE);
+  }, { passive: true });
+  window.addEventListener('touchend', function(e){
+    if (!tracking) return;
+    tracking = false;
+    var t = (e.changedTouches && e.changedTouches[0]) || null;
+    if (!t) return;
+    var dx = t.clientX - sx, dy = t.clientY - sy;
+    if (dx >= MIN_DX && Math.abs(dy) <= MAX_DY) goBackOne();
+  }, { passive: true });
+  /* 多指手势 / 中途取消：不再判定为返回 */
+  window.addEventListener('touchcancel', function(){ tracking = false; }, { passive: true });
+})();
 
 /* v75fix：把未捕获的异步错误浮出来（否则数据读取卡住时控制台安静得像没事发生）。
    只在出现真正的 async 异常时 toast，避免误报。 */
