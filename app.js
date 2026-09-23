@@ -4582,7 +4582,17 @@ function renderPageMgmt(module){
   ui.pagemgmt._tpl = curTpl;
   var bdefs = builtinFieldDefs(module, curTpl);
   var lay = getFieldLayout(module, curTpl);
-  h += '<div class="pm-section"><h3>内置字段 · 显示与宽度 <i style="font-weight:400;font-size:11px;color:var(--muted)">('+bdefs.length+' 个 · 隐藏后不再出现在录入表单，已存的内容不会丢)</i></h3>';
+  /* v102：内置字段默认折叠 —— 打开页面管理时先收起，点标题才展开。
+     这类字段往往几十个，默认全铺开会把下面的「自定义字段」挤到很下面，找不着。
+     折叠状态记在 ui.pagemgmt._biOpen 里：改宽度 / 隐藏 / 切换模板都会 render() 重建面板，
+     不记住状态的话，展开后一操作就被折回去。 */
+  var biOpen = !!ui.pagemgmt._biOpen;
+  h += '<div class="pm-section">'+
+    '<h3 data-act="pmtoggle" data-tgt="pm_bi_body" style="cursor:pointer;user-select:none">'+
+      '<span class="pm-arrow" style="'+(biOpen?'transform:rotate(90deg)':'')+'">▸</span> 内置字段 · 显示与宽度 '+
+      '<i style="font-weight:400;font-size:11px;color:var(--muted)">('+bdefs.length+' 个 · 隐藏后不再出现在录入表单，已存的内容不会丢 · 点击'+(biOpen?'收起':'展开')+')</i>'+
+    '</h3>'+
+    '<div id="pm_bi_body" style="display:'+(biOpen?'':'none')+'">';
   if (tpls.length){
     h += '<div class="pm-tplbar"><span>按录入表单：</span>'+
       '<button class="pm-tpl'+(curTpl?'':' on')+'" type="button" data-act="pmtpl" data-v="">通用</button>'+
@@ -4609,7 +4619,8 @@ function renderPageMgmt(module){
       '</div></div>';
   });
   h += '</div>';
-  h += '<div class="pm-foot"><button class="btn ghost xs" type="button" data-act="pmresetall" data-mk="'+esc(module)+'">↺ 全部恢复默认'+(curTpl?'（'+esc(curTpl)+'）':'')+'</button></div></div>';
+  h += '<div class="pm-foot"><button class="btn ghost xs" type="button" data-act="pmresetall" data-mk="'+esc(module)+'">↺ 全部恢复默认'+(curTpl?'（'+esc(curTpl)+'）':'')+'</button></div>';
+  h += '</div></div>';   /* 关闭 pm_bi_body（折叠体）与 pm-section */
 
   /* 自定义字段 */
   h += '<div class="pm-section"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'+
@@ -5156,6 +5167,13 @@ function normalizeRows(rows){
 var ui = {
   view:'overview',
   collection:{ mode:'cat', cat:'', sub:'', q:'', view:'wall', ipId:null, seriesId:null, inbox:false, classic:false, editing:false, numOrder:'asc', yearView:false, seriesWall:'', seriesStatus:'全部', seriesSort:'no', pageSize:0, page:1,
+    /* v102：封面墙的分组方式 —— 'series'=按系列出卡（默认，点进系列详情）；
+       'item'=直接把符合条件的物品平铺成卡片（找具体东西时用，如搜「渔夫帽」、看全部隐藏款）。 */
+    wallGroup:'series',
+    /* wallGroupAuto：true 表示当前「按物品」是系统自动切过去的（搜了词 / 勾了隐藏款），
+       不是用户手动点的。这样清空搜索、取消隐藏款时能自动收回「按系列」，
+       避免留下上千条物品平铺；而用户手动点过的选择不会被覆盖。 */
+    wallGroupAuto:false,
     /* v77：宝可梦 30 周年冰箱贴专用视图状态 */
     pk:{ types:[], both:false, form:'', region:'', group:'', gen:'' }, pkIndex:false, pkGenOpen:{},
     /* v78：批量编辑——selMode 选择模式；sel 选中 id 集合（{id:true}） */
@@ -6229,6 +6247,12 @@ function renderCatMode(){
   h += '<div class="segline" style="margin-top:14px">'+
     '<div class="seg"><button type="button" data-act="view" data-v="wall" class="'+(f.view==='wall'?'on':'')+'">封面墙</button>'+
     '<button type="button" data-act="view" data-v="list" class="'+(f.view==='list'?'on':'')+'">列表</button></div>'+
+    /* v102：封面墙分组方式 —— 按系列（出系列卡，点进详情）/ 按物品（直接平铺符合条件的物品）。
+       走通用筛选通道 data-act="f" data-k="wallGroup"，无需新增事件分支。 */
+    (f.view==='wall' ? '<div class="seg" title="封面墙上显示什么：系列卡，还是符合条件的物品本身">'+
+      '<button type="button" data-act="f" data-k="wallGroup" data-v="series" class="'+((f.wallGroup||'series')==='series'?'on':'')+'">按系列</button>'+
+      '<button type="button" data-act="f" data-k="wallGroup" data-v="item" class="'+((f.wallGroup||'series')==='item'?'on':'')+'">按物品</button>'+
+    '</div>' : '')+
     '<button class="btn ghost sm" type="button" data-act="collhall">← 返回展厅</button>'+
     '<button class="btn ghost sm" type="button" data-act="locmgr">管理存储地点</button>'+
     /* v96k：展示卡缩放滑杆，桌面端接在「管理存储地点」后面；手机端由 CSS 换行到下方靠右、占容器一半 */
@@ -6241,8 +6265,12 @@ function renderCatMode(){
   }
 
   /* v75：封面墙视图下，只要 wall 模式就按系列分组（全部 / 大类 / 小类不限 / 小类 都生效），
-     系列卡片可点击进入系列详情；未归类 items 单独一组并分页 */
-  if (f.view==='wall'){
+     系列卡片可点击进入系列详情；未归类 items 单独一组并分页
+     v102：分组方式可切换 —— wallGroup==='item' 时不再归类，直接把当前筛选出来的物品
+           平铺成卡片（找具体东西：搜「渔夫帽」看 4 顶、看全部隐藏款等）。 */
+  if (f.view==='wall' && (f.wallGroup||'series')==='item'){
+    h += renderPagedWall(rows, f.q ? ('“'+f.q+'” 的物品') : (f.hidden==='1' ? '隐藏款物品' : (f.sub || f.cat || '全部物品')));
+  } else if (f.view==='wall'){
     var seriesMap={}, sOrder=[], unclass=[];
     rows.forEach(function(r){
       var sn = r['系列']||'';
@@ -8496,7 +8524,19 @@ plus.addEventListener('click', function(e) {
     var n=$('q_'+k);
     if (n){
       var inView = function(){ return ui.view===k || (k==='checkin' && ui.view==='travel'); };
-      n.addEventListener('input', function(){ ui[k].q=n.value; });
+      n.addEventListener('input', function(){
+        ui[k].q=n.value;
+        /* v102：藏品馆一输入搜索词就自动切「按物品」（打字的意图通常是找具体的东西，
+           如搜「渔夫帽」要看那 4 顶）；清空搜索框则自动收回「按系列」，
+           免得留下上千条物品平铺。用户手动点过分组按钮则不被覆盖。 */
+        if (k==='collection'){
+          if (n.value.trim()){
+            if (!ui.collection.wallGroupAuto){ ui.collection.wallGroup='item'; ui.collection.wallGroupAuto=true; }
+          } else if (ui.collection.wallGroupAuto){
+            ui.collection.wallGroup='series'; ui.collection.wallGroupAuto=false;
+          }
+        }
+      });
       n.addEventListener('keydown', function(e){ if(e.key==='Enter'){ n.blur(); } });
       n.addEventListener('change', function(){ if (inView()) render(); });
       n.addEventListener('blur', function(){ if (inView() && ui[k].q!==n.value) render(); });
@@ -9086,7 +9126,14 @@ document.addEventListener('click', function(ev){
   if (act==='pmtoggle'){
     var tgt = node.getAttribute('data-tgt');
     var el = document.getElementById(tgt);
-    if (el){ var vis=el.style.display!=='none'; el.style.display=vis?'none':''; var ar=node.querySelector('.pm-arrow'); if(ar) ar.style.transform=vis?'':'rotate(90deg)'; }
+    if (el){
+      var vis=el.style.display!=='none';
+      el.style.display=vis?'none':'';
+      var ar=node.querySelector('.pm-arrow'); if(ar) ar.style.transform=vis?'':'rotate(90deg)';
+      /* v102：内置字段的折叠状态记下来 —— 下面改宽度 / 隐藏 / 切模板都会 render() 重建面板，
+         不记住的话展开后一操作就被折回去。 */
+      if (tgt==='pm_bi_body' && ui.pagemgmt) ui.pagemgmt._biOpen = !vis;
+    }
     return;
   }
   if (act==='pmtype'){
@@ -9329,7 +9376,23 @@ document.addEventListener('click', function(ev){
   if (act==='f'){
     var k=node.getAttribute('data-k'), v=node.getAttribute('data-v');
     if (k==='star') ui.idea.star = !ui.idea.star;
-    else { ui[ui.view][k] = v; if (ui.view==='collection') ui.collection.page=1; }
+    else {
+      ui[ui.view][k] = v;
+      if (ui.view==='collection'){
+        ui.collection.page=1;
+        /* v102：勾「只看隐藏款」自动切「按物品」（想看的就是那几个隐藏款本身，
+           按系列分组会把它们藏进系列卡）；取消勾选时自动收回「按系列」。
+           用户手动点过分组按钮（wallGroupAuto=false）则不被自动逻辑覆盖。 */
+        if (k==='wallGroup'){ ui.collection.wallGroupAuto = false; }
+        if (k==='hidden'){
+          if (v==='1'){
+            if (!ui.collection.wallGroupAuto){ ui.collection.wallGroup='item'; ui.collection.wallGroupAuto=true; }
+          } else if (ui.collection.wallGroupAuto){
+            ui.collection.wallGroup='series'; ui.collection.wallGroupAuto=false;
+          }
+        }
+      }
+    }
     render(); return;
   }
 });
