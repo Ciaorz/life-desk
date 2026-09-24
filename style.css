@@ -118,6 +118,9 @@ input,select,textarea{font:inherit;color:inherit}
 .btn.ghost:hover{background:#fff}
 .btn.ghost.sm.on{background:#fff;border-color:var(--accent);color:var(--accent);box-shadow:0 2px 8px rgba(77,48,69,.12)}
 .btn.sm{min-height:32px;padding:0 11px;font-size:11.5px;border-radius:10px}
+/* v112：系列详情 acts 行的「+ 添物品」缩成一个「+」—— 做成正方形小块，加号居中且略大一点 */
+.btn.addone,.btn.addone.sm{width:32px;min-width:32px;padding:0;font-size:16px;line-height:1;
+  display:inline-flex;align-items:center;justify-content:center}
 .btn.link{min-height:30px;padding:0 6px;color:var(--muted);font-size:11.5px;font-weight:600}
 .btn.link:hover{color:var(--ink)}
 /* v109：topbar「待上传 N 条」角标 —— 点一下立即上传到 Cloudflare */
@@ -234,6 +237,10 @@ input,select,textarea{font:inherit;color:inherit}
 .chips.cat6 .chip{padding:5px 4px;text-align:center}
 .chip{padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:rgba(255,252,247,.72);
   font-size:11.5px;font-weight:600;color:var(--muted);cursor:pointer;transition:.16s}
+/* v112：小类背景条（.subbox）+ 当前大类的「凸起」（.cattab）—— 只在手机端成形，
+   桌面端 .cattab{display:contents} 等于没有这层，外观与以前完全一致。 */
+.cattab{display:contents}
+.subbox{margin-top:8px}
 .chip:hover{border-color:#c9bdac}
 .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
 input.search{min-height:36px;padding:0 13px;border:1px solid var(--line);border-radius:11px;
@@ -247,6 +254,11 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .panel-head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:16px;flex-wrap:wrap}
 .panel-head h2{font:700 19px/1.35 "Songti SC",serif}
 .panel-head .hint{color:var(--muted);font-size:11.5px;letter-spacing:.04em;margin-top:3px}
+/* v112：概览右上角的年份下拉 —— 原来是元素内联样式，手机端媒体查询覆盖不到，挪到类上 */
+.yearsel{min-height:34px;height:34px;padding:0 10px;border:1px solid var(--line);border-radius:10px;
+  background:#fbf8f3;font-size:12px;box-sizing:border-box}
+/* v112：概览标题块（原来是内联 min-height:34px，手机端要能压低） */
+.ovtitle{flex:1;min-width:0;min-height:34px;display:flex;align-items:center}
 
 /* sync bar */
 .syncbar{display:none;margin:0 0 16px;padding:13px 16px;border-radius:16px;
@@ -465,6 +477,14 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .sheet-head p{color:var(--muted);font-size:11px;letter-spacing:.12em;margin-bottom:4px}
 .x{border:0;background:#f1ebe2;width:30px;height:30px;border-radius:9px;cursor:pointer;font-size:16px;
   line-height:1;color:var(--muted);flex:0 0 30px;display:flex;align-items:center;justify-content:center;padding:0}
+/* v111：× 不再用字体里的 × 字形 —— U+00D7 在大多数字体里对齐在「数学轴」上，
+   比视觉中心偏高，光靠 flex 居中修不掉。改成两条斜线画出来，任何字体下都精确居中。
+   做法：文字缩到 0（不可见），用两个伪元素各画一笔。 */
+.x{font-size:0;position:relative}
+.x::before,.x::after{content:'';position:absolute;left:50%;top:50%;width:13px;height:1.8px;
+  background:var(--muted);border-radius:1px}
+.x::before{transform:translate(-50%,-50%) rotate(45deg)}
+.x::after{transform:translate(-50%,-50%) rotate(-45deg)}
 /* v96d：录入窗口右上角「归位」小按钮，位于关闭按钮左侧 */
 .sheet-head-acts{display:flex;align-items:flex-start;gap:8px}
 .guiwei{border:0;background:#efe7da;color:#7a6a55;font-size:12px;font-weight:600;
@@ -794,8 +814,23 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .statgrid.collstat .stat i{font-size:8.5px}
   /* v109：概览标题行（概览 + 充电量按钮 + 年份框）手机端不换行、按钮与年份框同高，整体居右 */
   .panel-head.coll-ov-head{flex-wrap:nowrap}
-  .coll-ov-head [data-act="toggleinvest"]{min-height:34px;padding:0 12px}
-  .coll-ov-head select{min-height:34px}
+  /* v112：两者严格同高同扁 —— 强制 height（不只是 min-height），谁也别想被内容顶高；
+     顺带把字号和内边距一起收一档，比之前的 34px 更扁。 */
+  .coll-ov-head [data-act="toggleinvest"],
+  .coll-ov-head select#yearSel{
+    height:30px;min-height:30px;padding:0 10px;font-size:11.5px;
+    border-radius:9px;box-sizing:border-box;line-height:1;
+  }
+  /* v112：概览的「充电量」金额框原先只有桌面尺寸（padding 15/16、字号 26），
+     手机端显得又胖又高 —— 按上面 4 个概览框的同档缩小。 */
+  .charge-pop{margin-top:10px}
+  .charge-grid{grid-template-columns:1fr 1fr;gap:5px;max-width:100%}
+  .charge-grid .stat{padding:7px 3px;border-radius:10px;text-align:center}
+  .charge-grid .stat u{font-size:8px;letter-spacing:.02em;margin-bottom:3px}
+  .charge-grid .stat b{font-size:16px}
+  .charge-grid .stat i{font-size:8.5px}
+  /* v112：标题块跟着压到 30px，整行更紧凑 */
+  .ovtitle{min-height:30px}
   /* v109：收集进度框（30周年冰箱贴等）手机端再扁一档 */
   .progb{padding:10px 14px}
   .progb h4{margin:0 0 8px}
@@ -804,11 +839,44 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .chips.cat6 .chip{padding:5px 2px;font-size:11.5px}
   /* v102：手机端「← 返回展厅」推到工具栏最右端（拇指更容易够到）；桌面端保持原位 */
   .segline [data-act="collhall"]{margin-left:auto}
+  /* v111：系列详情「← 返回系列列表」—— 手机端推到最右，桌面端紧跟在 seg 框后面（不推右） */
+  .segline .sback{margin-left:auto}
+  /* v111：手机端关闭按钮变大，× 的两条斜线也相应加粗加长 */
+  .x::before,.x::after{width:15px;height:2px}
   /* v102：IP 下拉在窄屏也别撑太宽 */
   .ipfilter{max-width:46vw}
   .row{grid-template-columns:1fr auto;row-gap:6px}
   .fitem{grid-template-columns:1fr;gap:9px}
   .fitem .r{align-items:flex-start;text-align:left}
+
+  /* v112：藏品详情 —— 手机端隐掉「购入信息」这行小标题（四项内容本身已自解释，省一行纵向空间） */
+  .buyh{display:none}
+
+  /* v112：藏品页标题行 —— 「按类别 / 按 IP / 按系列」与「藏品」同一行、居右。
+     .phtxt{display:contents} 让 h2 / hint / seg 变成 grid 的直接项：
+       第 1 行 = 藏品 + 右侧切换按钮，第 2 行 = 提示语（桌面端结构完全不变）。 */
+  .panel-head.coll-cat-head{display:grid;grid-template-columns:1fr auto;column-gap:10px;row-gap:0;align-items:center}
+  .coll-cat-head .phtxt{display:contents}
+  .coll-cat-head h2{grid-column:1;grid-row:1}
+  .coll-cat-head .hint{grid-column:1;grid-row:2;margin-top:2px}
+  .coll-cat-head .seg{grid-column:2;grid-row:1;justify-self:end}
+
+  /* v112：小类「文件夹标签」—— 小类整行被一条背景条框住，当前大类是条上凸起的那一格。
+     小类按钮整体比大类小一号，和大类拉开层级。 */
+  .subchips.subbox{background:var(--accent-soft);border-radius:14px;padding:8px 8px 7px;margin:0;gap:6px}
+  .subchips.subbox .chip{padding:4px 9px;font-size:10.5px}
+  /* 凸起：当前大类按钮外面那层，往上"长"到和大类按钮同高，下面用 ::after 和背景条连成一体 */
+  .chips.cat6 .cattab{display:flex;position:relative;z-index:2;background:var(--accent-soft);
+    border-radius:12px 12px 0 0;padding:3px 0 0;margin:-3px 0 0}
+  .chips.cat6 .cattab .chip{flex:1 1 auto;width:100%}
+  .chips.cat6 .cattab::after{content:'';position:absolute;left:0;right:0;top:100%;
+    height:16px;background:var(--accent-soft)}
+
+  /* v112：分组切换 / 隐藏款 —— 压到和 IP 下拉框一样高（34px），左右也收窄 */
+  .seg.segflat{height:34px;min-height:34px;padding:2px;border-radius:10px}
+  .seg.segflat button{height:28px;min-height:28px;padding:0 9px;font-size:11px;border-radius:8px}
+  .chip.chipflat{height:34px;min-height:34px;padding:0 10px;font-size:11px;
+    display:inline-flex;align-items:center}
 }
 
 /* ---------- 3D 地球仪（程序化贴图） ---------- */

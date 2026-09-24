@@ -193,6 +193,11 @@ async function cloudAutoUpload(){
 }
 /* v109：「待上传」条数 = 本地 _upd 超过上次上传水位线的记录数 + 未推送的墓碑（本机删除）。 */
 function cloudPendingCount(){
+  /* ⚠️ 必须与 cloudCollect(false) 用【完全相同】的判定，否则角标说「有 N 条」、
+     点进去 cloudUpload 却收集不到、弹「没有需要上传的改动」。
+     当初就是在这里翻的车：墓碑（本机删除记录）是【永不清理】的，
+     直接 ts.length 会把早就推上云的老墓碑也数进来，于是角标虚高、点开却没东西可传。
+     正确算法：改动的记录看 _upd > 水位线；墓碑看 t.at > 水位线（与 cloudCollect 一致）。 */
   var wm = cloudWatermark(), n = 0;
   var snap = snapshotAll();
   Object.keys(snap).forEach(function(mk){
@@ -200,7 +205,12 @@ function cloudPendingCount(){
       if (r && r._id != null && Number(r._upd) > wm) n++;
     });
   });
-  try { var ts = JSON.parse(localStorage.getItem('lifedesk_tombstones') || '[]'); if (Array.isArray(ts)) n += ts.length; } catch(e){}
+  try {
+    var ts = JSON.parse(localStorage.getItem('lifedesk_tombstones') || '[]');
+    if (Array.isArray(ts)) ts.forEach(function(t){
+      if (t && t.id != null && Number(t.at) > wm) n++;
+    });
+  } catch(e){}
   return n;
 }
 /* v109：更新 topbar 的「待上传 N 条」角标（仅在已配 Cloudflare 时显示）。 */
@@ -4326,6 +4336,8 @@ var MODS = {
       {k:'小类',t:'dyn',src:'sub',quarter:true},
       {k:'IP',t:'dyn',src:'ip'},
       {k:'系列',t:'dyn',src:'series'},
+      /* v111：子系列 —— 一个大系列下还能分小套（如 Road trip 系列下有 徽章 / 冰箱贴 / 行李牌） */
+      {k:'子系列',t:'dyn',src:'child',quarter:true},
       {k:'编号',t:'text',ph:'如 025，系列子项用',quarter:true},
       /* v76：持有数量 —— 同一件东西收了几件（数字） */
       {k:'持有',t:'number',min:0,ph:'如 1，这一件有几份',quarter:true},
@@ -4352,10 +4364,19 @@ var MODS = {
     ]},
   series: { key:'series', db:DB.series, name:'系列', icon:'套', eyebrow:'Series',
     desc:'成套的东西，按套来记，还差哪几个一眼看到。', addLabel:'新增系列',
+    /* v113：排版 —— 第一排「系列名称」；第二排「所属IP + 系列总数量 + 添加子系列」；
+       点「添加子系列」后第三排出现「子系列名称 + 子系列数量 + 确认」。
+       w12 = 在 12 栏栅格（.fgrid.fg12）里占几栏，5+4+3 正好一排。 */
     fields:[
       {k:'系列名称',t:'text',req:1,ph:'如 宝可梦30周年151金属徽章',full:1},
-      {k:'所属IP',t:'dyn',src:'ip'},
-      {k:'目标数量',t:'number',min:0,ph:'如 151，留空表示不限',lab:'系列总数量'},
+      {k:'所属IP',t:'dyn',src:'ip',w12:5},
+      {k:'目标数量',t:'number',min:0,ph:'如 151，留空表示不限',lab:'系列总数量',w12:4},
+      /* 纯界面字段（pseudo），不写库、不进「页面管理 · 内置字段」 */
+      {k:'_addchild',t:'childadd',lab:' ',w12:3,pseudo:1},
+      /* v113：子系列定义（名称 + 数量）就存在系列记录自己的「子系列」字段里 ——
+         不单独建系列记录、不单独开文件夹；它的封面、以及它名下 items 的封面，
+         都留在本系列的目录下（items 本来就按父系列名归目录）。 */
+      {k:'子系列',t:'childlist',full:1,pseudo:1},
       {k:'系列封面',t:'img',ph:'图片链接，或点右侧上传',full:1},
       {k:'说明',t:'textarea',ph:'这一套的来历、怎么收齐的',full:1}
     ]},
@@ -5287,6 +5308,8 @@ var ui = {
     wallGroup:'series',
     /* v102：按类别页的 IP 下拉筛选 —— ''=全部 IP，否则只看该 IP 的东西 */
     ipf:'',
+    /* v111：系列详情内的「子系列」筛选 —— ''=全部子系列，否则只看该子系列 */
+    seriesChild:'',
     /* v110：系列详情内的「物品类型（小类）」筛选 —— ''=该系列全部类型，否则只看该类型。
        从「按类别」进系列时会默认带上当前小类（如 周边/冰箱贴 → 欢趣白昼系列只看冰箱贴）；
        从「按系列」进则不预置，由下拉框自由切换。 */
@@ -6323,7 +6346,9 @@ function renderOverview(){
   var curY = String(new Date().getFullYear());
   for (var y=2000; y<=parseInt(curY,10); y++) ys[String(y)]=1;
   ys[ui.year]=1;
-  var ysel='<select id="yearSel" style="min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:#fbf8f3;font-size:12px">'+
+  /* v112：样式从内联挪到 .yearsel —— 内联样式手机端没法用媒体查询覆盖，
+     而概览的「充电量」按钮要跟它压成同高同扁。 */
+  var ysel='<select id="yearSel" class="yearsel">'+
     '<option value=""'+(isAll?' selected':'')+'>全部</option>'+
     Object.keys(ys).filter(function(y){ return y!==''; }).sort().reverse().map(function(y){
       return '<option value="'+y+'"'+(y===ui.year?' selected':'')+'>'+y+'</option>'; }).join('')+'</select>';
@@ -6476,13 +6501,15 @@ function renderCollection(){
   for (var y2=2000; y2<=parseInt(curY2,10); y2++) ys[String(y2)]=1;
   ys[ui.year]=1;
   var isAll = !ui.year;
-  var ysel='<select id="yearSel" style="min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:#fbf8f3;font-size:12px">'+
+  /* v112：样式从内联挪到 .yearsel —— 内联样式手机端没法用媒体查询覆盖，
+     而概览的「充电量」按钮要跟它压成同高同扁。 */
+  var ysel='<select id="yearSel" class="yearsel">'+
     '<option value=""'+(isAll?' selected':'')+'>全部</option>'+
     Object.keys(ys).filter(function(y){ return y!==''; }).sort().reverse().map(function(y){
       return '<option value="'+y+'"'+(y===ui.year?' selected':'')+'>'+y+'</option>'; }).join('')+'</select>';
   /* v75fix：标题块 flex:1 占满左侧，把「总投入 + 年份下拉」一起顶到最右；顺序为 总投入 → 年份 */
   var head='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-    '<div class="panel-head coll-ov-head"><div style="flex:1;min-width:0;min-height:34px;display:flex;align-items:center"><h2>概览</h2></div>'+
+    '<div class="panel-head coll-ov-head"><div class="ovtitle"><h2>概览</h2></div>'+
     '<button class="btn ghost sm'+(ui.showInvest?' on':'')+'" type="button" data-act="toggleinvest">充电量</button>'+
     ysel+'</div>'+collStats()+'</section>';
   var m=ui.collection.mode;
@@ -6496,7 +6523,9 @@ function renderCollection(){
 function renderCatMode(){
   var f=ui.collection, s=store.collection, rows=filtered('collection');
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-    '<div class="panel-head"><div><h2>藏品</h2>'+
+    /* v112：手机端「按类别 / 按 IP / 按系列」要与「藏品」标题同一行、居右 —— 靠
+       .coll-cat-head 的 grid + .phtxt{display:contents} 实现（桌面端结构完全不变）。 */
+    '<div class="panel-head coll-cat-head"><div class="phtxt"><h2>藏品</h2>'+
     '<div class="hint">点开任意一件，看它的购入信息和存放位置</div></div>'+modeSeg()+'</div>'+
     /* v98：手机端布局 —— 「全部」与搜索栏同一行（全部在左、搜索框占满剩余宽度），
        省下一整行；六大类 chip 独占一行，用 6 等分网格强制不折行并变窄。 */
@@ -6512,8 +6541,12 @@ function renderCatMode(){
     '<div class="chips cat6">'+
     CATS.map(function(t){
       /* 六大类 chip：只做筛选入口，不显示数量 */
-      return '<button class="chip'+(f.cat===t?' on':'')+'" type="button" data-act="f" data-k="cat" data-v="'+t+'">'+
+      var cbtn = '<button class="chip'+(f.cat===t?' on':'')+'" type="button" data-act="f" data-k="cat" data-v="'+t+'">'+
         t+'</button>';
+      /* v112：把「当前选中的大类」单独套一层 .cattab —— 手机端它就是小类背景条的**凸起**，
+         凸起往上升、正好包住这个大类按钮；其它大类都在框外。桌面端 .cattab{display:contents}，
+         等价于没有这层，肉眼无差别。 */
+      return (f.cat===t) ? ('<span class="cattab">'+cbtn+'</span>') : cbtn;
     }).join('')+'</div>';
   var used={};
   (SUBS[f.cat]||[]).forEach(function(x){ used[x]=1; });
@@ -6533,7 +6566,9 @@ function renderCatMode(){
   });
   var ipList = Object.keys(_ipSeen).sort(function(a,b){ return String(a).localeCompare(String(b),'zh'); });
   if (f.cat && subList.length){
-    h += '<div class="subchips">'+
+    /* v112：小类整行包一层带背景的「框」（.subbox），手机端与上面大类的 .cattab 凸起连成
+       「文件夹标签」的样子，直观表达「这些小类从属于当前大类」。 */
+    h += '<div class="subchips subbox">'+
       '<button class="chip'+(f.sub?'':' on')+'" type="button" data-act="f" data-k="sub" data-v="">不限</button>'+
       subList.map(function(t){
         return '<button class="chip'+(f.sub===t?' on':'')+'" type="button" data-act="f" data-k="sub" data-v="'+esc(t)+'">'+esc(t)+'</button>';
@@ -6543,7 +6578,8 @@ function renderCatMode(){
     /* v102：封面墙分组方式 —— 按系列（出系列卡，点进详情）/ 按物品（直接平铺符合条件的物品）。
        走通用筛选通道 data-act="f" data-k="wallGroup"，无需新增事件分支。
        （列表模式已移除，恒为封面墙，故不再需要「封面墙 / 列表」切换） */
-    '<div class="seg" title="封面墙上显示什么：系列卡，还是符合条件的物品本身">'+
+    /* v112：.segflat —— 手机端把这组切换压扁到和 IP 下拉框一样高、左右也收窄 */
+    '<div class="seg segflat" title="封面墙上显示什么：系列卡，还是符合条件的物品本身">'+
       '<button type="button" data-act="f" data-k="wallGroup" data-v="series" class="'+((f.wallGroup||'series')==='series'?'on':'')+'">按系列</button>'+
       '<button type="button" data-act="f" data-k="wallGroup" data-v="item" class="'+((f.wallGroup||'series')==='item'?'on':'')+'">按物品</button>'+
     '</div>'+
@@ -6555,7 +6591,8 @@ function renderCatMode(){
         return '<option value="'+esc(n)+'"'+(f.ipf===n?' selected':'')+'>'+esc(n)+'</option>';
       }).join('')+'</select>' : '')+
     /* v102：隐藏款切换按钮 —— 紧随分组方式之后；默认（未选中）即「全部」，点一次选中、再点取消。 */
-    (hasHidden ? '<button type="button" class="chip'+(f.hidden==='1'?' on':'')+'" data-act="f" data-k="hidden"'+
+    /* v112：.chipflat —— 手机端与 .segflat 同高、同宽收窄，三者（分组切换 / IP 框 / 隐藏款）齐平 */
+    (hasHidden ? '<button type="button" class="chip chipflat'+(f.hidden==='1'?' on':'')+'" data-act="f" data-k="hidden"'+
       ' data-v="'+(f.hidden==='1'?'':'1')+'" title="'+(f.hidden==='1'?'取消，显示全部':'只看隐藏款')+'">隐藏款</button>' : '')+
     '<button class="btn ghost sm" type="button" data-act="collhall">← 返回展厅</button>'+
     /* v102：「管理存储地点」已移到 topbar，这里不再重复出现。 */
@@ -8872,6 +8909,15 @@ plus.addEventListener('click', function(e) {
       render();
     });
   });
+  /* v111：系列详情里的「子系列」下拉 —— 选中即只看该子系列（空值=全部子系列） */
+  ['seriesChildSel'].forEach(function(id){
+    var n=$(id);
+    if (n) n.addEventListener('change', function(){
+      ui.collection.seriesChild = n.value || '';
+      ui.collection.seriesStatus = '全部';
+      render();
+    });
+  });
   ['collection','travel','study','food','recipe','idea','av','checkin'].forEach(function(k){
     var n=$('q_'+k);
     if (n){
@@ -9277,9 +9323,10 @@ document.addEventListener('click', function(ev){
        从「按系列 / 按 IP」进入 → 不预置类型筛选，由系列内的下拉框自由选择。 */
     ui.collection.seriesCat = (ui.collection.mode==='cat') ? (ui.collection.cat||'') : '';
     ui.collection.seriesSub = (ui.collection.mode==='cat') ? (ui.collection.sub||'') : '';
+    ui.collection.seriesChild = '';   /* v111：换系列时子系列筛选归零 */
     render(); return;
   }
-  if (act==='seriesback'){ ui.collection.seriesId=null; ui.collection.seriesStatus='全部'; ui.collection.seriesSort='no'; ui.collection.pkIndex=false; render(); return; }
+  if (act==='seriesback'){ ui.collection.seriesId=null; ui.collection.seriesStatus='全部'; ui.collection.seriesSort='no'; ui.collection.pkIndex=false; ui.collection.seriesChild=''; render(); return; }
   if (act==='seriesfilt'){ ui.collection.seriesStatus=node.getAttribute('data-v')||'全部'; render(); return; }
   if (act==='serieswish'){
     var wid=node.getAttribute('data-id');
@@ -9731,6 +9778,10 @@ document.addEventListener('click', function(ev){
             || ((ui.collection.mode==='cat') ? (ui.collection.sub||'') : '')
             || ((aits.filter(function(r){ return r['小类']; })[0]||{})['小类']||'');
     if (asub) apf['小类']=asub;
+    /* v111：子系列 —— 只在用户已在系列内选定了某个子系列时才带出。
+       有多种子系列时不该瞎猜一个（Road trip 的 徽章/冰箱贴/行李牌 各占 1/3），
+       留空让用户自己填更稳妥。 */
+    if (ui.collection.seriesChild) apf['子系列']=ui.collection.seriesChild;
     openForm('collection', null, {prefill:apf});
     return;
   }
@@ -9819,6 +9870,20 @@ function dynOptions(src){
       if (s && String(r['大类']||'') === String(_cat) && !_seen[s]){ _seen[s] = 1; _base.push(s); }
     });
     return _base;
+  }
+  /* v111：子系列下拉 = 本系列里「已经用过」的子系列（如 Road trip 下的 徽章/冰箱贴/行李牌）。
+     只取同一系列，避免把别的系列的小套串进来；没有历史值时靠「＋ 自定义…」新建。 */
+  if (src==='child'){
+    var _ser = (editing && editing.vals) ? String(editing.vals['系列']||'') : '';
+    var _out = [], _saw = {};
+    (store.collection.rows || []).forEach(function(r){
+      var c = r['子系列'];
+      if (!c) return;
+      if (_ser && String(r['系列']||'') !== _ser) return;
+      c = String(c);
+      if (!_saw[c]){ _saw[c] = 1; _out.push(c); }
+    });
+    return _out.sort();
   }
   if (src==='ip')  return (store.ip.rows  || []).map(function(r){ return r['IP名称'];   }).filter(Boolean);
   if (src==='series') return (store.series.rows || []).map(function(r){ return r['系列名称']; }).filter(Boolean);
@@ -10172,6 +10237,16 @@ function wireFormControls(host, saveDraft){
             var ipw=host.querySelector('.dynwrap[data-k="IP"]');
             if (ipw){ var ipsel=ipw.querySelector('[data-dyn-sel]'); if (ipsel) ipsel.value=se['所属IP']; }
           }
+          /* v111：换了系列 → 子系列下拉跟着换成该系列用过的子系列，旧值不属于新系列则清掉 */
+          var cw=host.querySelector('.dynwrap[data-k="子系列"]');
+          if (cw && editing.vals['子系列']){
+            var valid=false;
+            (store.collection.rows||[]).forEach(function(r){
+              if (String(r['系列']||'')===String(sel.value) && String(r['子系列']||'')===String(editing.vals['子系列'])) valid=true;
+            });
+            if (!valid) editing.vals['子系列']='';
+          }
+          if (host.querySelector('.dynwrap[data-k="子系列"]')) fillDynField(host,'子系列');
         }
         if (saveDraft) saveDraft();
       }
@@ -10765,6 +10840,11 @@ function renderSeriesDetail(){
   } else {
     fcs.seriesSub = '';   /* 单一类型：不出下拉框，也不过滤 */
   }
+  /* v111：子系列筛选 —— 一个大系列下分小套（Road trip → 徽章 / 冰箱贴 / 行李牌）。
+     子系列来自 item 上的「子系列」字段；系列里有人填过才出下拉框。 */
+  var childs=[]; itemsAll.forEach(function(r){ var c=String(r['子系列']||''); if (c && childs.indexOf(c)<0) childs.push(c); });
+  if (fcs.seriesChild && childs.indexOf(fcs.seriesChild)<0) fcs.seriesChild='';
+  if (fcs.seriesChild) itemsAll = itemsAll.filter(function(r){ return (r['子系列']||'')===fcs.seriesChild; });
   var inLib=itemsAll.filter(function(r){ return hasStatus(r,'在库'); });
   var miss= target ? missingNos(itemsAll, target) : [];
   /* v77：宝可梦冰箱贴 —— 完成度只数 base 槽位（formCode 为空），形态卡不计入目标 */
@@ -10788,9 +10868,10 @@ function renderSeriesDetail(){
 
         '<button class="btn ghost sm" type="button" data-act="edit" data-key="series" data-id="'+esc(se._id)+'">编辑系列</button>'+
         '<button class="btn ghost sm" type="button" data-act="delseries" data-id="'+esc(se._id)+'" style="color:var(--red)">删除系列</button>'+
-        /* v110：快捷添加本系列的物品 —— IP / 系列（以及大类 / 小类）自动带好 */
-        '<button class="btn primary sm" type="button" data-act="addseriesitem" data-id="'+esc(se._id)+'"'+
-        ' title="添加一件属于「'+esc(name)+'」的物品（IP、系列已自动填好）">+ 添物品</button>'+
+        /* v110：快捷添加本系列的物品 —— IP / 系列（以及大类 / 小类）自动带好
+           v112：按钮文字缩到一个「＋」，靠 title 提示（省横向空间，和「编辑/删除系列」并排更整齐） */
+        '<button class="btn primary sm addone" type="button" data-act="addseriesitem" data-id="'+esc(se._id)+'"'+
+        ' title="添加一件属于「'+esc(name)+'」的物品（IP、系列已自动填好）">+</button>'+
       '</div></div></div>';
   /* v96k：右上角「号码索引」入口已移除（该功能取消）；圆形/方形开关移入下方属性行 */
   if (target){
@@ -10828,10 +10909,8 @@ function renderSeriesDetail(){
     }
     h += '</div>';
   }
-  if (!itemsAll.length){
-    h += emptyHTML('这个系列还没有子项','点「批量添加子项」，把一整串名字一次贴进去就行。');
-    return h+'</section>';
-  }
+  /* v112：空系列的早退**移到下面 segline 之后**了 —— 原来写在这里，会让「韩国 快闪」这类
+     还没录子项的系列连「← 返回系列列表」都渲染不出来（那个按钮现在在 segline 工具行里）。 */
   /* 全部 / 在库 / 云游 / 想收 四段切换：默认「全部」，单击切换；子项按 状态 过滤
      云游 = 状态含「云游」（未入手）；想收 = 状态含「想收」（可与其他状态共存） */
   /* 云游 = 状态含「云游」且不在库（东西已回库就不再算云游，避免「在库+云游」的脏数据挤进云游视图） */
@@ -10856,11 +10935,21 @@ function renderSeriesDetail(){
       '<option value=""'+(fcs.seriesSub?'':' selected')+'>全部类型</option>'+
       subs.map(function(s){ return '<option value="'+esc(s)+'"'+(fcs.seriesSub===s?' selected':'')+'>'+esc(s)+'</option>'; }).join('')+
     '</select>') : '';
+  /* v111：子系列下拉 —— 系列里存在子系列时才出现（如 Road trip 的 徽章/冰箱贴/行李牌） */
+  var childSel = childs.length ? ('<select id="seriesChildSel" class="ipfilter" title="只看某个子系列">'+
+      '<option value=""'+(fcs.seriesChild?'':' selected')+'>全部子系列</option>'+
+      childs.map(function(c){ return '<option value="'+esc(c)+'"'+(fcs.seriesChild===c?' selected':'')+'>'+esc(c)+'</option>'; }).join('')+
+    '</select>') : '';
   h += '<div class="segline" style="margin:0 0 14px"><div class="seg seriesfilt">'+
     segBtn('全部', itemsAll.length)+segBtn('在库', inLib.length)+
     segBtn('云游', wandering.length)+segBtn('想收', wishedAll.length)+hiddenSeg()+'</div>'+
-    subSel+
-    '<button class="btn link sm" type="button" data-act="seriesback" style="margin-left:auto">← 返回系列列表</button></div>';
+    subSel+childSel+
+    '<button class="btn link sm sback" type="button" data-act="seriesback">← 返回系列列表</button></div>';
+  /* v112：空系列到这里才早退 —— 上面的工具行（含「← 返回系列列表」）必须先渲染出来 */
+  if (!itemsAll.length){
+    h += emptyHTML('这个系列还没有子项','点系列名旁的「+」添一件，或用「批量添加子项」把一整串名字一次贴进去。');
+    return h+'</section>';
+  }
   var items = sf==='在库' ? inLib : sf==='云游' ? wandering : sf==='想收' ? wishedAll : itemsAll;
   /* v96p：系列内隐藏款筛选 —— 只影响展示的子项墙，不改变收集进度 */
   if (ui.collection.hidden==='1') items = items.filter(function(r){ return !!r['隐藏款']; });
@@ -12601,7 +12690,8 @@ function openItemDetail(key, id){
         (num(row['星级'])?'<span class="stars">'+stars(row['星级'])+'</span>':'')+
         (ipName?'<span class="pill s2" data-gotoip="'+esc(ipName)+'" style="cursor:pointer">IP · '+esc(ipName)+'</span>':'')+
       '</div></div></div>'+
-    '<div class="buybox"><h4>购入信息</h4><div class="buygrid">'+
+    /* v112：这行小标题手机端会隐藏（.buyh）—— 窄屏纵向空间紧张，四项内容本身已自解释 */
+    '<div class="buybox"><h4 class="buyh">购入信息</h4><div class="buygrid">'+
       '<div><u>购入时间</u>'+ed('购入日期', date?esc(date):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
       '<div><u>'+(row['端盒']?'端盒价':'价格')+'</u>'+ed('购入价格', price?esc('¥'+price.toFixed(2)):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
       '<div><u>存放位置</u>'+ed('存储地点', loc?esc(loc):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没指定</span>')+'</div>'+
@@ -13013,7 +13103,7 @@ function openBrand(){
     '<button class="x" type="button" data-x="1">×</button></div>'+
     '<div class="fgrid">'+
       '<div class="f"><label>页面名称</label><input id="bName" maxlength="12" value="'+esc(name)+'"></div>'+
-      '<div class="f"><label>头像文字</label><input id="bMark" maxlength="2" value="'+esc(mark)+'"></div>'+
+      '<div class="f"><label>头像文字（中英文皆可，最多 6 字，如 life）</label><input id="bMark" maxlength="6" value="'+esc(mark)+'"></div>'+
       '<div class="f full"><label>副标题</label><input id="bTag" maxlength="20" value="'+esc(tag)+'"></div>'+
       '<div class="f full"><label>主题色</label><div class="swatches" id="swBox">'+
         THEMES.map(function(t){ return '<button type="button" data-t="'+t[0]+'" class="'+(t[0]===cur?'on':'')+
@@ -13035,7 +13125,18 @@ function openBrand(){
   };
 }
 function applyBrand(n,m,t,th){
-  $('brandName').textContent=n; $('brandMark').textContent=m; $('brandTag').textContent=t;
+  $('brandName').textContent=n; $('brandTag').textContent=t;
+  var mi=$('brandMark'); mi.textContent=m;
+  /* v111：头像文字放开英文单词（如 life）—— 字数越多字号越小，保证不撑破 38px 的方块。
+     1 字 17px / 2 字 15px / 3 字 12px / 4 字 10.5px / 更多 9px；字多时取消字距。 */
+  var L=String(m==null?'':m).length;
+  /* 38px 方块内要放得下：4 个英文字母 ≈ 4×9px=36px，5 个以上再收一档。
+     字距在 3 字以上归零，否则总宽会超出。 */
+  var fs = L<=1 ? 17 : (L===2 ? 15 : (L===3 ? 12 : (L===4 ? 9 : Math.max(6, Math.floor(34/L)))));
+  mi.style.fontSize = fs+'px';
+  mi.style.letterSpacing = L>2 ? '0' : '.04em';
+  mi.style.overflow = 'hidden';
+  mi.setAttribute('title', String(m==null?'':m));
   document.documentElement.setAttribute('data-theme', th);
 }
 try{
