@@ -120,6 +120,12 @@ input,select,textarea{font:inherit;color:inherit}
 .btn.sm{min-height:32px;padding:0 11px;font-size:11.5px;border-radius:10px}
 .btn.link{min-height:30px;padding:0 6px;color:var(--muted);font-size:11.5px;font-weight:600}
 .btn.link:hover{color:var(--ink)}
+/* v109：topbar「待上传 N 条」角标 —— 点一下立即上传到 Cloudflare */
+.cloud-badge{border:0;cursor:pointer;font-size:11.5px;font-weight:600;line-height:1;
+  padding:7px 11px;border-radius:999px;background:#fff3da;color:#a9690a;border:1px solid #f0d29a;white-space:nowrap}
+.cloud-badge:hover{background:#ffeac1}
+.cloud-badge b{font-weight:800}
+.cloud-badge[hidden]{display:none}
 /* 城市点悬停/点按名称气泡 */
 .city-tip{position:fixed;transform:translate(-50%,-100%);margin-top:-12px;pointer-events:none;z-index:9999;
   background:rgba(8,14,26,.92);color:#eaf2ff;padding:5px 10px;border-radius:8px;font-size:12px;font-weight:600;
@@ -448,7 +454,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 
 /* ---------- sheets ---------- */
 .backdrop{position:fixed;inset:0;z-index:60;background:rgba(41,37,31,.34);backdrop-filter:blur(3px);
-  display:flex;align-items:flex-end;justify-content:center;padding:0 0 10vh 0}
+  display:flex;align-items:center;justify-content:center;padding:4vh 0}
 .backdrop[hidden]{display:none}
 .sheet{width:min(560px,100%);max-height:88vh;overflow-y:auto;background:var(--card);
   border-radius:24px;padding:22px 22px 26px;box-shadow:0 -18px 50px rgba(41,37,31,.2);
@@ -458,7 +464,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .sheet-head h2{font:700 19px/1.3 "Songti SC",serif}
 .sheet-head p{color:var(--muted);font-size:11px;letter-spacing:.12em;margin-bottom:4px}
 .x{border:0;background:#f1ebe2;width:30px;height:30px;border-radius:9px;cursor:pointer;font-size:16px;
-  line-height:1;color:var(--muted);flex:0 0 30px}
+  line-height:1;color:var(--muted);flex:0 0 30px;display:flex;align-items:center;justify-content:center;padding:0}
 /* v96d：录入窗口右上角「归位」小按钮，位于关闭按钮左侧 */
 .sheet-head-acts{display:flex;align-items:flex-start;gap:8px}
 .guiwei{border:0;background:#efe7da;color:#7a6a55;font-size:12px;font-weight:600;
@@ -781,11 +787,18 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .statgrid.ovstat .stat b{font-size:19px}
   .statgrid.ovstat .stat i{font-size:10px}
   /* v96p：藏品馆概览（4 个框）手机端强制一排 4 个，不再折成 2+2；同步缩小字号与内边距 */
-  .statgrid.collstat{grid-template-columns:repeat(4,1fr);gap:6px}
-  .statgrid.collstat .stat{padding:10px 4px;border-radius:12px;text-align:center}
-  .statgrid.collstat .stat u{font-size:8.5px;letter-spacing:.02em;margin-bottom:4px}
-  .statgrid.collstat .stat b{font-size:18px}
-  .statgrid.collstat .stat i{font-size:9px}
+  .statgrid.collstat{grid-template-columns:repeat(4,1fr);gap:5px}
+  .statgrid.collstat .stat{padding:7px 3px;border-radius:10px;text-align:center}
+  .statgrid.collstat .stat u{font-size:8px;letter-spacing:.02em;margin-bottom:3px}
+  .statgrid.collstat .stat b{font-size:16px}
+  .statgrid.collstat .stat i{font-size:8.5px}
+  /* v109：概览标题行（概览 + 充电量按钮 + 年份框）手机端不换行、按钮与年份框同高，整体居右 */
+  .panel-head.coll-ov-head{flex-wrap:nowrap}
+  .coll-ov-head [data-act="toggleinvest"]{min-height:34px;padding:0 12px}
+  .coll-ov-head select{min-height:34px}
+  /* v109：收集进度框（30周年冰箱贴等）手机端再扁一档 */
+  .progb{padding:10px 14px}
+  .progb h4{margin:0 0 8px}
   /* v98：手机端六大类 chip 再收窄一档，确保一排 6 个放得下 */
   .chips.cat6{gap:4px}
   .chips.cat6 .chip{padding:5px 2px;font-size:11.5px}
@@ -3588,13 +3601,19 @@ input.search{margin-bottom:12px}
 .pkchip i{ font-style:normal; font-size:10.5px; color:var(--muted); }
 .pkchip.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
 .pkchip.on i{ color:rgba(255,255,255,.72); }
-.pktbtn{ width:30px; height:30px; border:1px solid var(--line); background:#fff; border-radius:8px; padding:3px;
+/* v110：属性图标直接浮在 pkbar 上 —— 去掉边框与白底，不再是一个个「按钮框」；
+   只保留圆角与内边距作为点击热区。选中态改用极淡的底色 + 细描边提示（必须能看出选了哪个）。 */
+.pktbtn{ width:30px; height:30px; border:0; background:transparent; border-radius:8px; padding:3px;
   cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+.pktbtn:hover{ background:rgba(23,18,11,.05); }
 .pktbtn img{ width:100%; height:100%; object-fit:contain; display:block; }
 .pktbtn b{ font-size:12px; color:var(--muted); font-weight:600; }
-.pktbtn.on{ border-color:var(--ink); box-shadow:0 0 0 2px rgba(23,18,11,.10); }
-.pktbtn.pktxt{ width:auto; padding:0 11px; font-size:12px; border-radius:999px; color:var(--ink); }
-.pktbtn.pktxt.on{ background:var(--ink); color:#fff; }
+.pktbtn.on{ background:rgba(23,18,11,.10); box-shadow:0 0 0 1.5px rgba(23,18,11,.18); }
+/* 「全部」这类文字按钮仍是药丸按钮，保留它自己的框（只有图标按钮才浮起来） */
+.pktbtn.pktxt{ width:auto; padding:0 11px; font-size:12px; border-radius:999px; color:var(--ink);
+  border:1px solid var(--line); background:#fff; }
+.pktbtn.pktxt:hover{ background:#fff; }
+.pktbtn.pktxt.on{ background:var(--ink); color:#fff; border-color:var(--ink); box-shadow:none; }
 
 /* 展示卡左下角快速按钮：在库 / 想收（点一次写入，再点一次取消） */
 /* v96k：改 em，随 .wall 的 --cs 等比缩放（基准 1em = 14px × --cs） */

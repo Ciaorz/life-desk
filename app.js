@@ -160,15 +160,56 @@ function ghSaveAll(obj, cb){
     .catch(function(){ cb(false); });
 }
 var _ghTimer = null;
+/* v109：新数据架构 —— gh 模式下编辑不再推 GitHub（否则断网会报「同步到 GitHub 失败」）。
+   数据走 Cloudflare：标记「待上传」并刷新角标；已配 Cloudflare 令牌则防抖静默上传。
+   只有未配 Cloudflare 时才退回 GitHub（兼容老配置），且不再弹「未连接」报错。 */
 function queueGhSave(){
-  if (!GH || !GH.token){
-    setGhStatus('noconn');
-    toast('要保存改动，请先点右下角 ⚙ 同步设置 粘贴 GitHub Token', '去填', function(){ toggleGhPanel(); });
+  localCacheSet();
+  if (cloudBase() && cloudToken()){
+    renderCloudBadge();
+    scheduleCloudAutoUpload();
     return;
   }
+  if (!GH || !GH.token){ setGhStatus('pending'); return; }
   setGhStatus('saving');
   if (_ghTimer) clearTimeout(_ghTimer);
-  _ghTimer = setTimeout(function(){ _ghTimer = null; ghSaveNow(function(ok){ if (ok) setGhStatus('synced'); else setGhStatus('failed'); if (!ok) toast('同步到 GitHub 失败，稍后重试'); }); }, 700);
+  _ghTimer = setTimeout(function(){ _ghTimer = null; ghSaveNow(function(ok){ if (ok) setGhStatus('synced'); else setGhStatus('failed'); }); }, 700);
+}
+/* v109：编辑后防抖静默上传到 Cloudflare（避免每次按键都弹确认框 / 网络抖动）。 */
+var _cloudAutoTimer = null;
+function scheduleCloudAutoUpload(){
+  if (_cloudAutoTimer) clearTimeout(_cloudAutoTimer);
+  _cloudAutoTimer = setTimeout(function(){
+    _cloudAutoTimer = null;
+    if (_cloudBusy){ scheduleCloudAutoUpload(); return; }   /* 正在上传，稍后再试 */
+    cloudAutoUpload();
+  }, 1500);
+}
+async function cloudAutoUpload(){
+  var base = cloudBase(), tok = cloudToken();
+  if (!base || !tok) return;
+  try { await cloudUpload(false, true); } catch(e){}
+  renderCloudBadge();
+}
+/* v109：「待上传」条数 = 本地 _upd 超过上次上传水位线的记录数 + 未推送的墓碑（本机删除）。 */
+function cloudPendingCount(){
+  var wm = cloudWatermark(), n = 0;
+  var snap = snapshotAll();
+  Object.keys(snap).forEach(function(mk){
+    (snap[mk] || []).forEach(function(r){
+      if (r && r._id != null && Number(r._upd) > wm) n++;
+    });
+  });
+  try { var ts = JSON.parse(localStorage.getItem('lifedesk_tombstones') || '[]'); if (Array.isArray(ts)) n += ts.length; } catch(e){}
+  return n;
+}
+/* v109：更新 topbar 的「待上传 N 条」角标（仅在已配 Cloudflare 时显示）。 */
+function renderCloudBadge(){
+  var el = $('cloudBadge'); if (!el) return;
+  var n = (cloudBase() && cloudToken()) ? cloudPendingCount() : 0;
+  el.hidden = (n <= 0);
+  if (n > 0){ var nb = $('cloudBadgeN'); if (nb) nb.textContent = n; }
+  el.onclick = function(){ if (!_cloudBusy) cloudUpload(false); };
 }
 /* 分片感知的 GitHub 保存：分片仓库走 sharded 路径，单文件仓库退化为 ghSaveAll */
 function ghSaveNow(cb){
@@ -3020,11 +3061,11 @@ function cloudAsk(title, msg, yesLabel){
   });
 }
 
-/* 上传。force=true 时忽略水位线，全量重传。 */
-async function cloudUpload(force){
-  if (_cloudBusy){ toast('正在上传中，请稍候'); return; }
+/* 上传。force=true 时忽略水位线，全量重传。silent=true 时跳过确认框与提示（用于编辑后静默自动上传）。 */
+async function cloudUpload(force, silent){
+  if (_cloudBusy){ if(!silent) toast('正在上传中，请稍候'); return; }
   var base = cloudBase(), tok = cloudToken();
-  if (!base || !tok){ toast('请先填好 API 地址和令牌'); return; }
+  if (!base || !tok){ if(!silent) toast('请先填好 API 地址和令牌'); return; }
 
   /* ⚠️ 水位线必须在「收集之前」取，不能等确认框点完再取。
      原来写成 cloudCollect() → 弹确认框 → t0=Date.now()，中间隔着用户看确认框的
@@ -3036,13 +3077,13 @@ async function cloudUpload(force){
 
   var col = cloudCollect(force);
   var pending = col.pending, dels = col.dels;
-  if (!pending.length && !dels.length){ toast('没有需要上传的改动'); return; }
+  if (!pending.length && !dels.length){ if(!silent) toast('没有需要上传的改动'); return; }
 
   var msg = '要上传 ' + pending.length + ' 条记录'
     + (dels.length ? '，删除 ' + dels.length + ' 条' : '') + '。\n\n'
     + '只会读取本地数据，不会改动你电脑上的任何东西。';
   if (force) msg = '【全量】' + msg;
-  if (!(await cloudAsk(force ? '全量上传到云' : '上传到云', msg, '开始上传'))) return;
+  if (!silent && !(await cloudAsk(force ? '全量上传到云' : '上传到云', msg, '开始上传'))) return;
 
   _cloudBusy = true;
   var total = pending.length;
@@ -3069,7 +3110,7 @@ async function cloudUpload(force){
         try {
           res = await cloudFetch(base, tok, '/api/records-batch', {
             method: 'POST', timeout: 90000,
-            body: { records: chunk, deletes: chunkDels, device: 'desktop' }
+            body: { records: chunk, deletes: chunkDels, device: (IS_MOBILE ? 'mobile' : 'desktop') }
           });
         } catch(e){ threw = e; }
 
@@ -3078,7 +3119,7 @@ async function cloudUpload(force){
           try {
             res = await cloudFetch(base, tok, '/api/records-batch', {
               method: 'POST', timeout: 90000,
-              body: { records: chunk, deletes: chunkDels, device: 'desktop' }
+              body: { records: chunk, deletes: chunkDels, device: (IS_MOBILE ? 'mobile' : 'desktop') }
             });
             threw = null;
           } catch(e2){
@@ -3137,14 +3178,15 @@ async function cloudUpload(force){
   if (!hardFail && failed.length === 0){
     setCloudWatermark(t0);
     cloudStatus('✓ 上传完成：' + done + ' 条' + (dels.length ? '，删除 ' + dels.length + ' 条' : ''), '#1a7f37');
-    toast('☁ 上传完成：' + done + ' 条' + (useBatch ? '' : '（逐条模式）'));
+    if (!silent) toast('☁ 上传完成：' + done + ' 条' + (useBatch ? '' : '（逐条模式）'));
   } else {
     cloudStatus('✗ 上传中断：成功 ' + done + ' / ' + total + ' 条'
       + (failed.length ? '，失败 ' + failed.length + ' 条' : '')
       + (lastErr ? '。' + lastErr : '') + '（水位线未推进，下次会重推）', '#e5484d');
-    toast('☁ 上传中断：成功 ' + done + ' 条' + (lastErr ? '，' + lastErr : ''));
+    if (!silent) toast('☁ 上传中断：成功 ' + done + ' 条' + (lastErr ? '，' + lastErr : ''));
   }
   if (!useBatch) cloudStatus((($('cloudStatus') || {}).textContent || '') + '｜本次用了逐条模式，建议重新部署 Pages 以启用批量接口', '#c77700');
+  renderCloudBadge();
 }
 
 /* ============================================================
@@ -4275,7 +4317,7 @@ var CAT_DECOR = {
 var MODS = {
   overview: { key:'overview', name:'总览', icon:'日', eyebrow:'Overview',
     desc:'六个地方，装下正在过的日子。' },
-  collection: { key:'collection', db:DB.collection, name:'藏品馆', icon:'藏', eyebrow:'博物馆', unit:' 件',
+  collection: { key:'collection', db:DB.collection, name:'藏品馆', icon:'藏', eyebrow:'藏品馆', unit:' 件',
     desc:'拥有的每一件，都有它自己的位置和来处。', addLabel:'添加藏品',
     fields:[
       /* v75fix：4 列栅格 —— 名称 1/2 + 大类 1/4 + 小类 1/4 同一行 */
@@ -5245,6 +5287,12 @@ var ui = {
     wallGroup:'series',
     /* v102：按类别页的 IP 下拉筛选 —— ''=全部 IP，否则只看该 IP 的东西 */
     ipf:'',
+    /* v110：系列详情内的「物品类型（小类）」筛选 —— ''=该系列全部类型，否则只看该类型。
+       从「按类别」进系列时会默认带上当前小类（如 周边/冰箱贴 → 欢趣白昼系列只看冰箱贴）；
+       从「按系列」进则不预置，由下拉框自由切换。 */
+    seriesSub:'',
+    /* v110：从「按类别」进系列时记住的大类，保证「全部类型」也仍在当前类别内 */
+    seriesCat:'',
     /* wallGroupAuto：true 表示当前「按物品」是系统自动切过去的（搜了词 / 勾了隐藏款），
        不是用户手动点的。这样清空搜索、取消隐藏款时能自动收回「按系列」，
        避免留下上千条物品平铺；而用户手动点过的选择不会被覆盖。 */
@@ -6283,7 +6331,7 @@ function renderOverview(){
   /* 总条目：藏品总录入条数（按购入日期所在年份分年；与状态、持有数量无关） */
   var totalEntries = isAll ? csRows.length : csRows.filter(function(r){ return yr(r['购入日期'])===year; }).length;
   var entriesLabel = isAll ? '总条目' : (year+' 年条目');
-  var spendLabel = isAll ? '总投入' : (year+' 年投入');
+  var spendLabel = isAll ? '充电量' : (year+' 年充电量');
 
   h += '<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+yearLabel+'</h2>'+
@@ -6361,7 +6409,7 @@ function collStats(){
   /* 总条目：藏品总录入条数（按购入日期所在年份分年；与状态、持有数量无关） */
   var totalEntries = isAll ? rows.length : rows.filter(function(r){ return yr(r['购入日期'])===year; }).length;
   var entriesLabel = isAll ? '总条目' : (year+' 年条目');
-  var spendLabel = isAll ? '总投入' : (year+' 年投入');
+  var spendLabel = isAll ? '充电量' : (year+' 年充电量');
   var h='<div class="statgrid collstat">'+
     '<div class="stat"><u>在库</u><b>'+ownedCnt+'</b><i>件</i></div>'+
     '<div class="stat"><u>'+entriesLabel+'</u><b>'+totalEntries+'</b><i>条</i></div>'+
@@ -6434,9 +6482,8 @@ function renderCollection(){
       return '<option value="'+y+'"'+(y===ui.year?' selected':'')+'>'+y+'</option>'; }).join('')+'</select>';
   /* v75fix：标题块 flex:1 占满左侧，把「总投入 + 年份下拉」一起顶到最右；顺序为 总投入 → 年份 */
   var head='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-    '<div class="panel-head"><div style="flex:1;min-width:0"><h2>概览</h2>'+
-    '<div class="hint">在库 / '+(isAll?'全部':ui.year+' 年')+'入手 / 投入 / 分类分布</div></div>'+
-    '<button class="btn ghost sm'+(ui.showInvest?' on':'')+'" type="button" data-act="toggleinvest">总投入</button>'+
+    '<div class="panel-head coll-ov-head"><div style="flex:1;min-width:0;min-height:34px;display:flex;align-items:center"><h2>概览</h2></div>'+
+    '<button class="btn ghost sm'+(ui.showInvest?' on':'')+'" type="button" data-act="toggleinvest">充电量</button>'+
     ysel+'</div>'+collStats()+'</section>';
   var m=ui.collection.mode;
   /* v75fix：seriesId/ipId 优先于 mode 路由——从 cat 模式点系列卡片时 mode 仍是 cat，
@@ -8559,6 +8606,7 @@ function render(){
     }
   }
   $('mActions').innerHTML = act;
+  renderCloudBadge();
 
   var h='';
   if (key==='overview') h=renderOverview();
@@ -8812,6 +8860,15 @@ plus.addEventListener('click', function(e) {
     if (n) n.addEventListener('change', function(){
       ui.collection.ipf = n.value || '';
       ui.collection.page = 1;
+      render();
+    });
+  });
+  /* v110：系列详情里的「物品类型」下拉 —— 选中即只看该小类（空值=该系列全部类型） */
+  ['seriesSubSel'].forEach(function(id){
+    var n=$(id);
+    if (n) n.addEventListener('change', function(){
+      ui.collection.seriesSub = n.value || '';
+      ui.collection.seriesStatus = '全部';
       render();
     });
   });
@@ -9213,7 +9270,15 @@ document.addEventListener('click', function(ev){
   if (act==='cmode'){ ui.collection.mode=node.getAttribute('data-v'); ui.collection.ipId=null; ui.collection.seriesId=null; render(); return; }
   if (act==='ipopen'){ ui.collection.ipId=node.getAttribute('data-id'); render(); return; }
   if (act==='ipback'){ ui.collection.ipId=null; render(); return; }
-  if (act==='seriesopen'){ ui.collection.seriesId=node.getAttribute('data-id'); ui.collection.seriesStatus='全部'; ui.collection.seriesSort='no'; ui.collection.pkIndex=false; render(); return; }
+  if (act==='seriesopen'){
+    ui.collection.seriesId=node.getAttribute('data-id');
+    ui.collection.seriesStatus='全部'; ui.collection.seriesSort='no'; ui.collection.pkIndex=false;
+    /* v110：从「按类别」进入 → 默认只看当前大类/小类的物品（周边/冰箱贴 → 欢趣白昼系列只看冰箱贴）；
+       从「按系列 / 按 IP」进入 → 不预置类型筛选，由系列内的下拉框自由选择。 */
+    ui.collection.seriesCat = (ui.collection.mode==='cat') ? (ui.collection.cat||'') : '';
+    ui.collection.seriesSub = (ui.collection.mode==='cat') ? (ui.collection.sub||'') : '';
+    render(); return;
+  }
   if (act==='seriesback'){ ui.collection.seriesId=null; ui.collection.seriesStatus='全部'; ui.collection.seriesSort='no'; ui.collection.pkIndex=false; render(); return; }
   if (act==='seriesfilt'){ ui.collection.seriesStatus=node.getAttribute('data-v')||'全部'; render(); return; }
   if (act==='serieswish'){
@@ -9649,6 +9714,26 @@ document.addEventListener('click', function(ev){
   /* v58：系列缺失编号 → 直接进录入页，自动带出 大类/小类/IP/系列/编号 */
   if (act==='missmore'){ ui._missOpen=true; render(); return; }
   if (act==='missless'){ ui._missOpen=false; render(); return; }
+  /* v110：系列详情页「+ 添物品」—— 直接开录入页，系列 / IP / 大类 / 小类都预填好 */
+  if (act==='addseriesitem'){
+    var ase=store.series.rows.filter(function(x){ return String(x._id)===String(node.getAttribute('data-id')); })[0];
+    if (!ase){ toast('系列已不存在'); return; }
+    var aits=seriesItems(ase['系列名称']||'');
+    var apf={ '系列': ase['系列名称']||'' };
+    var aip = ase['所属IP'] || (aits.filter(function(r){ return r['IP']; })[0]||{})['IP'] || '';
+    if (aip) apf['IP']=aip;
+    /* 大类：跟随当前「按类别」的大类，否则取系列内任意一件 */
+    var acat = (ui.collection.mode==='cat' && ui.collection.cat) ? ui.collection.cat
+             : ((aits.filter(function(r){ return r['大类']; })[0]||{})['大类']||'');
+    if (acat) apf['大类']=acat;
+    /* 小类：优先用系列内当前选中的类型，其次按类别的小类，最后取系列内任意一件 */
+    var asub = ui.collection.seriesSub
+            || ((ui.collection.mode==='cat') ? (ui.collection.sub||'') : '')
+            || ((aits.filter(function(r){ return r['小类']; })[0]||{})['小类']||'');
+    if (asub) apf['小类']=asub;
+    openForm('collection', null, {prefill:apf});
+    return;
+  }
   if (act==='fillmiss'){
     var fse=store.series.rows.filter(function(x){ return String(x._id)===String(ui.collection.seriesId); })[0];
     if (!fse){ toast('先回到系列详情再点编号'); return; }
@@ -10665,21 +10750,35 @@ function renderSeriesDetail(){
      （通用 sortByNo 在同号时按名称排，会把基础形态插到形态中间） */
   var isPk = pkIsPkmSeries(se);
   var itemsAll = isPk ? pkSortItems(seriesItems(name)) : sortByNo(seriesItems(name));
+  /* v110：系列内按「类别 / 物品类型（小类）」筛选。
+     只有当系列里确实存在多种类型时才收窄 —— 单一类型（如 30 周年冰箱贴）不过滤、
+     也不显示下拉框，免得个别漏填 大类/小类 的记录被误排除、把 1025 的收集进度算少。 */
+  var fcs = ui.collection;
+  var subs=[]; itemsAll.forEach(function(r){ var s=String(r['小类']||''); if (s && subs.indexOf(s)<0) subs.push(s); });
+  if (subs.length > 1){
+    var pool = fcs.seriesCat ? itemsAll.filter(function(r){ return (r['大类']||'')===fcs.seriesCat; }) : itemsAll;
+    var subs2=[]; pool.forEach(function(r){ var s=String(r['小类']||''); if (s && subs2.indexOf(s)<0) subs2.push(s); });
+    /* 切换系列后残留的类型值若不属于本系列，自动回到「全部类型」 */
+    if (fcs.seriesSub && subs2.indexOf(fcs.seriesSub)<0) fcs.seriesSub='';
+    itemsAll = fcs.seriesSub ? pool.filter(function(r){ return (r['小类']||'')===fcs.seriesSub; }) : pool;
+    subs = subs2;
+  } else {
+    fcs.seriesSub = '';   /* 单一类型：不出下拉框，也不过滤 */
+  }
   var inLib=itemsAll.filter(function(r){ return hasStatus(r,'在库'); });
   var miss= target ? missingNos(itemsAll, target) : [];
-  var pct= target ? Math.min(100, Math.round(ownedCount(itemsAll)/target*100)) : 0;
   /* v77：宝可梦冰箱贴 —— 完成度只数 base 槽位（formCode 为空），形态卡不计入目标 */
   var pkBase = isPk ? itemsAll.filter(function(r){ return !String(r.formCode||''); }) : itemsAll;
-  /* 普通系列「已有」按在库实物件数（持有累加）；宝可梦冰箱贴保持图鉴槽位计数（形态卡不计入目标） */
-  var cntAll = isPk ? pkBase.length : ownedCount(itemsAll);
+  /* 普通系列「已有」按在库实物件数（持有累加）；宝可梦冰箱贴同样按「在库」实物体数（形态卡不计入目标） */
+  var pkOwned = isPk ? pkBase.filter(function(r){ return hasStatus(r,'在库'); }).length : 0;
+  var cntAll = isPk ? pkOwned : ownedCount(itemsAll);
+  var pct = target ? Math.min(100, Math.round(cntAll/target*100)) : 0;
   if (isPk){
     miss = target ? missingNos(pkBase, target) : [];
-    pct  = target ? Math.min(100, Math.round(pkBase.length/target*100)) : 0;
   }
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+esc(name)+'</h2>'+
     '<div class="hint">'+(target? '系列总数量 '+target+' 件 · 在库 '+cntAll+' 件' : '在库 '+cntAll+' 件')+'</div></div>'+modeSeg()+'</div>'+
-    '<div style="margin-bottom:14px"><button class="btn link" type="button" data-act="seriesback">← 返回系列列表</button></div>'+
     '<div class="iphero">'+
       '<div class="ph" style="'+coverStyle(se,name)+'">'+(hasCover(se)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
       '<div><h3>'+esc(name)+'</h3>'+
@@ -10689,11 +10788,14 @@ function renderSeriesDetail(){
 
         '<button class="btn ghost sm" type="button" data-act="edit" data-key="series" data-id="'+esc(se._id)+'">编辑系列</button>'+
         '<button class="btn ghost sm" type="button" data-act="delseries" data-id="'+esc(se._id)+'" style="color:var(--red)">删除系列</button>'+
+        /* v110：快捷添加本系列的物品 —— IP / 系列（以及大类 / 小类）自动带好 */
+        '<button class="btn primary sm" type="button" data-act="addseriesitem" data-id="'+esc(se._id)+'"'+
+        ' title="添加一件属于「'+esc(name)+'」的物品（IP、系列已自动填好）">+ 添物品</button>'+
       '</div></div></div>';
   /* v96k：右上角「号码索引」入口已移除（该功能取消）；圆形/方形开关移入下方属性行 */
   if (target){
     /* v96k：标题与统计放同一行（.procline），不再各占一行 */
-    h += '<div class="buybox" style="margin-bottom:20px">'+
+    h += '<div class="buybox progb" style="margin-bottom:12px">'+
       '<div class="procline">'+
         '<h4>收集进度</h4>'+
         '<span style="font-size:12.5px;color:var(--muted)">在库 <b style="color:var(--ink)">'+cntAll+'</b> / '+target+'</span>'+
@@ -10749,9 +10851,16 @@ function renderSeriesDetail(){
     /* 单按钮切换：开时 data-v 置空（再点即关），关时 data-v=1（再点即开） */
     return '<button type="button" class="'+(on?'on':'')+'" data-act="f" data-k="hidden" data-v="'+(on?'':'1')+'">隐藏款</button>';
   }
+  /* v110：物品类型下拉 —— 只有系列里确实存在多种「小类」时才出现（单一类型不必多此一举） */
+  var subSel = subs.length>1 ? ('<select id="seriesSubSel" class="ipfilter" title="只看某类物品">'+
+      '<option value=""'+(fcs.seriesSub?'':' selected')+'>全部类型</option>'+
+      subs.map(function(s){ return '<option value="'+esc(s)+'"'+(fcs.seriesSub===s?' selected':'')+'>'+esc(s)+'</option>'; }).join('')+
+    '</select>') : '';
   h += '<div class="segline" style="margin:0 0 14px"><div class="seg seriesfilt">'+
     segBtn('全部', itemsAll.length)+segBtn('在库', inLib.length)+
-    segBtn('云游', wandering.length)+segBtn('想收', wishedAll.length)+hiddenSeg()+'</div></div>';
+    segBtn('云游', wandering.length)+segBtn('想收', wishedAll.length)+hiddenSeg()+'</div>'+
+    subSel+
+    '<button class="btn link sm" type="button" data-act="seriesback" style="margin-left:auto">← 返回系列列表</button></div>';
   var items = sf==='在库' ? inLib : sf==='云游' ? wandering : sf==='想收' ? wishedAll : itemsAll;
   /* v96p：系列内隐藏款筛选 —— 只影响展示的子项墙，不改变收集进度 */
   if (ui.collection.hidden==='1') items = items.filter(function(r){ return !!r['隐藏款']; });
@@ -12537,6 +12646,13 @@ function beginInlineEdit(key, id, field, bEl){
   var orig=String(row[field]==null?'':row[field]);
   /* 持有：在库藏品没填过时，点击编辑默认带出 1 */
   if (field==='持有' && (row['持有']==null||row['持有']==='') && hasStatus(row,'在库')) orig='1';
+  /* v110：购入日期没填过时，点击编辑默认带出「今天」（本地时区，不是 UTC）。
+     只在点开编辑时预填；不去点它，字段本身仍然是空的，不会被写入。 */
+  if (field==='购入日期' && !orig){
+    var _td=new Date();
+    orig = _td.getFullYear()+'-'+String(_td.getMonth()+1).replace(/^(\d)$/,'0$1')
+           +'-'+String(_td.getDate()).replace(/^(\d)$/,'0$1');
+  }
   var ed;
   if (field==='存储地点'){
     ed=document.createElement('select'); ed.className='edsel';
