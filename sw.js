@@ -115,7 +115,18 @@
       常驻的两行只显示状态：「本地 N 张封面都已在云端」/「还剩 M 张没上云」。
    ③ 封面那组按钮独立成区（上传封面 / 下载封面 / 全部重下），与记录的上传下载分开。
    ⚠️ 仅动 app.js（+ tools/push_images_to_r2.py 的台账路径），SW 行为未变。 */
-const CACHE = 'lifedesk-v117-2026-09-25';
+/* v118（2026-09-25）：把「图片入库」的三条目录理顺，两条入库路径统一。
+   ① externalizeImages（外链落盘 / 批量下载封面）以前【直接把原图 jpg/png 写进 data/images】——
+      既不存 data/orig 存档、也不转 WebP，和「表单上传图片」那条路（ingestImageToLib）不一致。
+      实测后果：data/orig 1437 张 vs data/images 1457 张（少 20 份原图存档），
+      且 images 里混着 20 个 jpg/png。现在两条路统一为：
+        原图（原始字节+原始扩展名）→ data/orig；展示图转 WebP（不缩放 q=0.92）→ data/images。
+   ② writeThumbFor 以前只认 data/images 下的图 —— 现在 data/orig 也认，
+      这样「WebP 转换失败退回 orig」时也能生成缩略图。
+   ③ thumbOf / normalizeImgPath 同样认 data/orig（否则退回 orig 的记录在手机端会 404，
+      因为 R2 上只放了 thumbs）。
+   ⚠️ 只动 app.js，SW 行为未变，bump 只为让手机端装上新版本。 */
+const CACHE = 'lifedesk-v118-2026-09-25';
 
 /* v96m：图片单独放一个「不随版本清理」的缓存桶。
    以前图片和代码共用 CACHE，每次部署 bump 版本号，activate 会把图片一起删光，

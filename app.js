@@ -1342,7 +1342,8 @@ function normalizeImgPath(u){
   if (!u) return '';
   if (/^(data|blob):/.test(u) || /^https?:/i.test(u) || u.indexOf('//') === 0) return u;
   if (u.indexOf(DATA_PREFIX + '/') === 0) return u;              /* 已带前缀 */
-  if (u.indexOf(IMG_DIR + '/') === 0) return DATA_PREFIX + '/' + u;  /* 旧路径补前缀 */
+  if (u.indexOf(IMG_DIR + '/') === 0) return DATA_PREFIX + '/' + u;   /* 旧路径补前缀 */
+  if (u.indexOf(ORIG_DIR + '/') === 0) return DATA_PREFIX + '/' + u;  /* v118：原图存档同理 */
   return u;
 }
 /* ---------- 封面：非 FSA 模式改从 Cloudflare R2 取（2026-09-24） ----------
@@ -1721,10 +1722,11 @@ async function makeWebpThumb(bytes, maxSide, q){
 async function writeThumbFor(rel, bytes){
   try {
     if (!_fsaHandle || !rel || !bytes || !bytes.length) return;
-    var key = DATA_PREFIX + '/' + IMG_DIR + '/';
-    var i = String(rel).indexOf(key);
-    if (i < 0) return;                                  /* 只处理落在 data/images 下的图 */
-    var rest = String(rel).slice(i + key.length);
+    /* v118：data/images 和 data/orig 都认 —— 展示图转 WebP 失败时会退回 data/orig 路径，
+       那时也得能生成缩略图，否则手机端还是裂图。其它路径一律不处理。 */
+    var m = String(rel).match(new RegExp('^' + DATA_PREFIX + '/(?:' + IMG_DIR + '|' + ORIG_DIR + ')/(.+)$'));
+    if (!m) return;
+    var rest = m[1];
     var dot = rest.lastIndexOf('.');
     var base = dot >= 0 ? rest.slice(0, dot) : rest;
     var tparts = base.split('/').filter(Boolean);
@@ -1897,26 +1899,50 @@ async function externalizeImages(cat, rows, startSeq, opts){
         var seq = await scanMaxImageSeqFor(parts);
         seq++;
         var dn = rowDisplayName(r);
-        /* 例：留声机-测试音乐-0001.jpg（条目名为空时退化为 留声机-0001.jpg） */
-        var name = prefix + "-" + (dn ? dn + "-" : "") + pad4(seq) + "." + ext;
-        var rel = DATA_PREFIX + '/' + IMG_DIR + '/' + parts.join('/') + '/' + name;
-        /* 极端情况：同名文件已在（比如手工改过名），跳号再来 */
-        var dupH = await fsGetFileHandleAt(relToFsParts(rel).join('/'), false);
-        if (dupH){ seq++; name = prefix + "-" + (dn ? dn + "-" : "") + pad4(seq) + "." + ext; rel = DATA_PREFIX + '/' + IMG_DIR + '/' + parts.join('/') + '/' + name; }
-        var ok = await _fsaWriteBinary([IMG_DIR].concat(parts), name, bytes);
-        if (ok){
-          _imgUrlCache[rel] = u;      /* 立刻可用：先用原图顶上，避免闪空白 */
-          it.imageUrl = rel;          /* JSON 里只留相对路径 */
-          imgIndexPut(rel, hsh, u, bytes.length, ext);
-          _idxDirty = true;
-          lastSeq = seq;
-          /* ⚠️ v114 修复：这里原来漏了 writeThumbFor —— 于是「外链落盘 / 批量下载封面 /
-             同系列一次性落盘」写出的原图【没有缩略图】。手机端 USE_THUMBS 恒为 true，
-             只读 data/thumbs，结果是：记录和原图都在、手机上一片裂图，
-             点「上传」也只报「没有需要上传的改动」（上传只管 D1 记录，图片是 R2 那条线）。
-             这正是 2026-09-25 欢趣白昼 / 韩国快闪 那批封面在手机上不显示的原因。 */
-          await writeThumbFor(rel, bytes);
+        var stem = prefix + "-" + (dn ? dn + "-" : "") + pad4(seq);
+        /* 极端情况：同名原图已在（比如手工改过名），跳号再来 */
+        var origRel = DATA_PREFIX + '/' + ORIG_DIR + '/' + parts.join('/') + '/' + stem + '.' + ext;
+        var dupH = await fsGetFileHandleAt(relToFsParts(origRel).join('/'), false);
+        if (dupH){
+          seq++;
+          stem = prefix + "-" + (dn ? dn + "-" : "") + pad4(seq);
+          origRel = DATA_PREFIX + '/' + ORIG_DIR + '/' + parts.join('/') + '/' + stem + '.' + ext;
         }
+
+        /* v118：这条路以前【直接把原图 jpg/png 写进 data/images】——既不存档也不转格式，
+           和「表单里上传图片」那条路（ingestImageToLib）不一致，于是 data/images 里混着
+           20 个 jpg/png、还少了 20 份原图备份。现在两条路统一：
+             ① 原图（原始字节 + 原始扩展名）进 data/orig 当无损存档；
+             ② 展示图转成 WebP 进 data/images（只换格式、不缩放，与表单上传同一档 q=0.92）。
+           记录里存的仍是展示图(data/images/*.webp)；手机端再用 thumbOf() 折成 data/thumbs。 */
+        var rel = '';
+        try {
+          var okDir2 = await _fsaGetDir([ORIG_DIR].concat(parts), true);
+          if (okDir2) await _fsaWriteBinary([ORIG_DIR].concat(parts), stem + '.' + ext, bytes);
+        } catch(e){}
+        try {
+          var webp = await makeWebpThumb(bytes, 999999, 0.92);   /* 999999 = 不缩放，只换格式 */
+          if (webp && webp.length){
+            await _fsaGetDir([IMG_DIR].concat(parts), true);
+            if (await _fsaWriteBinary([IMG_DIR].concat(parts), stem + '.webp', webp)){
+              rel = DATA_PREFIX + '/' + IMG_DIR + '/' + parts.join('/') + '/' + stem + '.webp';
+            }
+          }
+        } catch(e){}
+        /* WebP 生成失败（浏览器不支持等）→ 退回原图存档路径，至少不丢东西 */
+        if (!rel) rel = origRel;
+
+        _imgUrlCache[rel] = u;      /* 立刻可用：先用原图顶上，避免闪空白 */
+        it.imageUrl = rel;          /* JSON 里只留相对路径 */
+        imgIndexPut(rel, hsh, u, bytes.length, (rel.slice(-5) === '.webp' ? 'webp' : ext));
+        _idxDirty = true;
+        lastSeq = seq;
+        /* ⚠️ v114 修复：这里原来漏了 writeThumbFor —— 于是「外链落盘 / 批量下载封面 /
+           同系列一次性落盘」写出的图【没有缩略图】。手机端 USE_THUMBS 恒为 true，
+           只读 data/thumbs，结果是：记录和原图都在、手机上一片裂图，
+           点「上传」也只报「没有需要上传的改动」（上传只管 D1 记录，图片是 R2 那条线）。
+           这正是 2026-09-25 欢趣白昼 / 韩国快闪 那批封面在手机上不显示的原因。 */
+        await writeThumbFor(rel, bytes);
       }
     }
   }
@@ -4439,13 +4465,18 @@ var USE_THUMBS = (function(){
    外链、blob:、以及非 data/images 路径原样返回，不影响已有逻辑。 */
 function thumbOf(u){
   if (!u) return '';
-  var p = String(u), key = 'data/images/';
-  var i = p.indexOf(key);
-  if (i < 0) return p;
-  var rest = p.slice(i + key.length);
+  var p = String(u);
+  /* v118：data/images 和 data/orig 都要折成 thumbs ——
+     「展示图转 WebP 失败」时记录会退回指向 data/orig（见 ingestImageToLib / externalizeImages），
+     只认 data/images 的话，那几张在手机端会直接 404（R2 上只放了 thumbs）。
+     两者同名同号，所以折出来的缩略图路径是同一个。 */
+  var m = p.match(/^([\s\S]*?)data\/(?:images|orig)\//);
+  if (!m) return p;
+  var head = m[1];                 /* 前缀（一般是空串；留着是为了兼容以前带域名的写法） */
+  var rest = p.slice(m[0].length);
   var dot = rest.lastIndexOf('.');
   var base = dot >= 0 ? rest.slice(0, dot) : rest;
-  return p.slice(0, i) + 'data/thumbs/' + base + '.webp';
+  return head + 'data/thumbs/' + base + '.webp';
 }
 function coverImg(row){
   var imgs = row['封面'] || row['照片'] || row['IP图像'] || row['系列封面'] || row['图片'];
