@@ -507,6 +507,37 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .f.q.rs{grid-column-end:span 1}
 .f.w3.rs{grid-column-end:span 3}
 .f.full.rs{grid-column-end:-1}
+/* v113：12 栏栅格 —— 给需要「三个一行」的表单用（系列表单，以及藏品表单出现子系列时）。
+   占几栏由 fieldHTML 内联下发的 --w 决定；不写就按该档原来的比例（2/4→6/12、1/4→3/12、3/4→9/12）。
+   4 栏 → 12 栏是等比换算，所以普通表单切成 fg12 后观感完全一样。 */
+.fgrid.fg12{grid-template-columns:repeat(12,1fr)}
+.fgrid.fg12 .f{grid-column:span var(--w,6)}
+.fgrid.fg12 .f.q{grid-column:span var(--w,3)}
+.fgrid.fg12 .f.w3{grid-column:span var(--w,9)}
+.fgrid.fg12 .f.full{grid-column:1/-1}
+.fgrid.fg12 .f.rs{grid-column-start:1;grid-column-end:span var(--w,6)}
+.fgrid.fg12 .f.q.rs{grid-column-end:span var(--w,3)}
+.fgrid.fg12 .f.w3.rs{grid-column-end:span var(--w,9)}
+.fgrid.fg12 .f.full.rs{grid-column-end:-1}
+/* ---------- v113：子系列（编辑系列里的「添加子系列」） ---------- */
+/* 「＋ 添加子系列」按钮：紧跟「系列总数量」右边、和输入框底部对齐（没有 label） */
+.f.childaddbox{align-self:end}
+.f.childaddbox .childaddbtn{width:100%}
+.childrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.childrow input{min-height:42px;padding:0 13px;border:1px solid var(--line);border-radius:11px;
+  background:rgba(255,252,247,.8);outline:0;font-size:13px;box-sizing:border-box}
+.childrow input:focus{border-color:var(--accent);background:#fff}
+.childrow .childname{flex:1 1 140px;min-width:0}
+.childrow .childcnt{flex:0 0 118px;width:118px}
+.childrow .btn{flex:0 0 auto}
+.childpills{display:flex;flex-wrap:wrap;gap:7px;margin-top:2px}
+.childpills:empty{display:none}
+.childpill{display:inline-flex;align-items:center;gap:6px;padding:4px 5px 4px 11px;border-radius:999px;
+  background:var(--accent-soft);font-size:11.5px;font-weight:650;color:var(--ink)}
+.childpill i{font-style:normal;font-weight:500;color:var(--muted);font-size:10.5px}
+.childpill .cx{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;
+  line-height:1;padding:0 3px}
+.childpill .cx:hover{color:var(--red)}
 .f label{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted)}
 /* 注意：必须排除 checkbox / radio，否则复选框会被套上「100% 宽 + 42px 高 + 边框」的文本框样式（状态行被撑高的元凶）
    v96o：再加排除 range —— 滑动杆也被这条命中，被拉成 100% 宽、套上 42px 高 + 内边距 + 边框 + 米色底
@@ -785,6 +816,21 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .fgrid{grid-template-columns:1fr}
   /* v76：新增的 75% 档（span 3）也必须复位，否则单列时会撑出隐式列 */
   .f,.f.q,.f.w3,.f.rs{grid-column:auto}
+  /* v113：12 栏表单（.fgrid.fg12）手机端同样塌成单列 ——
+     它的选择器特异性比上面那条高，不复位的话 12 栏会照旧生效 */
+  .fgrid.fg12{grid-template-columns:1fr}
+  .fgrid.fg12 .f,
+  .fgrid.fg12 .f.q,
+  .fgrid.fg12 .f.w3,
+  .fgrid.fg12 .f.full,
+  .fgrid.fg12 .f.rs,
+  .fgrid.fg12 .f.q.rs,
+  .fgrid.fg12 .f.w3.rs,
+  .fgrid.fg12 .f.full.rs{grid-column:auto}
+  /* v113：子系列那一排手机端也收窄一档 */
+  .childrow{gap:6px}
+  .childrow input{min-height:40px;padding:0 11px}
+  .childrow .childcnt{flex:0 0 92px;width:92px}
   .sheet{border-radius:22px}
 }
 @media (max-width:560px){

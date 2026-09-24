@@ -686,6 +686,24 @@ async function moveImageFolder(oldCoverDir, newCoverDir, row){
       }
     }
   }
+  /* v114：缩略图目录也得跟着挪 —— 手机端只读 data/thumbs，不挪的话
+     「原图搬过去了、缩略图还留在旧目录」，改完名手机端这一整套封面立刻全裂。 */
+  try {
+    var oldT = [THUMB_DIR].concat(oldParts), newT = [THUMB_DIR].concat(newParts);
+    var oldTDir = await _fsaGetDir(oldT, false);
+    if (oldTDir){
+      await _fsaGetDir(newT, true);
+      var tnames = await fsListFiles(oldT), tmoved = 0;
+      for (var ti = 0; ti < tnames.length; ti++){
+        try {
+          var tsrc = await oldTDir.getFileHandle(tnames[ti]);
+          var tbuf = await (await tsrc.getFile()).arrayBuffer();
+          if (await _fsaWriteBinary(newT, tnames[ti], new Uint8Array(tbuf))) tmoved++;
+        } catch(e){}
+      }
+      if (tmoved){ try { await fsRemoveDirAt(oldT.join('/')); } catch(e){} }
+    }
+  } catch(e){}
   if (moved){ try { await fsRemoveDirAt([IMG_DIR].concat(oldParts).join('/')); } catch(e){} }
   return moved > 0;
 }
@@ -1869,6 +1887,9 @@ async function externalizeImages(cat, rows, startSeq, opts){
         if (hit){
           _imgUrlCache[hit] = u;
           it.imageUrl = hit;
+          /* v114：命中的老图可能入库时还没有缩略图机制 —— 顺手补一张，
+             否则手机端（只读 data/thumbs）会一直裂图。 */
+          await writeThumbFor(hit, bytes);
           continue;
         }
         /* 每张图独立选择「当前还能放封面」的子文件夹（series / 非 series 规则） */
@@ -1889,6 +1910,12 @@ async function externalizeImages(cat, rows, startSeq, opts){
           imgIndexPut(rel, hsh, u, bytes.length, ext);
           _idxDirty = true;
           lastSeq = seq;
+          /* ⚠️ v114 修复：这里原来漏了 writeThumbFor —— 于是「外链落盘 / 批量下载封面 /
+             同系列一次性落盘」写出的原图【没有缩略图】。手机端 USE_THUMBS 恒为 true，
+             只读 data/thumbs，结果是：记录和原图都在、手机上一片裂图，
+             点「上传」也只报「没有需要上传的改动」（上传只管 D1 记录，图片是 R2 那条线）。
+             这正是 2026-09-25 欢趣白昼 / 韩国快闪 那批封面在手机上不显示的原因。 */
+          await writeThumbFor(rel, bytes);
         }
       }
     }
@@ -3199,6 +3226,148 @@ async function cloudUpload(force, silent){
   renderCloudBadge();
 }
 
+/* ==========================================================================
+   v117：把封面直接传到 Cloudflare R2 —— 一键搞定，不用再开命令行
+
+   为什么需要它：记录走「上传」（D1），封面字节是另一条线（R2）。以前只能靠
+        tools/push_images_to_r2.py，于是「电脑端新加的封面手机端看不到、
+        点上传又说没有需要上传的改动」反复出现。
+   做什么：扫 data/thumbs 下所有缩略图（手机端只读这个目录），对照台账挑出
+        「还没上云 / 大小变了」的，分批 POST 到 Worker 的 /api/img-batch。
+   台账：data/.r2_uploaded.json（key → 字节数），**与那个 py 脚本共用同一份**，
+        所以两边谁传过都不会被对方重传。
+   ========================================================================== */
+var R2_LEDGER_REL = '.r2_uploaded.json';     /* 相对本地数据目录（即 _fsaHandle） */
+var R2_BATCH_BYTES = 2400000;                /* 每批原文字节上限（base64 后约 ×1.37） */
+
+/* Uint8Array → base64。分块拼接，避免 fromCharCode.apply 参数过多爆栈。 */
+function bytesToB64(u8){
+  var s = '', CH = 0x8000;
+  for (var i = 0; i < u8.length; i += CH){
+    s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+  }
+  return btoa(s);
+}
+/* 递归列出 data/thumbs 下所有图片 → [{key:'data/thumbs/...', fsRel:'thumbs/...', size}] */
+async function r2ScanThumbs(){
+  var out = [];
+  async function walk(parts){
+    var files = await fsListFiles(parts);
+    for (var i = 0; i < files.length; i++){
+      var n = files[i];
+      if (!/\.(webp|jpe?g|png|gif)$/i.test(n)) continue;
+      var fsRel = parts.concat([n]).join('/');
+      var fh = await fsGetFileHandleAt(fsRel, false);
+      if (!fh) continue;
+      try {
+        var f = await fh.getFile();
+        out.push({ key: DATA_PREFIX + '/' + fsRel, fsRel: fsRel, size: f.size });
+      } catch(e){}
+    }
+    var dirs = await fsListDirs(parts);
+    for (var d = 0; d < dirs.length; d++) await walk(parts.concat([dirs[d]]));
+  }
+  await walk([THUMB_DIR]);
+  return out;
+}
+async function r2ReadLedger(){
+  var o = await fsReadJSONAt(R2_LEDGER_REL);
+  return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+}
+async function r2WriteLedger(obj){
+  try { return await fsWriteJSONAt(R2_LEDGER_REL, obj); } catch(e){ return false; }
+}
+/* 主流程。onProgress(text) 用来往面板里报进度。
+   返回 {total, todo, uploaded, failed:[...]} 或 {error:'...'} */
+async function r2UploadPendingCovers(onProgress){
+  var say = onProgress || function(){};
+  if (!_fsaHandle) return { error: '这台设备没连接本地数据目录，传不了封面（请到连着目录的电脑上点）' };
+  var base = cloudBase(), tok = cloudToken();
+  if (!base || !tok) return { error: '请先在上面填好 API 地址和令牌，再点「保存并测试」' };
+
+  say('正在扫描本地缩略图…');
+  var all = await r2ScanThumbs();
+  if (!all.length) return { error: '本地 data/thumbs 里没有找到图片（封面缩略图会在这里）' };
+  var led = await r2ReadLedger();
+  var todo = all.filter(function(it){ return Number(led[it.key]) !== Number(it.size); });
+  if (!todo.length) return { total: all.length, todo: 0, uploaded: 0, failed: [] };
+
+  /* 分批：按"原文体积"上限切，base64 会膨胀约 37%，所以留在 2.4MB 以内更稳 */
+  var batches = [], cur = [], curBytes = 0;
+  todo.forEach(function(it){
+    if (cur.length && curBytes + it.size > R2_BATCH_BYTES){ batches.push(cur); cur = []; curBytes = 0; }
+    cur.push(it); curBytes += it.size;
+  });
+  if (cur.length) batches.push(cur);
+
+  var uploaded = 0, failed = [], changed = false;
+  for (var bi = 0; bi < batches.length; bi++){
+    var b = batches[bi], items = [];
+    for (var j = 0; j < b.length; j++){
+      var fh = await fsGetFileHandleAt(b[j].fsRel, false);
+      if (!fh){ failed.push(b[j].key); continue; }
+      try {
+        var bytes = await blobToBytes(await fh.getFile());
+        items.push({ key: b[j].key, type: 'image/webp', data: bytesToB64(bytes), _size: b[j].size });
+      } catch(e){ failed.push(b[j].key); }
+    }
+    if (!items.length) continue;
+    say('上传封面 ' + uploaded + '/' + todo.length + '（第 ' + (bi + 1) + '/' + batches.length + ' 批）');
+    var res = null;
+    try {
+      res = await cloudFetch(base, tok, '/api/img-batch', {
+        method: 'POST', timeout: 180000,
+        body: { items: items.map(function(x){ return { key: x.key, type: x.type, data: x.data }; }) }
+      });
+    } catch(e){ res = null; }
+    if (res && res.ok && res.json && res.json.ok){
+      var bad = (res.json.failed || []);
+      items.forEach(function(x){
+        if (bad.indexOf(x.key) >= 0) failed.push(x.key);
+        else { uploaded++; led[x.key] = x._size; changed = true; }
+      });
+    } else {
+      items.forEach(function(x){ failed.push(x.key); });
+    }
+    /* 每批落一次台账：中途断网也不会把已经传上去的当成没传 */
+    if (changed){ await r2WriteLedger(led); changed = false; }
+  }
+  await r2WriteLedger(led);
+  return { total: all.length, todo: todo.length, uploaded: uploaded, failed: failed };
+}
+/* 面板里那行「本地封面有没有都上云」 */
+async function refreshCoverUploadStat(hintEl){
+  if (!hintEl) return;
+  if (!_fsaHandle){
+    hintEl.textContent = '「上传封面」要在连着本地数据目录的电脑上点；本机在电脑上点「下载封面」即可离线看。';
+    hintEl.style.color = '#666';
+    return;
+  }
+  if (!(cloudBase() && cloudToken())){
+    hintEl.textContent = '填好上面的 API 地址与令牌后，这里会显示「封面有没有都上云」。';
+    hintEl.style.color = '#666';
+    return;
+  }
+  hintEl.textContent = '正在核对本地封面有没有都上云…';
+  hintEl.style.color = '#666';
+  try {
+    var all = await r2ScanThumbs();
+    if (!all.length){ hintEl.textContent = '本地 data/thumbs 里还没有封面缩略图。'; return; }
+    var led = await r2ReadLedger();
+    var miss = all.filter(function(it){ return Number(led[it.key]) !== Number(it.size); });
+    if (!miss.length){
+      hintEl.textContent = '✓ 本地 ' + all.length + ' 张封面都已在云端。';
+      hintEl.style.color = '#1a7f37';
+    } else {
+      hintEl.textContent = '⚠️ 有 ' + miss.length + ' 张封面还没上云（共 ' + all.length + ' 张）→ 点左上的「上传封面」传上去。';
+      hintEl.style.color = '#c77700';
+    }
+  } catch(e){
+    hintEl.textContent = '核对封面状态失败：' + ((e && e.message) || e);
+    hintEl.style.color = '#c77700';
+  }
+}
+
 /* ============================================================
  * v103：云 → 本地（下载 + 合并）
  *
@@ -3651,8 +3820,28 @@ function addDataTools(){
         '<div id="cloudStatus" style="margin-top:8px;font-size:11px;line-height:1.6;color:#666;white-space:pre-line"></div>' +
         '<div id="cloudSrcLine" style="margin-top:6px;font-size:11px;line-height:1.6;color:#666"></div>' +
         '<div id="cloudImgLine" style="margin-top:4px;font-size:11px;line-height:1.6;color:#666"></div>' +
-        '<div style="font-size:10px;color:#888;line-height:1.6;margin-top:6px">' +
-          '「上传」只推<b>改过的</b>记录（按每条记录的最后修改时间判断），所以第一次点就等于全量。' +
+        /* ===== v117：封面单独一组（记录走 D1、封面走 R2，两条线各有自己的按钮） ===== */
+        '<div style="margin-top:10px;padding-top:9px;border-top:1px dashed #e0d8cb">' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+            /* 上传封面：扫本地缩略图，只把没上云的传上去（电脑端才可用，因为要读本地目录） */
+            '<button type="button" id="cloudCoverUpBtn" style="padding:7px 12px;border:1px solid #2f7a5a;border-radius:7px;background:#2f7a5a;color:#fff;cursor:pointer;font-size:12px">上传封面</button>' +
+            '<button type="button" id="cloudCoverBtn" style="padding:7px 12px;border:1px solid #3b6fd4;border-radius:7px;background:#3b6fd4;color:#fff;cursor:pointer;font-size:12px">下载封面</button>' +
+            '<button type="button" id="cloudCoverFullBtn" style="padding:7px 12px;border:1px solid #ccc;border-radius:7px;background:#fff;color:#333;cursor:pointer;font-size:12px">全部重下</button>' +
+          '</div>' +
+          /* 两行状态：第一行 = 本地封面有没有都上云；第二行 = 本机离线缓存了多少 */
+          '<div id="cloudCoverUpHint" style="margin-top:6px;font-size:11px;line-height:1.6;color:#666"></div>' +
+          '<div id="cloudCoverHint" style="margin-top:4px;font-size:11px;line-height:1.6;color:#666"></div>' +
+        '</div>' +
+        /* ===== 说明：默认收起，点了才展开（原来这一大段把面板撑得很长） ===== */
+        '<div class="sync-hd" data-sync-toggle="cloudHelp" style="margin-top:10px;border-radius:7px">说明<span class="sync-arrow">▸</span></div>' +
+        '<div id="cloudHelp" style="display:none;font-size:10px;color:#888;line-height:1.75;margin-top:7px">' +
+          '<b>记录和封面是两条线</b>：上面的「上传」只同步<b>记录</b>（存在 Cloudflare D1），<b>不会传图片</b>；' +
+          '封面图片存在 Cloudflare R2，由「上传封面」单独负责。' +
+          '<br>所以「手机端缺封面、点上传却说没有需要上传的改动」是正常的 —— 缺的是图片那条线，点「上传封面」即可。' +
+          '<br><b>日常用法</b>：电脑端加完东西 → 点「上传」（记录）→ 点「上传封面」（图片）→ 手机刷新一下就都有了。' +
+          '<br>「上传封面」会自动对比本地和云端，<b>只传没传过的</b>，不会重复传。' +
+          '<hr style="border:0;border-top:1px solid #eee;margin:7px 0">' +
+          '<b>记录同步</b>：「上传」只推<b>改过的</b>记录（按每条记录的最后修改时间判断），所以第一次点就等于全量；' +
           '「全量上传」忽略判断、把所有记录重推一遍（数据对不上时用）。' +
           '<br>「下载」把云端<b>改过的</b>记录合并进本机；「全量下载」忽略判断、把云端全部记录拉下来对一遍。' +
           '<br>合并是<b>字段并集</b>：只有一边有的字段一律保留（手机改状态、电脑改价格互不影响）；' +
@@ -3660,6 +3849,10 @@ function addDataTools(){
           '<br>上传和下载各自记一条水位线，互不干扰。' +
           '<br><b>手机端（含网页版）现在直接读 Cloudflare</b>：填好地址和令牌保存后，' +
           '打开页面就会自动从云端取最新记录，不用再靠 GitHub 推一遍。' +
+          '<hr style="border:0;border-top:1px solid #eee;margin:7px 0">' +
+          '<b>封面离线</b>：封面存在本机一个<b>独立</b>的缓存里（升级版本号不会把它清掉）。' +
+          '「下载封面」<b>只下本地还没有的</b>（增量），下完断网也能看全部封面；' +
+          '「全部重下」很少用到，只在下过的封面显示不对时才点。GitHub 设置里那个同名「下载封面」仍然可用。' +
         '</div>' +
       '</div>' +
     '</div>' +
@@ -3915,18 +4108,24 @@ function addDataTools(){
     var sep = base.indexOf('?') >= 0 ? '&' : '?';
     window.location.href = base + sep + '_=' + Date.now();
   };
-  /* v95：离线下载全部封面——逐个 fetch，SW 顺手写进 Cache Storage。
-     存完之后图片走 cache-first 本地读取，浏览不联网、断网可用。 */
-  function warmOfflineCovers(){
+  /* ================= v116：封面离线缓存（增量） =================
+     以前「下载封面」是**每次把 1400+ 张全下一遍**（慢、白耗流量，一次就是 1456 个请求）。
+     现在先查本机缓存里有哪些，**只下缺的那些**。
+     ⚠️ 这个桶名必须与 sw.js 的 IMG_CACHE 保持一致 —— 页面直接读写它，SW 在 fetch 时也用它。
+        （sw.js 里叫 IMG_CACHE = 'lifedesk-imgs-v1'，改一处必须改两处。） */
+  var IMG_CACHE_NAME = 'lifedesk-imgs-v1';
+
+  /* 当前数据里所有封面的**最终请求地址**：
+     手机端（配了 Cloudflare）= R2 的 /api/img/...；没配 = GitHub Pages 的相对路径。
+     必须走 thumbOf —— 手机端真正 fetch 的是 data/thumbs 下的 webp，缓存原图没用。 */
+  function collectCoverUrls(){
     var urls = [], seen = {};
     function add(u){ if (u && !seen[u]){ seen[u] = 1; urls.push(u); } }
-    /* v96m：遍历每条记录的「整组」封面（原来只取第一张，多图条目会漏掉后面几张），
-       并统一走 thumbOf —— 手机端实际请求的就是 data/thumbs/ 下的 webp，
-       缓存原图没用，必须对上手机端真正会去 fetch 的那个 URL，否则断网时照样空白。 */
     Object.keys(store).forEach(function(k){
       var m = store[k];
       if (!m || !m.rows) return;
       m.rows.forEach(function(r){
+        /* 遍历整组封面（只取第一张会漏掉多图条目的后面几张） */
         for (var fi = 0; fi < IMG_FIELDS.length; fi++){
           var arr = r[IMG_FIELDS[fi]];
           if (Array.isArray(arr)){
@@ -3938,33 +4137,157 @@ function addDataTools(){
         if (r['封面图片']) add(ckCoverUrl(r));
       });
     });
-    var hint = $('ghHint'), btn = $('offlineWarm');
-    if (!urls.length){
-      if (hint) hint.textContent = '没有找到封面。';
+    return urls;
+  }
+  /* 把 urls 分成「本地已有」和「还缺的」。一次 Promise.all 一千多个 match 有点猛，60 个一批。 */
+  async function splitCachedCover(urls){
+    var have = [], todo = [];
+    if (!('caches' in window)) return { have:have, todo:urls.slice(), cache:null };
+    var cache = null;
+    try { cache = await caches.open(IMG_CACHE_NAME); } catch(e){ return { have:have, todo:urls.slice(), cache:null }; }
+    var CH = 60;
+    for (var s = 0; s < urls.length; s += CH){
+      var part = urls.slice(s, s + CH);
+      var hits = await Promise.all(part.map(function(u){
+        return cache.match(u).then(function(r){ return !!r; }).catch(function(){ return false; });
+      }));
+      hits.forEach(function(h, i){ (h ? have : todo).push(part[i]); });
+    }
+    return { have:have, todo:todo, cache:cache };
+  }
+  /* opts: {hint, btn, force}
+       hint/btn —— 进度显示在哪（GitHub 段用 #ghHint/#offlineWarm，云同步段用 #cloudCoverHint/#cloudCoverBtn）
+       force    —— true = 不管本地有没有，全部重下一遍 */
+  async function warmOfflineCovers(opts){
+    opts = opts || {};
+    var hint = opts.hint || $('ghHint');
+    var btn  = opts.btn  || $('offlineWarm');
+    var say = function(t){ if (hint){ hint.textContent = t; hint.style.color = '#666'; } };
+    if (!('caches' in window)){
+      say('这个环境不支持离线缓存（要用 https 打开，或装成 PWA 才行）。');
       return;
     }
-    var total = urls.length, i = 0, done = 0, fail = 0;
+    var urls = collectCoverUrls();
+    if (!urls.length){ say('没有找到封面。'); return; }
     if (btn) btn.disabled = true;
-    function upd(){
-      if (hint) hint.textContent = '离线下载中 ' + done + '/' + total + (fail ? ('（失败 ' + fail + '）') : '');
+
+    var sp;
+    if (opts.force){
+      var c2 = null;
+      try { c2 = await caches.open(IMG_CACHE_NAME); } catch(e){}
+      sp = { have:[], todo:urls.slice(), cache:c2 };
+    } else {
+      say('正在核对本地已有的封面…');
+      sp = await splitCachedCover(urls);
     }
-    function step(){
+    var same = sp.have.length;
+    var todo = sp.todo;
+    if (!todo.length){
+      if (btn) btn.disabled = false;
+      if (hint){ hint.textContent = '✓ 封面已经全在本地了（' + same + ' 张），不用再下。'; hint.style.color = '#1a7f37'; }
+      toast('封面已全部离线，共 ' + same + ' 张');
+      return;
+    }
+    var total = todo.length, i = 0, done = 0, fail = 0;
+    var upd = function(){
+      say('离线下载中 ' + done + '/' + total + (same ? ('（已有 ' + same + ' 张，跳过）') : '') + (fail ? ('，失败 ' + fail) : ''));
+    };
+    var step = function(){
       if (i >= total){
         if (btn) btn.disabled = false;
-        if (hint) hint.textContent = '封面已存到本地：' + done + '/' + total + ' 张' + (fail ? ('，失败 ' + fail + ' 张') : '');
-        toast('封面已存入本地，之后断网也能浏览');
+        if (hint){
+          hint.textContent = '✓ 本次新下 ' + done + ' 张' + (same ? ('，跳过已有 ' + same + ' 张') : '')
+            + (fail ? ('，失败 ' + fail + ' 张（可再点一次重试）') : '') + '。之后断网也能看。';
+          hint.style.color = fail ? '#c77700' : '#1a7f37';
+        }
+        toast('封面离线完成：新下 ' + done + ' 张' + (fail ? ('，失败 ' + fail + ' 张') : ''));
         return;
       }
-      var u = urls[i++];
-      fetch(u).then(function(){ done++; }, function(){ fail++; }).then(function(){
-        upd(); step();
-      });
-    }
+      var u = todo[i++];
+      /* ⚠️ cache:'no-store' —— 万一浏览器 HTTP 缓存里存过这张图的 404，
+         不加这个会一直拿到那个失败结果（刚上传的新封面尤其容易踩）。 */
+      fetch(u, { cache: 'no-store' }).then(function(resp){
+        if (!resp || !resp.ok) throw new Error('HTTP ' + (resp && resp.status));
+        if (!sp.cache) return resp;
+        /* 页面自己写一份：这样即使 SW 还没接管页面，缓存也已落盘 */
+        return sp.cache.put(u, resp.clone()).catch(function(){ return resp; });
+      }).then(function(){ done++; }, function(){ fail++; }).then(function(){ upd(); step(); });
+    };
     upd();
     /* 6 路并发：够快，又不至于把手机网络/内存打满 */
     for (var c = 0; c < 6 && c < total; c++) step();
   }
-  if ($('offlineWarm')) $('offlineWarm').onclick = function(){ warmOfflineCovers(); };
+  /* 面板打开时后台数一次「本地已缓存多少张」，让人一眼知道离线齐没齐 */
+  function refreshCoverCacheStat(hintEl){
+    if (!hintEl || !('caches' in window)) return;
+    var urls = collectCoverUrls();
+    if (!urls.length) return;
+    hintEl.textContent = '正在核对本地封面缓存…';
+    splitCachedCover(urls).then(function(sp){
+      var n = sp.have.length;
+      if (n >= urls.length){
+        hintEl.textContent = '✓ 封面已全部离线（' + n + ' / ' + urls.length + ' 张），断网也能看。';
+        hintEl.style.color = '#1a7f37';
+      } else {
+        hintEl.textContent = '本地已有封面 ' + n + ' / ' + urls.length + ' 张；点「下载封面」补齐缺的（只下缺的）。';
+        hintEl.style.color = '#c77700';
+      }
+    }).catch(function(){});
+  }
+  /* GitHub 段的老按钮保留（以后走 git 也能用），一样改成增量 */
+  if ($('offlineWarm')) $('offlineWarm').onclick = function(){
+    warmOfflineCovers({ hint: $('ghHint'), btn: $('offlineWarm') });
+  };
+  /* 云同步段的新按钮 */
+  if ($('cloudCoverBtn')) $('cloudCoverBtn').onclick = function(){
+    warmOfflineCovers({ hint: $('cloudCoverHint'), btn: $('cloudCoverBtn') });
+  };
+  if ($('cloudCoverFullBtn')) $('cloudCoverFullBtn').onclick = function(){
+    if (!confirm('会把全部封面重新下载一遍（上千张，比较慢）。一般用不到，只在下过的封面显示不对时才需要。继续？')) return;
+    warmOfflineCovers({ hint: $('cloudCoverHint'), btn: $('cloudCoverFullBtn'), force: true });
+  };
+  /* v117：一键把「本地有、云端没有」的封面传上去（不用再开命令行） */
+  if ($('cloudCoverUpBtn')) $('cloudCoverUpBtn').onclick = async function(){
+    var btn = $('cloudCoverUpBtn'), hint = $('cloudCoverUpHint');
+    if (btn) btn.disabled = true;
+    var say = function(t){ if (hint){ hint.textContent = t; hint.style.color = '#666'; } };
+    var r2 = null;
+    try {
+      r2 = await r2UploadPendingCovers(say);
+    } catch(e){
+      r2 = { error: String((e && e.message) || e) };
+    }
+    if (btn) btn.disabled = false;
+    if (!r2 || r2.error){
+      say('✗ ' + ((r2 && r2.error) || '上传失败'));
+      if (hint) hint.style.color = '#e5484d';
+      return;
+    }
+    if (!r2.todo){
+      if (hint){ hint.textContent = '✓ 本地 ' + r2.total + ' 张封面都已在云端，没有需要上传的。'; hint.style.color = '#1a7f37'; }
+      toast('封面都在云端了');
+      return;
+    }
+    if (!r2.failed.length){
+      if (hint){ hint.textContent = '✓ 已上传 ' + r2.uploaded + ' 张封面到云端（本地共 ' + r2.total + ' 张）。手机刷新一次就能看到。'; hint.style.color = '#1a7f37'; }
+      toast('已上传 ' + r2.uploaded + ' 张封面');
+    } else {
+      if (hint){
+        hint.textContent = '⚠️ 上传 ' + r2.uploaded + ' 张，失败 ' + r2.failed.length + ' 张（可再点一次重试）：' + r2.failed.slice(0, 2).join('、');
+        hint.style.color = '#c77700';
+      }
+      toast('封面部分上传失败：成功 ' + r2.uploaded + ' 张');
+    }
+    /* 传完顺手把「离线缓存」那行也刷一下（不用等下次开面板） */
+    refreshCoverCacheStat($('cloudCoverHint'));
+  };
+  refreshCoverCacheStat($('cloudCoverHint'));
+  refreshCoverUploadStat($('cloudCoverUpHint'));
+  /* 让「同步设置」面板每次打开都重算一次（见 toggleGhPanel） */
+  _coverStatRefresh = function(){
+    refreshCoverCacheStat($('cloudCoverHint'));
+    refreshCoverUploadStat($('cloudCoverUpHint'));
+  };
   /* v96d：说明按钮 —— 折叠/展开原先的三段说明文字 */
   if ($('ghHelpBtn')) $('ghHelpBtn').onclick = function(){
     var h = $('ghHelp');
@@ -4049,10 +4372,16 @@ function addDataTools(){
   /* 本地文件模式下才显示「下载云端到本地」；gh 模式下本就在线，无需下载 */
   if ($('ghPull')) $('ghPull').style.display = (MODE === 'localfile') ? 'inline-block' : 'none';
 }
+/* v116：云同步面板打开时刷新一次「本地已缓存多少张封面」——
+   这个统计是异步查 Cache Storage 的，做在 addDataTools 里、挂到这个变量上。
+   不挂的话就只在启动时算一次，下完封面再打开面板还显示旧数字。 */
+var _coverStatRefresh = null;
 function toggleGhPanel(){
   var p = $('ghPanel');
   if (!p) return;
-  p.style.display = (p.style.display === 'none' || !p.style.display) ? 'block' : 'none';
+  var opening = (p.style.display === 'none' || !p.style.display);
+  p.style.display = opening ? 'block' : 'none';
+  if (opening && _coverStatRefresh){ try { _coverStatRefresh(); } catch(e){} }
 }
 
 /* ============ 工具 ============ */
@@ -4369,10 +4698,10 @@ var MODS = {
        w12 = 在 12 栏栅格（.fgrid.fg12）里占几栏，5+4+3 正好一排。 */
     fields:[
       {k:'系列名称',t:'text',req:1,ph:'如 宝可梦30周年151金属徽章',full:1},
-      {k:'所属IP',t:'dyn',src:'ip',w12:5},
+      {k:'所属IP',t:'dyn',src:'ip',w12:4},
       {k:'目标数量',t:'number',min:0,ph:'如 151，留空表示不限',lab:'系列总数量',w12:4},
       /* 纯界面字段（pseudo），不写库、不进「页面管理 · 内置字段」 */
-      {k:'_addchild',t:'childadd',lab:' ',w12:3,pseudo:1},
+      {k:'_addchild',t:'childadd',lab:' ',w12:4,pseudo:1},
       /* v113：子系列定义（名称 + 数量）就存在系列记录自己的「子系列」字段里 ——
          不单独建系列记录、不单独开文件夹；它的封面、以及它名下 items 的封面，
          都留在本系列的目录下（items 本来就按父系列名归目录）。 */
@@ -4592,6 +4921,9 @@ function builtinFieldDefs(module, tpl){
     (fs || []).forEach(function(f){
       if (!f || !f.k || seen[f.k]) return;
       if (String(f.k).charAt(0) === '_') return;   /* 技术字段（如 _geo 地图）不给用户选位置 */
+      /* v113：pseudo 字段是纯界面件（「添加子系列」按钮、子系列编辑器），不是数据字段，
+         不给它们出现在「页面管理 · 内置字段」里（否则用户一隐藏就把功能弄没了）。 */
+      if (f.pseudo) return;
       seen[f.k] = 1; out.push(f);
     });
   }
@@ -4671,7 +5003,8 @@ function fieldTypeLabel(t){
             'year-date':'年月日', img:'图片', textarea:'多行文本', select:'下拉单选',
             multi:'预设多选', booktag:'标签分类', booksub:'小分类', stars:'星级',
             hearts:'心级', dyn:'关联选择', geopick:'地图选点', check:'勾选',
-            checks:'多选勾选', locopt:'位置选项', loc3:'位置三段' })[t] || (t || '字段');
+            checks:'多选勾选', locopt:'位置选项', loc3:'位置三段',
+            childadd:'按钮', childlist:'子系列' })[t] || (t || '字段');
 }
 async function persistFieldLayout(pending){
   try {
@@ -4919,7 +5252,34 @@ function activeFields(key, vals){
     var _bs = {}; builtinFieldsOf(key, _tpl).forEach(function(n){ _bs[n] = 1; });
     base = base.filter(function(f){ return !(_bs[f.k] && fieldIsHidden(f, _lay)); });
   }
+  /* v113：子系列 —— 只有「在编辑系列里登记过子系列（或老数据用过）」的系列，
+     录入/编辑物品时才出现「子系列」下拉框；没登记过的整个字段都不出现。
+     并且当它出现时，IP / 系列 / 子系列 三个并成一行（12 栏各占 4 栏）。 */
+  if (key === 'collection'){
+    var _hasChild = seriesHasChildren(vals && vals['系列']);
+    if (!_hasChild){
+      base = base.filter(function(f){ return f.k !== '子系列'; });
+    } else {
+      base = base.map(function(f){
+        if (f.k==='IP' || f.k==='系列' || f.k==='子系列'){
+          var c={}; for (var _k in f) if (Object.prototype.hasOwnProperty.call(f,_k)) c[_k]=f[_k];
+          c.w12 = 4;
+          return c;
+        }
+        return f;
+      });
+    }
+  }
   return base;
+}
+/* v113：表单栅格用 4 栏还是 12 栏。
+   - 系列表单：固定 12 栏（要靠 --w 把「所属IP + 系列总数量 + 添加子系列」摆成一排）
+   - 藏品表单：出现「子系列」时也用 12 栏，好让 IP / 系列 / 子系列 三等分一排；
+     不出现时保持原来的 4 栏，布局与以前完全一致。 */
+function formGridClass(key, vals){
+  if (key === 'series') return ' fg12';
+  if (key === 'collection' && seriesHasChildren(vals && vals['系列'])) return ' fg12';
+  return '';
 }
 /* v75：自定义字段适用范围匹配：module=全模块；cat/sub/ip/series 仅匹配该范围值的 item。
    v75fix：cat 维度按模块取 —— 遐方坞的 目的地/打卡点、文渊斋的 学习计划 是按「录入表单」区分，
@@ -5206,7 +5566,12 @@ function rebuildFormGrid(host){
   if (!editing) return;
   var grid = host.querySelector('.fgrid');
   if (!grid) return;
-  try { grid.innerHTML = activeFields(editing.key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join(''); } catch(e){ return; }
+  try {
+    /* v113：栅格档位可能随「系列」选择变化（藏品表单选了有子系列的系列 → 切 12 栏），
+       所以重绘时连 class 一起刷新 */
+    grid.className = 'fgrid'+formGridClass(editing.key, editing.vals);
+    grid.innerHTML = activeFields(editing.key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('');
+  } catch(e){ return; }
   wireFormControls(host, function(){
     if (!editing) return;
     try { localStorage.setItem('lifedesk_draft_'+editing.key+(editing.id?('_'+editing.id):''), JSON.stringify(editing.vals)); } catch(e){}
@@ -5783,7 +6148,13 @@ function localUpsert(key, id, vals){
   var row=Object.assign({}, prev, {_id:id});
   activeFields(key, vals).forEach(function(f){
     if (f.t==='geopick') return;
+    if (f.t==='childadd') return;            /* v113：纯界面按钮，不写库 */
     var v=vals[f.k];
+    if (f.t==='childlist'){
+      /* v113：子系列定义（[{名称,数量}]）—— 空数组一律存成 null，免得每行都挂个 [] */
+      row[f.k] = (Array.isArray(v) && v.length) ? v : (Array.isArray(v) ? null : (v || null));
+      return;
+    }
     if (f.t==='img'){
       var vp = vals[f.k+'_vp'];
       /* v77fix：v 可能已经是 [{imageUrl,viewport}] 数组（直接把 store 里的 row 传进来时）。
@@ -9154,6 +9525,49 @@ document.addEventListener('click', function(ev){
   }
   if (act==='scanisbn'){ openBookScanner(); return; }
   if (act==='isbnlookup'){ doIsbnLookup(); return; }
+  /* ---------- v113：系列表单里的子系列操作 ---------- */
+  if (act==='childadd'){
+    if (!editing) return;
+    editing._childAdd = true;
+    rebuildFormGrid($('sheetHost'));
+    var _cn = $('sheetHost').querySelector('.childname');
+    if (_cn) _cn.focus();
+    return;
+  }
+  if (act==='childcancel'){
+    if (!editing) return;
+    editing._childAdd = false; editing._childDraft = null;
+    rebuildFormGrid($('sheetHost'));
+    return;
+  }
+  if (act==='childok'){
+    if (!editing) return;
+    var _h = $('sheetHost');
+    var _ni = _h.querySelector('.childname'), _ci = _h.querySelector('.childcnt');
+    var _nm = _ni ? String(_ni.value||'').trim() : '';
+    if (!_nm){ toast('先给子系列起个名字'); if (_ni) _ni.focus(); return; }
+    var _cur = Array.isArray(editing.vals['子系列']) ? editing.vals['子系列'].slice() : [];
+    if (_cur.some(function(x){ return String((x && x['名称']) || x).trim() === _nm; })){
+      toast('已经有一个叫「'+_nm+'」的子系列了'); return;
+    }
+    _cur.push({ 名称:_nm, 数量: _ci && _ci.value!=='' ? (num(_ci.value)||0) : 0 });
+    editing.vals['子系列'] = _cur;
+    editing._childAdd = false; editing._childDraft = null;
+    rebuildFormGrid(_h);
+    toast('已添加子系列「'+_nm+'」，记得点保存');
+    return;
+  }
+  if (act==='childdel'){
+    if (!editing) return;
+    var _i = parseInt(node.getAttribute('data-i'), 10);
+    var _a = Array.isArray(editing.vals['子系列']) ? editing.vals['子系列'].slice() : [];
+    if (isNaN(_i) || _i<0 || _i>=_a.length) return;
+    var _gone = _a.splice(_i,1)[0];
+    editing.vals['子系列'] = _a;
+    rebuildFormGrid($('sheetHost'));
+    toast('已移除子系列「'+String((_gone && _gone['名称'])||_gone||'')+'」，记得点保存');
+    return;
+  }
   /* v77：ISBN 输入框下方的扫码 / 照片识别 / 书名搜索模块 */
   if (act==='isbnlivecam'){
     var _tl = node.closest('[data-isbn-tools]');
@@ -9854,6 +10268,70 @@ function reloadOne(key){
 }
 
 /* ============ 表单 ============ */
+/* ---------- v113：子系列 ----------
+   子系列（一个大系列下的小套，如 Road trip → 徽章 / 冰箱贴 / 行李牌）现在由用户在
+   「编辑系列」里显式登记，数据存在**系列记录自己的「子系列」字段**里：
+       seriesRow['子系列'] = [{ 名称:'徽章', 数量:12 }, ...]
+   不单独建系列记录，也不单独开图片目录 —— 它的封面、以及它名下 items 的封面，
+   都留在父系列那套目录里（items 的封面本来就按「系列名」归档）。
+   兼容早期直接把名字写在 item 上的老数据：seriesChildNamesFromItems 仍会兜底。 */
+function seriesChildDefs(seriesName){
+  var nm = String(seriesName||'').trim();
+  if (!nm) return [];
+  var se = (((typeof store!=='undefined') && store.series && store.series.rows) || []).filter(function(r){
+    return String(r['系列名称']||'').trim() === nm;
+  })[0];
+  var list = se && se['子系列'];
+  if (!list) return [];
+  if (!Array.isArray(list)) list = [list];          /* 兜底：被存成单个对象也认 */
+  return list.map(function(x){
+    if (x == null) return null;
+    if (typeof x === 'string') return { 名称:x, 数量:0 };
+    return { 名称:String(x['名称']||'').trim(), 数量:num(x['数量'])||0 };
+  }).filter(function(x){ return x && x['名称']; });
+}
+function childNamesOf(seriesName){
+  return seriesChildDefs(seriesName).map(function(x){ return x['名称']; });
+}
+/* 老数据兜底：item 上已经写过的「子系列」值（那时还没有登记表） */
+function seriesChildNamesFromItems(seriesName){
+  var nm = String(seriesName||'').trim();
+  if (!nm) return [];
+  var out = [];
+  (((typeof store!=='undefined') && store.collection && store.collection.rows) || []).forEach(function(r){
+    if (String(r['系列']||'').trim() !== nm) return;
+    var c = String(r['子系列']||'').trim();
+    if (c && out.indexOf(c) < 0) out.push(c);
+  });
+  return out;
+}
+/* 录入/编辑物品时该系列可选的子系列 = 登记过的 + 老数据里出现过的（并集，去重保序）。
+   ⚠️ 会扫一遍全部藏品，只在「系列详情下拉」这种一次性渲染里用；
+      表单里判断该不该出现下拉框走 seriesHasChildren（只看登记表，快）。 */
+function seriesChildOptions(seriesName){
+  var out = childNamesOf(seriesName);
+  seriesChildNamesFromItems(seriesName).forEach(function(n){ if (out.indexOf(n)<0) out.push(n); });
+  return out;
+}
+/* v113：「只有添加过子系列的，录入/编辑物品时才出现子系列下拉框」——
+   严格按登记表判断（不扫 item，避免被 1400+ 条记录拖慢表单）。 */
+function seriesHasChildren(seriesName){ return childNamesOf(seriesName).length > 0; }
+/* v115：某个 IP 下的系列名 —— 录入物品时「先选 IP，系列下拉就只列它的系列」。
+   没选 IP 时返回全部（否则「不属于任何 IP」的系列就再也选不到了）。
+   归属靠系列记录自己的「所属IP」字段；系列表单里选了所属IP 就等于把系列挂到该 IP 下。 */
+function seriesNamesOfIp(ipName){
+  var all = (((typeof store!=='undefined') && store.series && store.series.rows) || []);
+  var ip = String(ipName||'').trim();
+  var out = [];
+  all.forEach(function(r){
+    var nm = String(r['系列名称']||'').trim();
+    if (!nm) return;
+    if (ip && String(r['所属IP']||'').trim() !== ip) return;
+    if (out.indexOf(nm) < 0) out.push(nm);
+  });
+  return out;
+}
+
 /* ---------- 动态下拉：小类 / IP / 存储地点 ---------- */
 function dynOptions(src){
   /* v96p：小类下拉 = 预定义 SUBS[大类] + 本大类「在实际数据里已用过」的小类。
@@ -9871,22 +10349,19 @@ function dynOptions(src){
     });
     return _base;
   }
-  /* v111：子系列下拉 = 本系列里「已经用过」的子系列（如 Road trip 下的 徽章/冰箱贴/行李牌）。
-     只取同一系列，避免把别的系列的小套串进来；没有历史值时靠「＋ 自定义…」新建。 */
+  /* v113/v115：子系列下拉 = 该**系列记录**里登记过的子系列（在「编辑系列 → 添加子系列」里建），
+     外加老数据里直接写在 item 上的值（seriesChildOptions 已并集）。
+     ⚠️ v115 修：这里原来还留着 v111 的旧分支（按 item 上的「子系列」现扫），
+        它写在前面、直接 return 了 —— 于是新写的登记表版本成了死代码，
+        而当时没有任何 item 写过子系列 → 下拉永远是空的。两个分支必须只留一个。 */
   if (src==='child'){
-    var _ser = (editing && editing.vals) ? String(editing.vals['系列']||'') : '';
-    var _out = [], _saw = {};
-    (store.collection.rows || []).forEach(function(r){
-      var c = r['子系列'];
-      if (!c) return;
-      if (_ser && String(r['系列']||'') !== _ser) return;
-      c = String(c);
-      if (!_saw[c]){ _saw[c] = 1; _out.push(c); }
-    });
-    return _out.sort();
+    var _sn = (editing && editing.vals) ? editing.vals['系列'] : '';
+    return seriesChildOptions(_sn);
   }
   if (src==='ip')  return (store.ip.rows  || []).map(function(r){ return r['IP名称'];   }).filter(Boolean);
-  if (src==='series') return (store.series.rows || []).map(function(r){ return r['系列名称']; }).filter(Boolean);
+  /* v115：系列按 IP 过滤 —— 先选了 IP（如宝可梦），系列下拉就只列属于这个 IP 的系列；
+     IP 没选（「不属于任何 IP」）时才列全部。系列归属靠系列记录的「所属IP」字段。 */
+  if (src==='series') return seriesNamesOfIp((editing && editing.vals) ? editing.vals['IP'] : '');
   /* v75fix：用 locDisplayName —— 新数据是「房间 · 柜体墙面 · 所在层」三段合成，
      老数据只有「地点名称」，两种都能取到展示名 */
   if (src==='loc') return (store.loc.rows || []).map(locDisplayName).filter(Boolean);
@@ -9900,7 +10375,9 @@ function fillDynField(host, k){
   var opts=dynOptions(src);
   var cur=String(editing.vals[k]||'');
   var known=opts.indexOf(cur)>=0;
-  var emptyLabel = src==='ip' ? '（不属于任何 IP）' : (src==='loc' ? '（暂不指定）' : '（无）');
+  var emptyLabel = src==='ip' ? '（不属于任何 IP）'
+    : (src==='loc' ? '（暂不指定）'
+    : (src==='child' ? '（不属于任何子系列）' : '（无）'));
   var html='<option value=""'+(cur===''?' selected':'')+'>'+emptyLabel+'</option>';
   opts.forEach(function(o){
     html += '<option value="'+esc(o)+'"'+(o===cur?' selected':'')+'>'+esc(o)+'</option>';
@@ -10228,6 +10705,17 @@ function wireFormControls(host, saveDraft){
       if (sel.value==='__custom__'){ cus.style.display='block'; cus.focus(); editing.vals[k]=cus.value||''; }
       else {
         cus.style.display='none'; cus.value=''; editing.vals[k]=sel.value;
+        /* v115：换了 IP → 系列下拉只列属于这个 IP 的系列；
+           原来选的系列若不属于新 IP，就一起清掉（连同它下面的子系列），
+           免得出现「IP=宝可梦、系列=某个三丽鸥系列」这种自相矛盾的记录。 */
+        if (w.getAttribute('data-src')==='IP'){
+          if (editing.vals['系列']){
+            var _okS = seriesNamesOfIp(sel.value);
+            if (_okS.indexOf(String(editing.vals['系列']))<0){
+              editing.vals['系列']=''; editing.vals['子系列']='';
+            }
+          }
+        }
         /* 选了系列就把它的 IP 带上，省得再选一次 */
         if (w.getAttribute('data-src')==='series' && sel.value){
           var se=store.series.rows.filter(function(r){ return r['系列名称']===sel.value; })[0];
@@ -10237,16 +10725,12 @@ function wireFormControls(host, saveDraft){
             var ipw=host.querySelector('.dynwrap[data-k="IP"]');
             if (ipw){ var ipsel=ipw.querySelector('[data-dyn-sel]'); if (ipsel) ipsel.value=se['所属IP']; }
           }
-          /* v111：换了系列 → 子系列下拉跟着换成该系列用过的子系列，旧值不属于新系列则清掉 */
-          var cw=host.querySelector('.dynwrap[data-k="子系列"]');
-          if (cw && editing.vals['子系列']){
-            var valid=false;
-            (store.collection.rows||[]).forEach(function(r){
-              if (String(r['系列']||'')===String(sel.value) && String(r['子系列']||'')===String(editing.vals['子系列'])) valid=true;
-            });
-            if (!valid) editing.vals['子系列']='';
+          /* v113：换了系列 → 子系列下拉换成新系列登记过的子系列；旧值不属于新系列就清掉。
+             （要是新系列根本没登记过子系列，下面 rebuildFormGrid 会把这个字段整个拿掉。） */
+          if (editing.vals['子系列']){
+            var _ok=seriesChildOptions(sel.value);
+            if (_ok.indexOf(String(editing.vals['子系列']))<0) editing.vals['子系列']='';
           }
-          if (host.querySelector('.dynwrap[data-k="子系列"]')) fillDynField(host,'子系列');
         }
         if (saveDraft) saveDraft();
       }
@@ -10256,6 +10740,18 @@ function wireFormControls(host, saveDraft){
     cus.addEventListener('input', function(){ editing.vals[k]=cus.value; if (saveDraft) saveDraft(); });
     fillDynField(host, k);
   });
+  /* v113：子系列输入框（名称 / 数量）—— 边打字边存草稿，
+     这样中途因切换系列等原因重绘时，已经敲进去的内容不会被清掉。 */
+  var _cnInp = host.querySelector('.childname'), _ccInp = host.querySelector('.childcnt');
+  if (_cnInp || _ccInp){
+    editing._childDraft = editing._childDraft || { 名称:'', 数量:'' };
+    var _syncChild = function(){
+      if (_cnInp) editing._childDraft['名称'] = _cnInp.value;
+      if (_ccInp) editing._childDraft['数量'] = _ccInp.value;
+    };
+    if (_cnInp) _cnInp.addEventListener('input', _syncChild);
+    if (_ccInp) _ccInp.addEventListener('input', _syncChild);
+  }
   host.querySelectorAll('.imgwrap input[data-f]').forEach(function(inp){
     inp.addEventListener('input', function(){
       var k=inp.getAttribute('data-f');
@@ -10842,7 +11338,10 @@ function renderSeriesDetail(){
   }
   /* v111：子系列筛选 —— 一个大系列下分小套（Road trip → 徽章 / 冰箱贴 / 行李牌）。
      子系列来自 item 上的「子系列」字段；系列里有人填过才出下拉框。 */
-  var childs=[]; itemsAll.forEach(function(r){ var c=String(r['子系列']||''); if (c && childs.indexOf(c)<0) childs.push(c); });
+  /* v113：子系列改由「编辑系列 → 添加子系列」登记，存在系列记录里；
+     老数据里直接写在 item 上的值也并进来，以前建的子系列照样能筛。
+     （登记表里有数量，但那是「目标」，所以这里只列名字。） */
+  var childs = seriesChildOptions(se['系列名称']);
   if (fcs.seriesChild && childs.indexOf(fcs.seriesChild)<0) fcs.seriesChild='';
   if (fcs.seriesChild) itemsAll = itemsAll.filter(function(r){ return (r['子系列']||'')===fcs.seriesChild; });
   var inLib=itemsAll.filter(function(r){ return hasStatus(r,'在库'); });
@@ -11236,7 +11735,7 @@ function openForm(key, id, opts){
       '<button class="guiwei" type="button" data-act="guiwei" title="清空所有已填信息，归位到默认">归位</button>'+
       '<button class="x" type="button" data-x="1" aria-label="关闭">×</button>'+
     '</div></div>'+
-    '<div class="fgrid">'+activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('')+'</div>'+
+    '<div class="fgrid'+formGridClass(key, editing.vals)+'">'+activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('')+'</div>'+
     '<div class="sheet-actions">'+
     (id?'<button class="btn ghost" type="button" id="delBtn" style="margin-right:auto;color:var(--red)">删除</button>':'')+
     '<button class="btn ghost" type="button" data-x="1">取消</button>'+
@@ -11256,7 +11755,10 @@ function openForm(key, id, opts){
         editing.vals['大类']=base['大类'];
       }
       var fg = host.querySelector('.fgrid');
-      if (fg) fg.innerHTML = activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('');
+      if (fg){
+        fg.className = 'fgrid'+formGridClass(key, editing.vals);
+        fg.innerHTML = activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('');
+      }
       wireFormControls(host, saveDraft);
       try { localStorage.removeItem(draftKey); } catch(e){}
       toast('已归位');
@@ -11448,7 +11950,8 @@ function fieldHTML(f, v){
      一行按 4 格算：默认 2 格(50%)，w=1 时 1 格(25%)。
      v76：宽度可被「页面管理 → 内置字段」覆盖，1=25% / 2=50% / 3=75% / 4=整行。 */
   var _span = fieldSpanOf(f, curFieldLayout());
-  var body='', cls='f'+(_span===4?' full':'')+(_span===1?' q':'')+(_span===3?' w3':'')+(f.rowstart?' rs':'');
+  var body='', cls='f'+(_span===4?' full':'')+(_span===1?' q':'')+(_span===3?' w3':'')+(f.rowstart?' rs':'')
+    +(f.t==='childadd'?' childaddbox':'');
   if (f.t==='text' || f.t==='number' || f.t==='currency' || f.t==='date'){
     var type = f.t==='number'||f.t==='currency' ? 'number' : (f.t==='date'?'date':'text');
     /* autocomplete=off：阻止 Chrome 把「国家地区」之类字段当成用户名去匹配已保存的密码 */
@@ -11658,9 +12161,42 @@ function fieldHTML(f, v){
     body='<div class="'+rowCls.trim()+'" data-k="'+f.k+'">'+(f.o||[]).map(function(o){
       return '<label class="checkrow"><input data-f="'+f.k+'" data-v="'+esc(o)+'" type="checkbox"'+(arr.indexOf(o)>=0?' checked':'')+'>'+esc(o)+'</label>';
     }).join('')+'</div>';
+  } else if (f.t==='childadd'){
+    /* v113：「添加子系列」按钮 —— 紧跟「系列总数量」右边，同一排 */
+    body='<button type="button" class="btn ghost sm childaddbtn" data-act="childadd">＋ 添加子系列</button>';
+  } else if (f.t==='childlist'){
+    /* v113：子系列编辑器 —— 点「添加子系列」后才出现「名称 + 数量 + 确认」那一排；
+       已经建过的子系列以药丸形式列在下面（可单个删掉）。
+       两个都没内容时整块不渲染，第二排下面不会多出一条空行。 */
+    var _arr = Array.isArray(v) ? v : (v ? [v] : []);
+    var _adding = !!(editing && editing._childAdd);
+    if (!_arr.length && !_adding) return '';
+    var _dft = (editing && editing._childDraft) || {};
+    body='';
+    if (_adding){
+      body += '<div class="childrow">'+
+        '<input class="childname" type="text" autocomplete="off" placeholder="子系列名称，如 徽章" value="'+esc(_dft['名称']||'')+'">'+
+        '<input class="childcnt" type="number" min="0" autocomplete="off" placeholder="数量（可留空）" value="'+esc(_dft['数量']==null?'':_dft['数量'])+'">'+
+        '<button class="btn primary sm" type="button" data-act="childok">确认</button>'+
+        '<button class="btn ghost sm" type="button" data-act="childcancel">取消</button>'+
+      '</div>'+
+      '<span class="imgnote">子系列的数据（连同封面）都记在这个系列里，不会另建文件。</span>';
+    }
+    if (_arr.length){
+      body += '<div class="childpills">'+ _arr.map(function(x,i){
+        var _nm = (typeof x==='string') ? x : String((x && x['名称']) || '');
+        var _ct = (typeof x==='string') ? 0 : (num(x && x['数量']) || 0);
+        return '<span class="childpill">'+esc(_nm)+( _ct ? '<i>'+_ct+' 件</i>' : '')+
+          '<button class="cx" type="button" data-act="childdel" data-i="'+i+'" title="删掉这个子系列">×</button></span>';
+      }).join('')+'</div>';
+    }
   }
-  var lab = (f.t==='geopick' || f.t==='check') ? '' : '<label>'+esc(f.lab||f.k)+(f.req?' *':'')+'</label>';
-  return '<div class="'+cls+'">'+lab+body+
+  var lab = (f.t==='geopick' || f.t==='check' || f.t==='childadd') ? ''
+          : '<label>'+esc(f.lab||f.k)+(f.req?' *':'')+'</label>';
+  /* v113：f.w12 = 在 12 栏栅格（.fgrid.fg12）里占几栏，用 CSS 变量 --w 内联下发；
+     .f 那几条 span 规则都写成 span var(--w, 默认档)，不写就还是原来的 4 栏比例。 */
+  var _ws = f.w12 ? ' style="--w:'+Number(f.w12)+'"' : '';
+  return '<div class="'+cls+'"'+_ws+'>'+lab+body+
     (f.req?'<span class="err">这一项必填</span>':'')+'</div>';
 }
 /* v58：点背景关闭表单的守卫——必须「按下」和「松开」都在背景上才关闭。
