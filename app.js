@@ -197,12 +197,14 @@ function cloudPendingCount(){
      点进去 cloudUpload 却收集不到、弹「没有需要上传的改动」。
      当初就是在这里翻的车：墓碑（本机删除记录）是【永不清理】的，
      直接 ts.length 会把早就推上云的老墓碑也数进来，于是角标虚高、点开却没东西可传。
-     正确算法：改动的记录看 _upd > 水位线；墓碑看 t.at > 水位线（与 cloudCollect 一致）。 */
-  var wm = cloudWatermark(), n = 0;
+     正确算法：改动的记录看 _upd > 水位线；墓碑看 t.at > 水位线（与 cloudCollect 一致）。
+     v120：水位线之外还要看「本机见过的云端版本」台账 —— 别的设备改过并已上云的记录
+          不该在本机显示成待上传（详见 cloudSeenMark 的注释）。 */
+  var wm = cloudWatermark(), n = 0, seen = cloudSeenMap();
   var snap = snapshotAll();
   Object.keys(snap).forEach(function(mk){
     (snap[mk] || []).forEach(function(r){
-      if (r && r._id != null && Number(r._upd) > wm) n++;
+      if (cloudRecordPending(r, wm, seen)) n++;
     });
   });
   try {
@@ -218,7 +220,12 @@ function renderCloudBadge(){
   var el = $('cloudBadge'); if (!el) return;
   var n = (cloudBase() && cloudToken()) ? cloudPendingCount() : 0;
   el.hidden = (n <= 0);
-  if (n > 0){ var nb = $('cloudBadgeN'); if (nb) nb.textContent = n; }
+  if (n > 0){
+    var nb = $('cloudBadgeN'); if (nb) nb.textContent = n;
+    el.title = '有 ' + n + ' 条改动还没上云（本机改过的记录）。点一下立即上传。';
+  } else {
+    el.title = '本机没有待上传的改动';
+  }
   el.onclick = function(){ if (!_cloudBusy) cloudUpload(false); };
 }
 /* 分片感知的 GitHub 保存：分片仓库走 sharded 路径，单文件仓库退化为 ghSaveAll */
@@ -2978,6 +2985,65 @@ function cloudWatermark(){
 function setCloudWatermark(t){
   try { localStorage.setItem(CLOUD_WM_KEY, String(t)); } catch(e){}
 }
+/* ---------- v120：本机「已经见过云端哪个版本」的台账 ----------
+   为什么需要它（手机端「什么都没改却显示待上传 N 条」的根治点）：
+     角标以前拿每条记录的 _upd 去比「本机上传水位线」，而水位线**只有本机自己上传**
+     才会推进。于是电脑端改过、并且早就传上云的那些记录，在手机端一看 _upd 比水位线新，
+     就被算成「待上传」——明明这条记录早就躺在云端了，手机点上传也确实是重传一遍。
+   现在改成比「本机见过的云端版本」：从云端拉回来的、以及本机刚传上去的记录，都记进
+     { 记录id: 云端 _upd } 这张台账；只有 _upd 比台账还新的才算是真的待上传。
+   台账只增不减（同一条记录取更大的那个），超过 4000 条时按当前数据瘦身一次。 */
+var CLOUD_SEEN_KEY = 'lifedesk_cloud_seen';
+var _cloudSeen = null;
+function cloudSeenMap(){
+  if (_cloudSeen) return _cloudSeen;
+  try {
+    var o = JSON.parse(localStorage.getItem(CLOUD_SEEN_KEY) || '{}');
+    _cloudSeen = (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  } catch(e){ _cloudSeen = {}; }
+  return _cloudSeen;
+}
+function cloudSeenSave(){
+  try { localStorage.setItem(CLOUD_SEEN_KEY, JSON.stringify(_cloudSeen || {})); } catch(e){}
+}
+/* 记下「这些记录的当前版本已经在云端了」。接受两种形状：
+   ① 本机记录 / cloudCollect 的 pending 项：{id|_id, data:{_upd}, _upd}
+   ② 云端行：{id, data:{_upd}, updated_at}                                        */
+function cloudSeenMark(rows, noSave){
+  var m = cloudSeenMap(), n = 0;
+  (rows || []).forEach(function(r){
+    if (!r) return;
+    var id = String(r.id != null ? r.id : (r._id != null ? r._id : ''));
+    if (!id) return;
+    var d = (r.data && typeof r.data === 'object') ? r.data : r;
+    var upd = Number(d._upd) || Number(r.updated_at) || 0;
+    if (!upd) return;
+    if (!(Number(m[id]) >= upd)){ m[id] = upd; n++; }
+  });
+  if (n){
+    /* 瘦身：条目过多时只留当前数据里还存在的 id，防 localStorage 无限膨胀 */
+    var keys = Object.keys(m);
+    if (keys.length > 4000){
+      try {
+        var alive = {}, snap = snapshotAll();
+        Object.keys(snap).forEach(function(mk){
+          (snap[mk] || []).forEach(function(x){ if (x && x._id != null) alive[String(x._id)] = 1; });
+        });
+        keys.forEach(function(k){ if (!alive[k]) delete m[k]; });
+      } catch(e){}
+    }
+    if (!noSave) cloudSeenSave();
+  }
+  return n;
+}
+/* 待上传的**唯一**判定：cloudCollect（真上传）与 cloudPendingCount（角标）必须共用它，
+   否则又会出现「角标说有 N 条、点进去却说没有需要上传的改动」。 */
+function cloudRecordPending(r, wm, seen){
+  if (!r || r._id == null) return false;
+  var upd = Number(r._upd) || 0;
+  var base = Math.max(Number(wm) || 0, Number((seen || {})[String(r._id)]) || 0);
+  return upd > base;
+}
 function cloudBase(){
   var c = cloudConfig();
   return String(c.apiBase || CLOUD_DEFAULT_BASE).trim().replace(/\/+$/, '');
@@ -3029,12 +3095,13 @@ function cloudFetch(base, tok, path, opts){
 /* 收集「需要上传的东西」。只读，不动任何本地数据。 */
 function cloudCollect(force){
   var wm = force ? 0 : cloudWatermark();
+  var seen = force ? {} : cloudSeenMap();     /* 全量上传时忽略台账，按用户要求重推全部 */
   var snap = snapshotAll();
   var pending = [];
   Object.keys(snap).forEach(function(mk){
     (snap[mk] || []).forEach(function(r){
       if (!r || r._id == null) return;
-      if (!force && !(Number(r._upd) > wm)) return;
+      if (!force && !cloudRecordPending(r, wm, seen)) return;
       /* 运行期字段 _file 不能进云端：它是 ip/series 目录分片「这条记录住在哪个文件里」的
          位置标记，由 loadEntityModule() 在本机挂上去、saveEntityModule() 写盘前删掉
          （见 app.js 那两处）。别的设备既用不上也认不出这个路径。
@@ -3240,6 +3307,8 @@ async function cloudUpload(force, silent){
   var hardFail = !!lastErr;
   if (!hardFail && failed.length === 0){
     setCloudWatermark(t0);
+    /* v120：刚传上去的这批也记进「已见过云端版本」台账（下次角标不会把它们再算一遍） */
+    try { cloudSeenMark(pending); } catch(e){}
     cloudStatus('✓ 上传完成：' + done + ' 条' + (dels.length ? '，删除 ' + dels.length + ' 条' : ''), '#1a7f37');
     if (!silent) toast('☁ 上传完成：' + done + ' 条' + (useBatch ? '' : '（逐条模式）'));
   } else {
@@ -3492,7 +3561,10 @@ function cloudMergePlan(row){
   if (!local){
     var nr = Object.assign({}, cd);
     nr._id = id;
-    nr._upd = cupd || Date.now();
+    /* v120：以前这里写 `cupd || Date.now()` —— 云端没带时间戳时，本机副本会被盖上一个
+       「刚刚改过」的时间，于是这条记录在角标里永远算「待上传」，点上传又会把它推回去。
+       没有时间戳就保持 0（= 不当作改过），别再凭空造一个 now。 */
+    nr._upd = cupd || 0;
     nr._rev = Math.max(Number(nr._rev) || 0, Number(row.rev) || 1);
     return { act:'insert', out:nr };
   }
@@ -3671,6 +3743,11 @@ async function cloudPull(force){
   } finally {
     _cloudBusy = false;
   }
+
+  /* v120：把这些记录标记为「本机已见过云端版本」，否则它们会被角标算成待上传。
+     放在这里（而不是合并成功之后）是刻意的：从云端取回来本身就说明云端已有这些版本，
+     即便用户取消合并、或本地版本更新而放弃云端版本，也不该再把它们算作待上传。 */
+  try { cloudSeenMark(uniq); } catch(e){}
 
   if (!uniq.length){
     setCloudDlWatermark(Math.max(nextSince, cloudDlWatermark()));
@@ -5875,6 +5952,9 @@ function mergeLoadRows(localData, rows){
     if (r.deleted) dels[String(r.id)] = Number(r.updated_at) || 0;
     else active.push(r);
   });
+  /* v120：这批记录的云端版本记进台账 —— 手机端「没改任何东西却显示待上传 N 条」的根治点。
+     只有真的记进了新值才落盘（cloudSeenMark 返回变更条数），避免每次开页都白写一次 localStorage。 */
+  try { cloudSeenMark(active); } catch(e){}
   var merged = mergeLoadData(localData, cloudRowsToSnap(active));
   var ids = Object.keys(dels);
   if (!ids.length) return stripTombstoned(merged);
@@ -6926,9 +7006,9 @@ function renderCatMode(){
   var f=ui.collection, s=store.collection, rows=filtered('collection');
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     /* v112：手机端「按类别 / 按 IP / 按系列」要与「藏品」标题同一行、居右 —— 靠
-       .coll-cat-head 的 grid + .phtxt{display:contents} 实现（桌面端结构完全不变）。 */
-    '<div class="panel-head coll-cat-head"><div class="phtxt"><h2>藏品</h2>'+
-    '<div class="hint">点开任意一件，看它的购入信息和存放位置</div></div>'+modeSeg()+'</div>'+
+       .phtxt{display:contents} 把 h2 与 seg 变成同一容器里的两项实现（桌面端结构不变）。
+       v119：删掉「点开任意一件，看它的购入信息和存放位置」这行介绍。 */
+    '<div class="panel-head coll-cat-head"><div class="phtxt"><h2>藏品</h2></div>'+modeSeg()+'</div>'+
     /* v98：手机端布局 —— 「全部」与搜索栏同一行（全部在左、搜索框占满剩余宽度），
        省下一整行；六大类 chip 独占一行，用 6 等分网格强制不折行并变窄。 */
     '<div class="catbar">'+
@@ -6969,22 +7049,26 @@ function renderCatMode(){
   var ipList = Object.keys(_ipSeen).sort(function(a,b){ return String(a).localeCompare(String(b),'zh'); });
   if (f.cat && subList.length){
     /* v112：小类整行包一层带背景的「框」（.subbox），手机端与上面大类的 .cattab 凸起连成
-       「文件夹标签」的样子，直观表达「这些小类从属于当前大类」。 */
-    h += '<div class="subchips subbox">'+
+       「文件夹标签」的样子，直观表达「这些小类从属于当前大类」。
+       v119：凸起和框同宽同起点，两边都带圆角时在**贴边**那一侧会露出一道缝/缺口 ——
+       所以选中的大类是第一个（手办）时把框的左上角抹成直角，是最后一个（着物）时抹右上角。 */
+    var _ci = CATS.indexOf(f.cat);
+    var _corner = (_ci === 0) ? ' tab-l' : ((_ci === CATS.length - 1) ? ' tab-r' : '');
+    h += '<div class="subchips subbox'+_corner+'">'+
       '<button class="chip'+(f.sub?'':' on')+'" type="button" data-act="f" data-k="sub" data-v="">不限</button>'+
       subList.map(function(t){
         return '<button class="chip'+(f.sub===t?' on':'')+'" type="button" data-act="f" data-k="sub" data-v="'+esc(t)+'">'+esc(t)+'</button>';
       }).join('')+'</div>';
   }
   h += '<div class="segline" style="margin-top:14px">'+
-    /* v102：封面墙分组方式 —— 按系列（出系列卡，点进详情）/ 按物品（直接平铺符合条件的物品）。
-       走通用筛选通道 data-act="f" data-k="wallGroup"，无需新增事件分支。
-       （列表模式已移除，恒为封面墙，故不再需要「封面墙 / 列表」切换） */
-    /* v112：.segflat —— 手机端把这组切换压扁到和 IP 下拉框一样高、左右也收窄 */
-    '<div class="seg segflat" title="封面墙上显示什么：系列卡，还是符合条件的物品本身">'+
-      '<button type="button" data-act="f" data-k="wallGroup" data-v="series" class="'+((f.wallGroup||'series')==='series'?'on':'')+'">按系列</button>'+
-      '<button type="button" data-act="f" data-k="wallGroup" data-v="item" class="'+((f.wallGroup||'series')==='item'?'on':'')+'">按物品</button>'+
-    '</div>'+
+    /* v119：分组方式简化成**一个「按物品」切换按钮**（与「隐藏款」同一个套路）——
+       默认（未选中）就是「按系列」：出系列卡，点进去看系列详情；
+       点一下变「按物品」：把符合条件的物品直接平铺出来（找具体东西时用）；
+       再点一下取消、回到按系列。
+       走通用筛选通道 data-act="f" data-k="wallGroup"，无需新增事件分支：
+       data-v 为 '' 时回落到「按系列」（渲染处一律写 (f.wallGroup||'series')）。 */
+    '<button type="button" class="chip chipflat'+(f.wallGroup==='item'?' on':'')+'" data-act="f" data-k="wallGroup"'+
+      ' data-v="'+(f.wallGroup==='item'?'':'item')+'" title="'+(f.wallGroup==='item'?'取消，回到按系列分组':'直接把符合条件的物品平铺出来')+'">按物品</button>'+
     /* v102：IP 下拉 —— 一个类目里常混着多个 IP，选一个就只看它的东西。
        选项取自「当前大类/小类」下真实出现过的 IP（不含 IP 自身的筛选，避免选中后列表塌陷成只剩它自己）。 */
     (ipList.length ? '<select id="ipFilterSel" class="ipfilter" title="只看某个 IP">'+
@@ -6993,10 +7077,11 @@ function renderCatMode(){
         return '<option value="'+esc(n)+'"'+(f.ipf===n?' selected':'')+'>'+esc(n)+'</option>';
       }).join('')+'</select>' : '')+
     /* v102：隐藏款切换按钮 —— 紧随分组方式之后；默认（未选中）即「全部」，点一次选中、再点取消。 */
-    /* v112：.chipflat —— 手机端与 .segflat 同高、同宽收窄，三者（分组切换 / IP 框 / 隐藏款）齐平 */
+    /* v112/v119：.chipflat —— 手机端把这两个切换按钮压到与 IP 下拉框同高（34px）、左右收窄，
+       并放大字号，让「按物品 / 隐藏款」和 IP 框三者齐平、字也看得清 */
     (hasHidden ? '<button type="button" class="chip chipflat'+(f.hidden==='1'?' on':'')+'" data-act="f" data-k="hidden"'+
       ' data-v="'+(f.hidden==='1'?'':'1')+'" title="'+(f.hidden==='1'?'取消，显示全部':'只看隐藏款')+'">隐藏款</button>' : '')+
-    '<button class="btn ghost sm" type="button" data-act="collhall">← 返回展厅</button>'+
+    /* v119：删掉「← 返回展厅」按钮。回展厅的路：手机端左缘右滑；任意端点侧栏「藏品馆」。 */
     /* v102：「管理存储地点」已移到 topbar，这里不再重复出现。 */
     /* v96k：展示卡缩放滑杆；手机端由 CSS 换行到下方靠右、占容器一半 */
     cardScaleHTML('cslider-cat')+'</div>';
@@ -9235,7 +9320,11 @@ function bindStage(){
         var n2 = $('q_collection'); if (n2) n2.focus();
       }
     };
-    wrap.appendChild(btn);
+    /* v120：× 要排在「搜索」按钮**左边**（顺序：输入框 → × → 搜索）。
+       以前一律 appendChild 到末尾，藏品馆那种已经在 wrap 里放了搜索按钮的，
+       × 就跑到搜索按钮右边去了。 */
+    var goBtn = wrap.querySelector('.searchgo');
+    if (goBtn) wrap.insertBefore(btn, goBtn); else wrap.appendChild(btn);
     inp.addEventListener('input', function(){ btn.hidden=!inp.value; });
   });
   /* v58：缩放滑杆——只在进入小类/小分类（展柜内部，有 .numseg 工具排）时出现，
@@ -10670,6 +10759,24 @@ function wireFormControls(host, saveDraft){
       if (saveDraft) saveDraft();
     }
     fillDays();
+    /* v120：点年份下拉 = 「我要开始填这个日期了」→ 若整段还是空的，一次带出今天（年/月/日 三个框）。
+       ⚠️ 只在**整段为空**时填：已经有值就别动，否则会把用户填好的日期冲掉。
+       ⚠️ 用 mousedown 而不是 click：click 要等下拉收起后才触发，那时原生下拉已经按旧值展开了。 */
+    var _prefilled = false;
+    function prefillToday(){
+      if (_prefilled) return;
+      _prefilled = true;
+      if (String(real.value || '').trim()) return;      /* 已有值 → 不打扰 */
+      var t = new Date();
+      yinp.value  = String(t.getFullYear());
+      minp.value  = String(t.getMonth() + 1);
+      fillDays();                                       /* 「日」的范围要按今天的月份重画 */
+      dinp.value  = String(t.getDate());
+      commit();
+    }
+    yinp.addEventListener('mousedown', prefillToday);
+    yinp.addEventListener('touchstart', prefillToday, {passive:true});  /* iOS 上 select 未必发 mousedown */
+    yinp.addEventListener('focus', prefillToday);       /* 键盘/辅助操作也能带出来 */
     yinp.addEventListener('change', function(){ fillDays(); commit(); });
     minp.addEventListener('change', function(){
       if (mv() && !yv()) yinp.value=String(new Date().getFullYear());   /* 右边选了，左边自动补年 */

@@ -883,8 +883,6 @@ input.search:focus{border-color:var(--accent);background:#fff}
   /* v98：手机端六大类 chip 再收窄一档，确保一排 6 个放得下 */
   .chips.cat6{gap:4px}
   .chips.cat6 .chip{padding:5px 2px;font-size:11.5px}
-  /* v102：手机端「← 返回展厅」推到工具栏最右端（拇指更容易够到）；桌面端保持原位 */
-  .segline [data-act="collhall"]{margin-left:auto}
   /* v111：系列详情「← 返回系列列表」—— 手机端推到最右，桌面端紧跟在 seg 框后面（不推右） */
   .segline .sback{margin-left:auto}
   /* v111：手机端关闭按钮变大，× 的两条斜线也相应加粗加长 */
@@ -899,18 +897,20 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .buyh{display:none}
 
   /* v112：藏品页标题行 —— 「按类别 / 按 IP / 按系列」与「藏品」同一行、居右。
-     .phtxt{display:contents} 让 h2 / hint / seg 变成 grid 的直接项：
-       第 1 行 = 藏品 + 右侧切换按钮，第 2 行 = 提示语（桌面端结构完全不变）。 */
-  .panel-head.coll-cat-head{display:grid;grid-template-columns:1fr auto;column-gap:10px;row-gap:0;align-items:center}
+     .phtxt{display:contents} 把 h2 与 seg 变成同一 flex 容器里的两项，靠 space-between 分开
+     （桌面端 .phtxt 是普通 div、这一行代码不生效，因此桌面结构不变）。
+     v119：那行「点开任意一件…」提示语已删除，这里不再需要 grid 排第二行。 */
+  .panel-head.coll-cat-head{flex-wrap:nowrap;align-items:center}
   .coll-cat-head .phtxt{display:contents}
-  .coll-cat-head h2{grid-column:1;grid-row:1}
-  .coll-cat-head .hint{grid-column:1;grid-row:2;margin-top:2px}
-  .coll-cat-head .seg{grid-column:2;grid-row:1;justify-self:end}
 
   /* v112：小类「文件夹标签」—— 小类整行被一条背景条框住，当前大类是条上凸起的那一格。
      小类按钮整体比大类小一号，和大类拉开层级。 */
   .subchips.subbox{background:var(--accent-soft);border-radius:14px;padding:8px 8px 7px;margin:0;gap:6px}
   .subchips.subbox .chip{padding:4px 9px;font-size:10.5px}
+  /* v119：凸起贴边时，框那一侧的上角要抹平 —— 否则两个圆角在同一位置会露出一道缝。
+     第一个大类（手办）→ 抹左上；最后一个（着物）→ 抹右上。（只在手机端，桌面端没有凸起。） */
+  .subchips.subbox.tab-l{border-top-left-radius:0}
+  .subchips.subbox.tab-r{border-top-right-radius:0}
   /* 凸起：当前大类按钮外面那层，往上"长"到和大类按钮同高，下面用 ::after 和背景条连成一体 */
   .chips.cat6 .cattab{display:flex;position:relative;z-index:2;background:var(--accent-soft);
     border-radius:12px 12px 0 0;padding:3px 0 0;margin:-3px 0 0}
@@ -918,10 +918,11 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .chips.cat6 .cattab::after{content:'';position:absolute;left:0;right:0;top:100%;
     height:16px;background:var(--accent-soft)}
 
-  /* v112：分组切换 / 隐藏款 —— 压到和 IP 下拉框一样高（34px），左右也收窄 */
-  .seg.segflat{height:34px;min-height:34px;padding:2px;border-radius:10px}
-  .seg.segflat button{height:28px;min-height:28px;padding:0 9px;font-size:11px;border-radius:8px}
-  .chip.chipflat{height:34px;min-height:34px;padding:0 10px;font-size:11px;
+  /* v112/v119：「按物品」与「隐藏款」两个切换按钮 ——
+     高度严格等于 IP 下拉框（.ipfilter 的 min-height:34px），左右也收窄；
+     同时把字号提到 12.5px：框压扁后上下留白本来会显多，字号放大正好抵掉「字变小看不清」的问题
+     （文字与框上下边的间距 = (34 − 行高)/2，字号越大这条缝越窄）。 */
+  .chip.chipflat{height:34px;min-height:34px;padding:0 10px;font-size:12.5px;
     display:inline-flex;align-items:center}
 }
 
