@@ -924,6 +924,17 @@ input.search:focus{border-color:var(--accent);background:#fff}
      （文字与框上下边的间距 = (34 − 行高)/2，字号越大这条缝越窄）。 */
   .chip.chipflat{height:34px;min-height:34px;padding:0 10px;font-size:12.5px;
     display:inline-flex;align-items:center}
+
+  /* v121：藏品馆工具栏 —— 「按物品 / IP 下拉 / 隐藏款 / 卡片大小滑杆」强制挤在同一行、不换行。
+     做法：① 这条 .segline 单独 nowrap；② 两个切换按钮再收窄左右内边距；
+     ③ IP 下拉限宽（名字长也不摊开）；④ 滑杆取消 960px 那档的「换到自己一行 + 占 50%」，
+     给个 96px 的基准宽（比原来的一半宽明显小），放不下时还能继续缩到 52px。
+     字号不缩 —— 框变窄只减小左右留白，字不会变小。 */
+  .segline.collbar{flex-wrap:nowrap;gap:6px}
+  .segline.collbar .chip.chipflat{padding:0 7px;font-size:12px}
+  .segline.collbar .ipfilter{max-width:28vw;min-width:0;padding:0 6px;font-size:11.5px}
+  .segline.collbar .cslider-cat{order:0;width:auto;flex:0 1 auto;min-width:0;margin-left:0;justify-content:flex-end}
+  .segline.collbar .cslider-cat .csl{width:96px;min-width:52px;flex:0 1 auto}
 }
 
 /* ---------- 3D 地球仪（程序化贴图） ---------- */

@@ -7060,7 +7060,9 @@ function renderCatMode(){
         return '<button class="chip'+(f.sub===t?' on':'')+'" type="button" data-act="f" data-k="sub" data-v="'+esc(t)+'">'+esc(t)+'</button>';
       }).join('')+'</div>';
   }
-  h += '<div class="segline" style="margin-top:14px">'+
+  /* v121：加 collbar 类 —— 手机端要把「按物品 / IP / 隐藏款 / 卡片大小滑杆」压到同一行且不换行，
+     这些规则只针对藏品馆这条工具栏（系列详情那条 .segline 里东西更多，不能一起压）。 */
+  h += '<div class="segline collbar" style="margin-top:14px">'+
     /* v119：分组方式简化成**一个「按物品」切换按钮**（与「隐藏款」同一个套路）——
        默认（未选中）就是「按系列」：出系列卡，点进去看系列详情；
        点一下变「按物品」：把符合条件的物品直接平铺出来（找具体东西时用）；
