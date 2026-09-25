@@ -152,7 +152,9 @@
    滑杆从「自己占一行的一半宽」改成 96px 基准（放不下还能再缩到 52px）。
    做法：藏品馆那条 .segline 加 collbar 类，规则只用 .segline.collbar 作用域，
    不碰系列详情那条（它里面还有两个下拉 + 返回按钮）。⚠️ 仅动 app.js/style.css。 */
-const CACHE = 'lifedesk-v121-2026-09-25';
+/* v122（2026-09-25）：上条基础上，滑杆 `margin-left:auto` 顶到该行最右端
+   （左边「按物品 / IP / 隐藏款」靠左，滑杆单独靠右）。⚠️ 仅动 style.css。 */
+const CACHE = 'lifedesk-v122-2026-09-25';
 
 /* v96m：图片单独放一个「不随版本清理」的缓存桶。
    以前图片和代码共用 CACHE，每次部署 bump 版本号，activate 会把图片一起删光，
