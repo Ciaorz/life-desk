@@ -158,7 +158,17 @@
    `height/min-height/max-height:30px + box-sizing:border-box`（原来 chip 写死 34px、
    select 只有 min-height，iOS 上 select 的实际高度由浏览器算，两者对不齐）。
    高度同时从 34px 收到 30px，比原来更扁。⚠️ 仅动 style.css。 */
-const CACHE = 'lifedesk-v123-2026-09-25';
+/* v124（2026-09-26）：**修「改了没反应 / 反而更高」的真根因** —— 用真实浏览器（headless
+   Chrome + CDP）实测发现：那套高度规则全写在 `@media (max-width:560px)` 里，布局宽度
+   一旦不是 ≤560（平板、横屏手机、部分 PWA/WebView 会到 600-980px）就一条都不生效，
+   浏览器算出来是「隐藏款按钮 30.4px / IP 下拉框 34px」，数值怎么调都没用。
+   现在把「锁高」拆成两条**全局、且不依赖新增类名**的规则：
+     `.chip.chipflat{height:min:max-height:var(--ch)}` + `#ipFilterSel{同上 + appearance:none
+     + 内联 SVG 箭头}`（--ch=28px 定义在 :root，想调扁只改这一处）。
+   ⇒ 即使设备上跑的是旧 app.js（没有 collbar 类），高度照样锁得住；实测摘掉该类名仍为 28/28。
+   `.segline.collbar` 只保留「不换行 + 滑杆靠最右」这类版式；≤560 里只留手机专属微调。
+   ⚠️ 仅动 style.css，SW 行为未变。 */
+const CACHE = 'lifedesk-v124-2026-09-26';
 
 /* v96m：图片单独放一个「不随版本清理」的缓存桶。
    以前图片和代码共用 CACHE，每次部署 bump 版本号，activate 会把图片一起删光，

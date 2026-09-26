@@ -644,6 +644,41 @@ input.search:focus{border-color:var(--accent);background:#fff}
 /* ---------- 藏品 ---------- */
 .subchips{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
 .segline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+
+/* ============================================================================
+   v124：藏品馆工具栏那一条 —— 「按物品 / IP 下拉 / 隐藏款 / 卡片大小滑杆」
+   同高 + 同一行 + 滑杆靠右。两条刻意的设计约束（都是被坑出来的）：
+
+   ① **高度规则不写在媒体查询里**：之前全写在 `@media (max-width:560px)`，
+      于是「布局宽度不是 ≤560」的设备（平板、横屏手机、某些 PWA/WebView 的布局宽度
+      会到 600-980px）一条都不生效 —— 浏览器实测就是这样：
+      「隐藏款按钮 30.4px（.chip 的自然高度）/ IP 下拉框 34px（.ipfilter 的 min-height）」，
+      数值怎么调都没反应。现在对所有宽度生效。
+
+   ② **高度规则不依赖新加的类名**：只认 `.chip.chipflat`（这个类只用在藏品馆这两个按钮）
+      和 `#ipFilterSel`（藏品馆那个 IP 下拉的 id）。这样即使某台设备上跑的还是旧 app.js
+      （没有 collbar 类），高度照样锁得住 —— 否则「改了 CSS 但手机上毫无变化」很容易再次发生。
+
+   高度口径：两边共用同一个 --ch，同时写 height/min-height/max-height + border-box，
+   谁也顶不高；`#ipFilterSel` 关掉原生外观（iOS 的 <select> 是原生控件，高度不听 CSS，
+   这正是老对不齐的根因），原生箭头用一张内联 SVG 补画。
+   ⇒ 想整体调扁/调高，只改 --ch 一处。
+   ============================================================================ */
+:root{--ch:28px}
+.chip.chipflat{height:var(--ch);min-height:var(--ch);max-height:var(--ch);box-sizing:border-box;
+  padding:0 10px;font-size:12px;line-height:1;
+  display:inline-flex;align-items:center;justify-content:center}
+#ipFilterSel{
+  height:var(--ch);min-height:var(--ch);max-height:var(--ch);box-sizing:border-box;
+  -webkit-appearance:none;appearance:none;
+  padding:0 18px 0 8px;font-size:12px;line-height:1;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a8378' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 6px center;
+}
+/* 这一行不换行 + 滑杆顶到最右端（这两个只管版式，跟高度无关） */
+.segline.collbar{flex-wrap:nowrap;gap:8px;align-items:center}
+.segline.collbar .cslider-cat{order:0;width:auto;flex:0 1 auto;min-width:0;margin-left:auto;justify-content:flex-end}
+.segline.collbar .cslider-cat .csl{width:110px;min-width:56px;flex:0 1 auto}
 .crow{display:grid;grid-template-columns:1fr auto auto;gap:14px;align-items:center;padding:13px 4px;
   border-bottom:1px solid rgba(111,89,67,.09);cursor:pointer}
 .crow:last-child{border-bottom:0}
@@ -918,33 +953,15 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .chips.cat6 .cattab::after{content:'';position:absolute;left:0;right:0;top:100%;
     height:16px;background:var(--accent-soft)}
 
-  /* v112/v119：「按物品」与「隐藏款」两个切换按钮 —— 与 IP 下拉框同高、左右收窄。
-     字号比正文略大：框压扁后上下留白本来会显多，字号大一点正好抵掉「字变小看不清」。
-     v123：真实高度改由下面的 .segline.collbar 规则统一锁死（见该处注释）。 */
-  .chip.chipflat{height:34px;min-height:34px;padding:0 10px;font-size:12.5px;
-    display:inline-flex;align-items:center}
-
-  /* v121：藏品馆工具栏 —— 「按物品 / IP 下拉 / 隐藏款 / 卡片大小滑杆」强制挤在同一行、不换行。
-     做法：① 这条 .segline 单独 nowrap；② 两个切换按钮再收窄左右内边距；
-     ③ IP 下拉限宽（名字长也不摊开）；④ 滑杆取消 960px 那档的「换到自己一行 + 占 50%」，
-     给个 96px 的基准宽（比原来的一半宽明显小），放不下时还能继续缩到 52px；
-     ⑤ 滑杆 `margin-left:auto` 顶到该行**最右端**（左边按钮靠左、滑杆靠右）。
-     字号不缩 —— 框变窄只减小左右留白，字不会变小。 */
-  .segline.collbar{flex-wrap:nowrap;gap:6px}
-  .segline.collbar .ipfilter{max-width:28vw;min-width:0;padding:0 6px;font-size:11.5px}
-  .segline.collbar .cslider-cat{order:0;width:auto;flex:0 1 auto;min-width:0;margin-left:auto;justify-content:flex-end}
-  .segline.collbar .cslider-cat .csl{width:96px;min-width:52px;flex:0 1 auto}
-
-  /* v123：两个切换按钮与 IP 下拉框**严格同高**。
-     为什么会不齐：以前只给 chip 写死 `height:34px`，IP 框只写 `min-height:34px` ——
-     `<select>` 的实际高度是浏览器按「行高 + 内边距 + 边框」算出来的，iOS 上会明显比 34 矮，
-     于是同样的"34px"在两端呈现出两个高度。
-     现在两边都显式写 height/min/max-height + box-sizing:border-box，把高度锁死在同一个值上，
-     不再依赖 select 的固有高度；同时从 34px 收到 30px，比原来更扁。 */
-  .segline.collbar .chip.chipflat,
-  .segline.collbar .ipfilter{height:30px;min-height:30px;max-height:30px;box-sizing:border-box}
-  .segline.collbar .chip.chipflat{padding:0 7px;font-size:12px;line-height:1;
-    display:inline-flex;align-items:center;justify-content:center}
+  /* v124：切换按钮的高度**不在这里定义** —— 见文件上方 `.chip.chipflat` 那条全局规则
+     （跳出媒体查询、也不依赖新类名，否则换设备就失效）。
+     这里只做手机端专属的尺寸微调。 */
+  .segline.collbar{gap:6px}
+  .segline.collbar .chip.chipflat{padding:0 7px}
+  .chip.chipflat{padding:0 7px}
+  .segline.collbar .ipfilter{max-width:28vw;min-width:0;padding:0 16px 0 6px;background-position:right 5px center}
+  #ipFilterSel{max-width:28vw;padding:0 16px 0 6px;background-position:right 5px center}
+  .segline.collbar .cslider-cat .csl{width:96px;min-width:52px}
 }
 
 /* ---------- 3D 地球仪（程序化贴图） ---------- */
