@@ -918,10 +918,9 @@ input.search:focus{border-color:var(--accent);background:#fff}
   .chips.cat6 .cattab::after{content:'';position:absolute;left:0;right:0;top:100%;
     height:16px;background:var(--accent-soft)}
 
-  /* v112/v119：「按物品」与「隐藏款」两个切换按钮 ——
-     高度严格等于 IP 下拉框（.ipfilter 的 min-height:34px），左右也收窄；
-     同时把字号提到 12.5px：框压扁后上下留白本来会显多，字号放大正好抵掉「字变小看不清」的问题
-     （文字与框上下边的间距 = (34 − 行高)/2，字号越大这条缝越窄）。 */
+  /* v112/v119：「按物品」与「隐藏款」两个切换按钮 —— 与 IP 下拉框同高、左右收窄。
+     字号比正文略大：框压扁后上下留白本来会显多，字号大一点正好抵掉「字变小看不清」。
+     v123：真实高度改由下面的 .segline.collbar 规则统一锁死（见该处注释）。 */
   .chip.chipflat{height:34px;min-height:34px;padding:0 10px;font-size:12.5px;
     display:inline-flex;align-items:center}
 
@@ -932,10 +931,20 @@ input.search:focus{border-color:var(--accent);background:#fff}
      ⑤ 滑杆 `margin-left:auto` 顶到该行**最右端**（左边按钮靠左、滑杆靠右）。
      字号不缩 —— 框变窄只减小左右留白，字不会变小。 */
   .segline.collbar{flex-wrap:nowrap;gap:6px}
-  .segline.collbar .chip.chipflat{padding:0 7px;font-size:12px}
   .segline.collbar .ipfilter{max-width:28vw;min-width:0;padding:0 6px;font-size:11.5px}
   .segline.collbar .cslider-cat{order:0;width:auto;flex:0 1 auto;min-width:0;margin-left:auto;justify-content:flex-end}
   .segline.collbar .cslider-cat .csl{width:96px;min-width:52px;flex:0 1 auto}
+
+  /* v123：两个切换按钮与 IP 下拉框**严格同高**。
+     为什么会不齐：以前只给 chip 写死 `height:34px`，IP 框只写 `min-height:34px` ——
+     `<select>` 的实际高度是浏览器按「行高 + 内边距 + 边框」算出来的，iOS 上会明显比 34 矮，
+     于是同样的"34px"在两端呈现出两个高度。
+     现在两边都显式写 height/min/max-height + box-sizing:border-box，把高度锁死在同一个值上，
+     不再依赖 select 的固有高度；同时从 34px 收到 30px，比原来更扁。 */
+  .segline.collbar .chip.chipflat,
+  .segline.collbar .ipfilter{height:30px;min-height:30px;max-height:30px;box-sizing:border-box}
+  .segline.collbar .chip.chipflat{padding:0 7px;font-size:12px;line-height:1;
+    display:inline-flex;align-items:center;justify-content:center}
 }
 
 /* ---------- 3D 地球仪（程序化贴图） ---------- */

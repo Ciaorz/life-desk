@@ -154,7 +154,11 @@
    不碰系列详情那条（它里面还有两个下拉 + 返回按钮）。⚠️ 仅动 app.js/style.css。 */
 /* v122（2026-09-25）：上条基础上，滑杆 `margin-left:auto` 顶到该行最右端
    （左边「按物品 / IP / 隐藏款」靠左，滑杆单独靠右）。⚠️ 仅动 style.css。 */
-const CACHE = 'lifedesk-v122-2026-09-25';
+/* v123（2026-09-25）：「按物品 / 隐藏款」与 IP 下拉框严格同高 —— 两边都显式写
+   `height/min-height/max-height:30px + box-sizing:border-box`（原来 chip 写死 34px、
+   select 只有 min-height，iOS 上 select 的实际高度由浏览器算，两者对不齐）。
+   高度同时从 34px 收到 30px，比原来更扁。⚠️ 仅动 style.css。 */
+const CACHE = 'lifedesk-v123-2026-09-25';
 
 /* v96m：图片单独放一个「不随版本清理」的缓存桶。
    以前图片和代码共用 CACHE，每次部署 bump 版本号，activate 会把图片一起删光，
