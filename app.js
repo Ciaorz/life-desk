@@ -6538,6 +6538,18 @@ function deleteRow(key, id, name, after){
     function(){ store[key].rows = store[key].rows.filter(function(r){ return r._id!==id; }); }, key, after);
 }
 
+/* v125：隐藏款筛选的「范围守卫」。
+   规则：**只有在当前范围（当前大类/小类/IP，或当前系列）里真的有隐藏款时，这个筛选才允许存在。**
+   为什么必须清掉而不是只隐藏按钮：筛选状态 `ui.collection.hidden` 是全局的，用户在某处开了它，
+   再切到没有隐藏款的类目/系列时，那个按钮**不显示**（没有隐藏款就不出按钮），
+   于是用户既看不到按钮、也关不掉它 —— 列表被滤成空白的，还无从恢复。
+   返回「这个范围里是否存在隐藏款」，调用方拿它决定要不要渲染那个切换按钮。 */
+function hiddenFilterScope(scopeRows){
+  var any = (scopeRows || []).some(function(r){ return !!(r && r['隐藏款']); });
+  if (!any && ui.collection.hidden) ui.collection.hidden = '';
+  return any;
+}
+
 /* ============ 筛选 ============ */
 function filtered(key){
   var rows = store[key].rows.slice(), f=ui[key]||{};
@@ -7036,8 +7048,18 @@ function renderCatMode(){
   var subList=Object.keys(used);
   /* v96p：隐藏款筛选 —— 仅当数据里存在隐藏款 item 才展示（不污染没有隐藏款的分类）。
      v102：由「全部 / 只看隐藏款」两个 chip 改成**一个切换按钮**（默认就是全部，
-           点一次选中、再点一次取消），并移到下方工具栏「按系列 / 按物品」后面。 */
-  var hasHidden = s.rows.some(function(r){ return !!r['隐藏款']; });
+           点一次选中、再点一次取消），并移到下方工具栏「按系列 / 按物品」后面。
+     v125：判定范围从「全部藏品」收窄成**当前大类/小类/IP 范围**，并顺带清掉失效的筛选状态
+           —— 原来用 s.rows（全库）判断，于是没有隐藏款的类目里按钮照样出现，
+           点一下列表就空了，而且切回去之前都没法关掉它。 */
+  var _scope = s.rows.filter(function(r){
+    if (LEGACY_BOOK_CATS.indexOf(r['大类'])>=0) return false;
+    if (f.cat && r['大类']!==f.cat) return false;
+    if (f.sub && r['小类']!==f.sub) return false;
+    if (f.ipf && (r['IP']||'')!==f.ipf) return false;
+    return true;
+  });
+  var hasHidden = hiddenFilterScope(_scope);
   /* v102：IP 下拉的候选 —— 按当前大类 / 小类取真实出现过的 IP。
      刻意不叠加 IP 自身的筛选，否则选中某个 IP 后列表会塌成只剩它一个，就切不回去了。 */
   var _ipSeen = {};
@@ -11561,8 +11583,10 @@ function renderSeriesDetail(){
       v+'<i class="fb">'+n+'</i></button>';
   }
   /* v96q：隐藏款筛选与 全部 / 在库 / 云游 / 想收 同级别，放在「想收」后面；
-     仅当本系列录过隐藏款 item 才出现该筛选项（未录则不展示） */
-  var _hasHidden = itemsAll.some(function(r){ return !!r['隐藏款']; });
+     仅当本系列录过隐藏款 item 才出现该筛选项（未录则不展示）。
+     v125：并顺带清掉失效的筛选状态 —— 从别的类目带着「只看隐藏款」进到本系列、
+           而本系列没有隐藏款时，items 会被滤成空，按钮又不显示，用户无从解除。 */
+  var _hasHidden = hiddenFilterScope(itemsAll);
   function hiddenSeg(){
     if (!_hasHidden) return '';
     var on = ui.collection.hidden==='1';
