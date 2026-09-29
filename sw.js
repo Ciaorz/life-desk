@@ -176,7 +176,24 @@
    并清掉失效的筛选状态；`renderCatMode` 与 `renderSeriesDetail` 共用它。
    顺带把类目里按钮的判定范围从「全部藏品」收窄成「当前大类/小类/IP 范围」。
    ⚠️ 仅动 app.js，SW 行为未变。 */
-const CACHE = 'lifedesk-v125-2026-09-28';
+/* v126（2026-09-29）：宝可梦 IP 的「在库 / 收服」快速按钮改用精灵球图标
+   （闭球 ball-closed = 已收服/在库；开球 ball-open = 还没收服）。
+   两个图标在 data/images/types/ 下（128×128 透明底 WebP，四角已透明、只留球体），
+   缩略图已推 R2；app 侧把它们加进 pkIconProbeRows 以便 FSA 模式解析。
+   CSS `.pkq.pkq-ball` 去掉边框与白底 → 和属性图标一样「没有衬底」直接浮在卡上。
+   ⚠️ 动的是 app.js/style.css，SW 行为未变。 */
+/* v127（2026-09-29）：修「点一下再点回来也报待上传 1 条」——
+   两层改动：
+   ① 写库前先比内容（`patchIsNoop` / `cloudRowSig`）：`localUpsert`、`patchRow`、
+      `patchRowFields` 三处，值没变就**整条跳过** —— 不动 _upd/_rev、不落盘。
+      以前无脑把 _upd 刷成 now，于是角标虚报、上传白推、云端 _rev 白加。
+   ② 待上传判定新增「内容指纹」：`lifedesk_cloud_hash = {id: 云端内容指纹}`，
+      在「从云加载 / ☁下载 / 上传成功」三处记录。判定改成
+      **内容和云端版本不一致才算待上传**（指纹忽略 _upd/_rev/_file，键序与
+      「状态」这类字符串数组的顺序都不影响）→ 光时间戳变了不再算改动。
+      没有云端指纹的记录（本机新录、云端从没见过）退回原来的时间戳判定。
+   ⚠️ 仅动 app.js，SW 行为未变。 */
+const CACHE = 'lifedesk-v127-2026-09-29';
 
 /* v96m：图片单独放一个「不随版本清理」的缓存桶。
    以前图片和代码共用 CACHE，每次部署 bump 版本号，activate 会把图片一起删光，

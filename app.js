@@ -3036,13 +3036,121 @@ function cloudSeenMark(rows, noSave){
   }
   return n;
 }
+/* ---------- v127：内容的「指纹」—— 待上传按「和云端比到底变没变」来判 ----------
+   为什么还要指纹：光靠 _upd 时间戳，只要**有人动过写法**就会虚报。最典型的是
+   「点一下再点回来」——比如快速按钮开→关、编辑页原样保存：数据一个字节都没变，
+   但旧代码每次都把 _upd 刷成 now → 角标报「待上传 1 条」、点上传还白推一条。
+   现在记住「本机见过的云端版本长什么样」（只算用户数据，忽略 _upd/_rev/_file），
+   内容和它一致就**不算待上传**，与时间戳无关。 */
+var CLOUD_HASH_KEY = 'lifedesk_cloud_hash';
+var _cloudHash = null;
+var CLOUD_SIG_SKIP = { _upd:1, _rev:1, _file:1 };
+
+/* 稳定的 JSON：对象键排序、字符串数组排序（['在库','云游'] 与 ['云游','在库'] 是同一份数据），
+   所以「字段顺序变了、内容没变」不会造成假差异。 */
+function cloudStableStr(v){
+  /* 空值统一成 null：'' / null / undefined 都表示「没填」，互换不算数据变化 */
+  if (v === undefined || v === '' || v === null) return 'null';
+  if (typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)){
+    var arr = v;
+    if (v.length && v.every(function(x){ return typeof x === 'string'; })) arr = v.slice().sort();
+    return '[' + arr.map(cloudStableStr).join(',') + ']';
+  }
+  var ks = Object.keys(v).sort(), out = [];
+  ks.forEach(function(k){ out.push(JSON.stringify(k) + ':' + cloudStableStr(v[k])); });
+  return '{' + out.join(',') + '}';
+}
+/* v127：这次「写库」是不是空改动 —— patch 的每一项都和现值一样就没必要动
+   （不动 _upd/_rev、不落盘），否则会出现「点一下再点回来 → 角标报待上传 1 条」。 */
+function patchIsNoop(row, patch){
+  var keys = Object.keys(patch || {});
+  for (var i = 0; i < keys.length; i++){
+    var k = keys[i];
+    if (cloudStableStr(row ? row[k] : undefined) !== cloudStableStr(patch[k])) return false;
+  }
+  return true;
+}
+/* 一条记录的用户数据指纹（不含 _upd/_rev/_file） */
+function cloudRowSig(r){
+  if (!r) return '';
+  var ks = Object.keys(r).filter(function(k){ return !CLOUD_SIG_SKIP[k]; }).sort(), out = [];
+  ks.forEach(function(k){ out.push(k + '=' + cloudStableStr(r[k])); });
+  return out.join('&');
+}
+/* 指纹 → 短哈希（djb2，base36）。存短串，省 localStorage */
+function cloudHashOf(r){
+  var s = cloudRowSig(r);
+  if (!s) return '';
+  var h = 5381;
+  for (var i = 0; i < s.length; i++){ h = ((h << 5) + h + s.charCodeAt(i)) | 0; }
+  return (h >>> 0).toString(36);
+}
+function cloudHashMap(){
+  if (_cloudHash) return _cloudHash;
+  try {
+    var o = JSON.parse(localStorage.getItem(CLOUD_HASH_KEY) || '{}');
+    _cloudHash = (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  } catch(e){ _cloudHash = {}; }
+  return _cloudHash;
+}
+function cloudHashSave(){
+  try { localStorage.setItem(CLOUD_HASH_KEY, JSON.stringify(_cloudHash || {})); } catch(e){}
+}
+/* 记下「这些记录的云端版本长什么样」。接受：本机记录 / cloudCollect 的 pending 项 / 云端行 */
+function cloudHashPut(rows){
+  var m = cloudHashMap(), n = 0;
+  (rows || []).forEach(function(r){
+    if (!r) return;
+    var id = String(r.id != null ? r.id : (r._id != null ? r._id : ''));
+    if (!id) return;
+    var rec = (r.data && typeof r.data === 'object' && r._id == null) ? cloudRowToLocal(r) : r;
+    var h = cloudHashOf(rec);
+    if (!h) return;
+    if (m[id] !== h){ m[id] = h; n++; }
+  });
+  if (n){
+    var keys = Object.keys(m);
+    if (keys.length > 4000){
+      try {
+        var alive = {}, snap = snapshotAll();
+        Object.keys(snap).forEach(function(mk){
+          (snap[mk] || []).forEach(function(x){ if (x && x._id != null) alive[String(x._id)] = 1; });
+        });
+        keys.forEach(function(k){ if (!alive[k]) delete m[k]; });
+      } catch(e){}
+    }
+    cloudHashSave();
+  }
+  return n;
+}
 /* 待上传的**唯一**判定：cloudCollect（真上传）与 cloudPendingCount（角标）必须共用它，
-   否则又会出现「角标说有 N 条、点进去却说没有需要上传的改动」。 */
+   否则又会出现「角标说有 N 条、点进去却说没有需要上传的改动」。
+   v127：优先比内容指纹 —— 内容和「本机见过的云端版本」一致就不算改动（时间戳只作兜底，
+   用于「本机从没见过这条记录的云端版本」的情况，例如桌面端从未拉过云端）。 */
 function cloudRecordPending(r, wm, seen){
   if (!r || r._id == null) return false;
+  var id = String(r._id);
+  var ch = cloudHashGet(id);
+  if (ch) return cloudHashOf(r) !== ch;
   var upd = Number(r._upd) || 0;
   var base = Math.max(Number(wm) || 0, Number((seen || {})[String(r._id)]) || 0);
   return upd > base;
+}
+function cloudHashGet(id){
+  var m = cloudHashMap();
+  return m[String(id)] || '';
+}
+/* 云端行 → 本机形状的记录（cloudRowsToSnap 与指纹都走这一套，保证两边同形） */
+function cloudRowToLocal(r){
+  var id = String((r && r.id) || '');
+  var d = (r && r.data && typeof r.data === 'object') ? r.data : {};
+  var rec = {};
+  Object.keys(d).forEach(function(k){ rec[k] = d[k]; });
+  rec._id = id;
+  rec._upd = Number(d._upd) || Number(r.updated_at) || 0;
+  rec._rev = Math.max(Number(d._rev) || 0, Number(r.rev) || 0);
+  return rec;
 }
 function cloudBase(){
   var c = cloudConfig();
@@ -3307,8 +3415,9 @@ async function cloudUpload(force, silent){
   var hardFail = !!lastErr;
   if (!hardFail && failed.length === 0){
     setCloudWatermark(t0);
-    /* v120：刚传上去的这批也记进「已见过云端版本」台账（下次角标不会把它们再算一遍） */
-    try { cloudSeenMark(pending); } catch(e){}
+    /* v120：刚传上去的这批也记进「已见过云端版本」台账（下次角标不会把它们再算一遍）
+       v127：同时记内容指纹 —— 云端现在就等于这份内容，之后没再改就不会虚报待上传 */
+    try { cloudSeenMark(pending); cloudHashPut(pending); } catch(e){}
     cloudStatus('✓ 上传完成：' + done + ' 条' + (dels.length ? '，删除 ' + dels.length + ' 条' : ''), '#1a7f37');
     if (!silent) toast('☁ 上传完成：' + done + ' 条' + (useBatch ? '' : '（逐条模式）'));
   } else {
@@ -3746,8 +3855,9 @@ async function cloudPull(force){
 
   /* v120：把这些记录标记为「本机已见过云端版本」，否则它们会被角标算成待上传。
      放在这里（而不是合并成功之后）是刻意的：从云端取回来本身就说明云端已有这些版本，
-     即便用户取消合并、或本地版本更新而放弃云端版本，也不该再把它们算作待上传。 */
-  try { cloudSeenMark(uniq); } catch(e){}
+     即便用户取消合并、或本地版本更新而放弃云端版本，也不该再把它们算作待上传。
+     v127：同时记内容指纹（判定改动的依据从时间戳换成「内容是否真的不同」）。 */
+  try { cloudSeenMark(uniq); cloudHashPut(uniq); } catch(e){}
 
   if (!uniq.length){
     setCloudDlWatermark(Math.max(nextSince, cloudDlWatermark()));
@@ -5906,12 +6016,7 @@ function cloudRowsToSnap(rows){
     if (!mk || !id) return;
     if (tombs[id]) return;                 /* 本机删过、云端还不知道 → 绝不复活 */
     if (r.deleted) return;                 /* 云端软删 → 不进快照（删除在 mergeLoadRows 里处理） */
-    var d = (r.data && typeof r.data === 'object') ? r.data : {};
-    var rec = {};
-    Object.keys(d).forEach(function(k){ rec[k] = d[k]; });
-    rec._id = id;
-    rec._upd = Number(d._upd) || Number(r.updated_at) || 0;
-    rec._rev = Math.max(Number(d._rev) || 0, Number(r.rev) || 0);
+    var rec = cloudRowToLocal(r);          /* v127：统一走这一个转换，指纹才和它同形 */
     if (!out[mk]) out[mk] = [];
     out[mk].push(rec);
   });
@@ -5953,8 +6058,10 @@ function mergeLoadRows(localData, rows){
     else active.push(r);
   });
   /* v120：这批记录的云端版本记进台账 —— 手机端「没改任何东西却显示待上传 N 条」的根治点。
-     只有真的记进了新值才落盘（cloudSeenMark 返回变更条数），避免每次开页都白写一次 localStorage。 */
-  try { cloudSeenMark(active); } catch(e){}
+     v127：同时记下「云端那份内容长什么样」（指纹）—— 「点一下再点回来」这种
+           数据没变、只有 _upd 被刷新的情况，就靠指纹判定为「无改动」。
+     只有真的记进了新值才落盘，避免每次开页都白写一次 localStorage。 */
+  try { cloudSeenMark(active); cloudHashPut(active); } catch(e){}
   var merged = mergeLoadData(localData, cloudRowsToSnap(active));
   var ids = Object.keys(dels);
   if (!ids.length) return stripTombstoned(merged);
@@ -6299,6 +6406,12 @@ function localUpsert(key, id, vals){
      增量同步（只推/拉比上次同步新的记录）和冲突判断全靠这两个字段。
      历史数据由 tools/add_timestamps.py 补过一个统一的基线值，之后每次保存都会刷新。
      注意：这里放在最后，确保所有分支（含早退）都不会漏掉打戳。 */
+  /* v127：整条记录和原来一模一样 → 什么都不做。
+     典型来源：编辑页原样保存、快速按钮开→关、改一个字段又改回去。
+     以前这里会无脑把 _upd 刷成 now，于是「待上传」角标虚报一条、上传时白推一次、
+     云端 _rev 也白加一次。现在先比内容（忽略 _upd/_rev/_file），没变就直接返回。 */
+  if (prev && prev._id != null && cloudRowSig(prev) === cloudRowSig(row)) return;
+
   row._upd = Date.now();
   row._rev = (Number(prev._rev) || 0) + 1;
 
@@ -6318,6 +6431,8 @@ function patchRow(key, id, patch){
   var changed=false;
   var rows = store[key].rows.map(function(r){
     if (String(r._id)!==String(id)) return r;
+    /* v127：值没变就别动这条 —— 否则白刷 _upd，角标会报「待上传 1 条」 */
+    if (patchIsNoop(r, patch)) return r;
     var nr=Object.assign({}, r);
     Object.keys(patch).forEach(function(k){ nr[k]=patch[k]; });
     /* v102：局部改字段也要刷新同步时间戳，否则云端拉不到这次改动 */
@@ -11208,6 +11323,11 @@ function toggleRowStatus(key, id, status){
 /* 收服 / 想收 快速按钮的作用域是整个「宝可梦」IP（含旗下所有系列）；
    属性图标仍然只属于「30周年冰箱贴」系列（属性 / 副属性字段是挂在这个系列上的） */
 function pkIsPkmIp(r){ return !!r && r['IP']===PK_IP; }
+/* v126：宝可梦 IP 的「在库 / 收服」不用文字，改用精灵球图标 ——
+   闭球 = 已收服（在库）；开球 = 还没收服（点一下标记为在库）。
+   和属性图标同一套路：**没有衬底**，图片本身就是透明底、只留圆形球体，
+   直接浮在卡片上（见 style.css 的 .pkq-ball）。 */
+var PK_BALL_ICON = { lib:'data/images/types/ball-closed.webp', open:'data/images/types/ball-open.webp' };
 /* v77：展示卡左下角两个快速按钮——「在库 / 想收」快速状态切换，点一次写入、再点一次取消。
    v96q：不再限定宝可梦 IP —— 所有藏品 item 卡都展示「在库 / 想收」快速按钮。
    在库未收态动作词：宝可梦 IP 用「收服」，其它 IP 用「招募」；点过之后统一为状态「在库」。 */
@@ -11224,13 +11344,26 @@ function pkQuickBtnsHTML(r){
     var tipVerb = (s==='在库')
       ? (on ? '已「在库」，再点一次取消' : (isPkm ? '收服了（标记为在库）' : '招募了（标记为在库）'))
       : (on ? '已「想收」，再点一次取消' : '标记为「想收」');
+    /* v126：宝可梦 IP 的「在库」按钮图标化（闭球=已在库、开球=去收服）。
+       解析不出图片时（极少数情况）自动退回原来的文字，功能不受影响。 */
+    if (s==='在库' && isPkm){
+      var src = resolveImgUrl(on ? PK_BALL_ICON.lib : PK_BALL_ICON.open);
+      if (src){
+        return '<button type="button" class="pkq pkq-ball'+(on?' on':'')+'"'+
+          ' data-act="pkquick" data-s="'+esc(s)+'" data-id="'+esc(r._id)+'"'+
+          ' title="'+esc(tipVerb)+'">'+
+          '<img src="'+esc(src)+'" alt="'+esc(on?'已在库':'收服')+'">'+
+        '</button>';
+      }
+    }
     return '<button type="button" class="pkq '+cls+(on?' on':'')+'"'+
       ' data-act="pkquick" data-s="'+esc(s)+'" data-id="'+esc(r._id)+'"'+
       ' title="'+esc(tipVerb)+'">'+esc(actWord)+'</button>';
   }
   return '<div class="pkquick">'+btn('在库')+(_inLib ? '' : btn('想收'))+'</div>';
 }
-/* 18 个属性图标的两种版本走一遍 resolveImagesFor，保证 FSA / 静态模式都能显示 */
+/* 18 个属性图标（+ 宝可梦的两个精灵球图标）走一遍 resolveImagesFor，
+   保证 FSA / 静态模式下都能显示为可用的 URL */
 function pkIconProbeRows(){
   var rows = [];
   PK_TYPES.forEach(function(t){
@@ -11239,6 +11372,9 @@ function pkIconProbeRows(){
       rows.push({封面:[{imageUrl:'data/images/types/'+sub+'/'+en+'.webp'}]});
     });
   });
+  /* v126：在库/收服 的精灵球图标（闭球 / 开球），同样要注册，否则本机连了目录时解析不出 blob */
+  rows.push({封面:[{imageUrl:PK_BALL_ICON.lib}]});
+  rows.push({封面:[{imageUrl:PK_BALL_ICON.open}]});
   return rows;
 }
 function seriesItems(name){
@@ -13346,6 +13482,11 @@ function detailStep(dir){
 function patchRowFields(key, id, patch){
   var row=(store[key].rows||[]).filter(function(r){ return String(r._id)===String(id); })[0];
   if (!row) return false;
+  /* v127：值没变 → 不刷 _upd、不落盘。
+     这条路径是快速按钮（在库/想收/收服）和详情页内联小编辑走的，
+     「点一下再点回来」几乎全发生在这里 —— 以前每次都白刷时间戳，
+     于是角标报「待上传 1 条」，用户看着莫名其妙。 */
+  if (patchIsNoop(row, patch)) return false;
   Object.keys(patch).forEach(function(k){
     var v=patch[k];
     row[k] = (v===''||v==null) ? null : v;
