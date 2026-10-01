@@ -6829,15 +6829,34 @@ function stArr(r){
   return String(v||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
 }
 function hasStatus(r, v){ return stArr(r).indexOf(v) >= 0; }
-/* 在库 与 云游 互斥：一旦标记为在库，自动清掉云游（东西已经回库，不该还挂在云游里） */
-function clearWanderWhenOwned(arr){
+/* v128：在库 与「想收 / 云游」互斥 —— 一旦标记为在库，自动清掉这两个。
+   为什么：东西都已经到手入库了还挂着「想收」，就是自相矛盾的数据
+   （v99 起「在库」的卡片本就不再显示「想收」按钮，但底层状态没被清掉，
+   于是它会同时出现在「在库」和「想收」两个筛选里，收集进度与统计也跟着脏）。
+   云游同理：已回库就不该还挂在云游里。
+   ⚠️ 三个写入路径都要走它：快速按钮（toggleRowStatus）、表单保存（doSave）、批量编辑。 */
+/* v130：状态里只要出现「在库」，这几个都要自动清掉 —— 东西已经到手了，
+   不该还挂着「想收 / 已预订 / 云游」。**名单只此一份**，
+   clearOwnedConflicts（清）、ownedExtraStatuses（提示文案）、toggleRowStatus（脏数据兜底）
+   全部引用它，避免「两处名单不一致」这类老毛病。 */
+var OWNED_CONFLICT_STATUS = ['想收', '已预订', '云游'];
+function clearOwnedConflicts(arr){
   if (!Array.isArray(arr)) return arr;
   if (arr.indexOf('在库') >= 0){
-    var yi = arr.indexOf('云游');
-    if (yi >= 0) arr.splice(yi, 1);
+    OWNED_CONFLICT_STATUS.forEach(function(s){
+      var i = arr.indexOf(s);
+      if (i >= 0) arr.splice(i, 1);
+    });
   }
   return arr;
 }
+/* 已「在库」却还挂着的多余状态（空数组 = 干净）。提示文案与脏数据判断共用。 */
+function ownedExtraStatuses(row){
+  if (!row || !hasStatus(row, '在库')) return [];
+  return OWNED_CONFLICT_STATUS.filter(function(s){ return hasStatus(row, s); });
+}
+/* 兼容旧名（老代码/外部脚本可能还在引用） */
+function clearWanderWhenOwned(arr){ return clearOwnedConflicts(arr); }
 /* 持有数量的有效值：在库藏品若没填过，默认视作 1（「手里至少这一件」）；
    非在库或已填过则按原值。用于详情卡展示、内联编辑、新增表单默认值。 */
 function effHold(r){
@@ -11297,16 +11316,23 @@ function toggleRowStatus(key, id, status){
   if (!row || !status) return false;
   var arr = stArr(row);
   var on;
-  if (status==='在库' && arr.indexOf('在库')>=0 && arr.indexOf('云游')>=0){
-    /* 已是在库、却还挂着云游（历史脏数据）：点一下只清掉云游、保留在库，
-       不再把在库一起关掉 —— 否则点「在库」反而把在库取消了，云游还在 */
-    arr.splice(arr.indexOf('云游'),1);
-    on = true;
+  /* v128/v130：脏数据兜底 —— 已经是在库、却还挂着想收/已预订/云游（旧版本没清）：
+     点一下只清掉这些多余的、保留在库，而不是把在库一起取消掉。
+     否则会出现「点『在库』反而把它取消了、多余的还留着」这种反直觉结果。
+     判断名单与 clearOwnedConflicts 共用 OWNED_CONFLICT_STATUS。 */
+  if (status==='在库' && arr.indexOf('在库')>=0){
+    var extras = OWNED_CONFLICT_STATUS.filter(function(s){ return arr.indexOf(s)>=0; });
+    if (extras.length){
+      clearOwnedConflicts(arr);      /* 保留在库，清掉多余的 */
+      on = true;
+    } else {
+      arr.splice(arr.indexOf('在库'),1); on = false;   /* 干净的在库 → 再点一次取消 */
+    }
   } else {
     var ix = arr.indexOf(status);
     if (ix >= 0){ arr.splice(ix,1); on = false; }
     else { arr.push(status); on = true; }
-    if (status==='在库') clearWanderWhenOwned(arr);   /* 点在库：自动清掉「云游」 */
+    if (status==='在库') clearOwnedConflicts(arr);   /* 点在库 → 自动清掉「想收 / 已预订 / 云游」 */
   }
   if (MODE === 'db'){
     /* db 模式：走 updateRow，字段值先用 fieldVal 摊平成表单形状（img → 字符串 URL） */
@@ -11342,17 +11368,31 @@ function pkQuickBtnsHTML(r){
     /* 在库：没点时是动作「收服」（宝可梦）/「招募」（其它 IP），点过之后是状态「在库」 */
     var actWord = (s==='在库' && !on) ? (isPkm ? '收服' : '招募') : s;
     var tipVerb = (s==='在库')
-      ? (on ? '已「在库」，再点一次取消' : (isPkm ? '收服了（标记为在库）' : '招募了（标记为在库）'))
+      ? (on ? ((hasStatus(r,'云游') || hasStatus(r,'想收'))
+                ? '已「在库」，点一下顺手清掉多余的「想收 / 云游」'
+                : '已「在库」，再点一次取消')
+            : (isPkm ? '收服了（标记为在库，并自动取消「想收」）' : '招募了（标记为在库，并自动取消「想收」）'))
       : (on ? '已「想收」，再点一次取消' : '标记为「想收」');
     /* v126：宝可梦 IP 的「在库」按钮图标化（闭球=已在库、开球=去收服）。
        解析不出图片时（极少数情况）自动退回原来的文字，功能不受影响。 */
     if (s==='在库' && isPkm){
       var src = resolveImgUrl(on ? PK_BALL_ICON.lib : PK_BALL_ICON.open);
       if (src){
+        /* v129：尺寸与「无衬底」用**内联样式**写死（不再只靠 style.css）。
+           原因：2026-09-30 出现过「线上 app.js 是新的、style.css 是旧的」——
+           内联缺失时 <img> 会按**原图 128px** 渲染（手机端卡片才 112px），直接把整张卡撑满。
+           内联样式随 app.js 一起走，只要 app.js 是新的尺寸就永远对；
+           style.css 里的同款规则留着（新版时一致），**两处要一起改**。 */
+        var bStyle = 'width:1.75em;height:1.75em;min-width:0;padding:0;border:0;border-radius:0;'
+                   + 'background:transparent;display:inline-flex;align-items:center;'
+                   + 'justify-content:center;align-self:center;flex:0 0 auto;box-sizing:border-box;';
+        var iStyle = 'display:block;width:100%;height:100%;'
+                   + 'max-width:100%;max-height:100%;object-fit:contain;';
         return '<button type="button" class="pkq pkq-ball'+(on?' on':'')+'"'+
           ' data-act="pkquick" data-s="'+esc(s)+'" data-id="'+esc(r._id)+'"'+
-          ' title="'+esc(tipVerb)+'">'+
-          '<img src="'+esc(src)+'" alt="'+esc(on?'已在库':'收服')+'">'+
+          ' style="'+bStyle+'"'+
+          ' title="'+esc(tipVerb)+'" aria-label="'+esc(on?'已在库':'收服')+'">'+
+          '<img src="'+esc(src)+'" alt="'+esc(on?'已在库':'收服')+'" style="'+iStyle+'">'+
         '</button>';
       }
     }
@@ -12104,12 +12144,12 @@ function openForm(key, id, opts){
     if (bad){ toast('「'+bad.k+'」还没填'); return; }
     var after = formAfter; formAfter = null;
     var doSave = function(){
-      /* 藏品馆：在库 与 云游 互斥，标记为在库即清掉云游 */
+      /* 藏品馆：在库 与「想收 / 云游」互斥，标记为在库即清掉这两个（v128） */
       if (key==='collection' && editing.vals['状态']!=null){
         var _sa = Array.isArray(editing.vals['状态'])
           ? editing.vals['状态'].slice()
           : String(editing.vals['状态']||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
-        editing.vals['状态'] = clearWanderWhenOwned(_sa);
+        editing.vals['状态'] = clearOwnedConflicts(_sa);
       }
       /* v96r：端盒联动 —— 选上端盒则同系列所有 item 自动置端盒；端盒价（购入价格）与 购入渠道 同步。
          价格仅在 >0 时同步，渠道仅在非空时同步；用 patchRow 只合并这两个字段，绝不把兄弟项其它字段清成 null。 */
@@ -13737,7 +13777,7 @@ function applyBatchEdit(){
   if (checked('状态')){
     var st=[]; sheet.querySelectorAll('input[data-bf-status]').forEach(function(c){ if(c.checked) st.push(c.getAttribute('data-bf-status')); });
     if (st.length){
-      st = clearWanderWhenOwned(st.slice());   /* 在库 与 云游 互斥 */
+      st = clearOwnedConflicts(st.slice());   /* 在库 与「想收 / 云游」互斥（v128） */
       patch['状态']=st;
     }
   }

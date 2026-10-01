@@ -3777,6 +3777,22 @@ input.search{margin-bottom:12px}
 .pkq:hover{ background:#fff; border-color:rgba(255,255,255,.95); }
 .pkq.pkq-lib.on { background:var(--green); border-color:var(--green); color:#fff; font-weight:650; }
 .pkq.pkq-wish.on{ background:var(--red);   border-color:var(--red);   color:#fff; font-weight:650; }
+/* v126：宝可梦 IP 的「在库 / 收服」= 精灵球图标（闭球=已收服、开球=还没收服）。
+   和属性图标一样**没有衬底**：去掉边框与白底，图片本身就是透明底、只留球体，
+   直接浮在卡片上。高度对齐旁边的文字按钮（.714em 字 + .286em 上下内边距 ≈ 1.29em）。
+   写在这里（.pkq.pkq-lib.on 之后）靠同特异性 + 后出现，覆盖掉它的绿底。 */
+.pkq.pkq-ball{ border:0; background:transparent; padding:0; border-radius:0;
+  /* 1.75em 是「自己的 em」—— .pkq 的 font-size 是 .714em，换算回外层 em 约 1.25em，
+     正好等于旁边文字按钮的高度（.714em 字 + .286em 上下内边距 + 1px 边框）。 */
+  width:1.75em; height:1.75em;
+  align-self:center;                 /* .pkquick 是 flex 且默认 stretch，不写会被顶到上边 */
+  display:inline-flex; align-items:center; justify-content:center; }
+.pkq.pkq-ball.on,
+.pkq.pkq-ball:hover{ border:0; background:transparent; color:inherit; }
+.pkq.pkq-ball img{ width:100%; height:100%; object-fit:contain; display:block;
+  /* 极淡落影：球体是黑描边，压在深色封面上也看得清；它不是衬底、没有色块 */
+  filter:drop-shadow(0 .07em .14em rgba(0,0,0,.45)); }
+.pkq.pkq-ball:active{ transform:scale(.94); }
 
 /* 展示卡内属性图标：贴在 .cover 右下角；「方形 / 圆形」开关决定来源（sv/ 或 swsh/） */
 .pktypes{ position:absolute; right:.5em; bottom:.5em; display:flex; align-items:center; gap:.214em; z-index:2; }
