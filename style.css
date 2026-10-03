@@ -347,6 +347,9 @@ input.search:focus{border-color:var(--accent);background:#fff}
   background:rgba(255,255,255,.9);font-size:.679em;font-weight:700;letter-spacing:.06em}
 .poster .cover .no{position:absolute;right:.571em;top:.571em;padding:.214em .5em;border-radius:.5em;
   background:rgba(41,37,31,.62);color:#fff;font-size:.679em;letter-spacing:.08em;font-weight:700}
+/* v134：原来的「贴纸版」角标（.vertag）已删除 ——
+   30周年冰箱贴的左上角标签现在直接写「冰箱贴 / 贴纸」（见 app.js 的 pkCardTag），
+   不用再额外挂一层。 */
 .poster .cover .score{position:absolute;right:.571em;bottom:.571em;padding:.214em .571em;border-radius:.5em;
   background:rgba(41,37,31,.72);color:#fff;font-size:.714em;letter-spacing:.06em}
 /* v96k 修正：改用 .wall .poster h4（特异性 0,0,2,1）——
@@ -519,6 +522,17 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .fgrid.fg12 .f.q.rs{grid-column-end:span var(--w,3)}
 .fgrid.fg12 .f.w3.rs{grid-column-end:span var(--w,9)}
 .fgrid.fg12 .f.full.rs{grid-column-end:-1}
+/* v133：上下叠放格（端盒 / 隐藏款）、品牌下拉 ---------- */
+/* 端盒 / 隐藏款 合成一格（占 25%），格内纵向排列；行高从每个 38px 收到 26px，
+   免得两行勾选把那排撑得过高。格子自身的宽度/换行仍走 .f.q / .f.rs 那套。
+   ⚠️ 必须写成 `.f.q.stackcell`（0,0,3,1）——只写 `.f.stackcell`（0,0,2,1）会跟上面
+   第 645 行的 `.f.q .checkrow`（同样 0,0,2,1、但写在后面）打平，被它按 38px 盖掉。 */
+.f.stackcell{justify-content:center;gap:0}
+.f.stackcell>.f{grid-column:auto;gap:4px}
+.f.q.stackcell .checkrow{min-height:26px;font-size:12.5px}
+/* 品牌 = 下拉 + 「＋」新增按钮（按钮跟输入框同高，点它弹输入框加新品牌） */
+/* v136：品牌也改成「下拉里带＋新增」，左边那个 .brandwrap 容器和加号按钮都不用了
+   （下拉本身走 .f select 的通用样式，跟「小类」等下拉完全一致，宽度自动占满格子）。 */
 /* ---------- v113：子系列（编辑系列里的「添加子系列」） ---------- */
 /* 「＋ 添加子系列」按钮：紧跟「系列总数量」右边、和输入框底部对齐（没有 label） */
 .f.childaddbox{align-self:end}
@@ -632,7 +646,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .f.q .checkrow{font-size:12px;gap:6px;min-height:38px;white-space:nowrap}
 .f.q .checkrow input{width:15px;height:15px}
 .checksrow{display:flex;gap:24px;flex-wrap:wrap}
-.checksrow.statusrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.checksrow.statusrow{display:grid;grid-template-columns:auto auto;gap:6px;align-items:center;justify-content:start}
 .checksrow.statusrow .checkrow{margin:0;padding:1px 10px;border:1px solid #ddd4c8;border-radius:999px;min-height:0;background:#fbf8f3;transition:.15s;font-size:12.5px;line-height:1.4}
 .checksrow.statusrow .checkrow:has(input:checked){border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .checksrow.statusrow .checkrow input{width:13px;height:13px;min-height:0;padding:0;margin:0}
@@ -817,8 +831,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .dynwrap select{width:100%;min-height:42px;padding:10px 12px;border:1px solid #ddd4c8;border-radius:11px;
   background:#fbf8f3;outline:0}
 .dynwrap select:focus{border-color:var(--accent);background:#fff}
-.dynwrap input{margin-top:8px;width:100%;min-height:42px;padding:10px 12px;border:1px solid #ddd4c8;
-  border-radius:11px;background:#fbf8f3;outline:0}
+/* v136：.dynwrap 里那个自定义文本框已删除（新增入口改为下拉里的「＋ 新增…」选项）。 */
 
 .swatches{display:flex;gap:9px;flex-wrap:wrap}
 .swatches button{width:38px;height:38px;border-radius:11px;border:2px solid transparent;cursor:pointer}

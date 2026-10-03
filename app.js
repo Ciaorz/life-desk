@@ -4893,8 +4893,14 @@ var MODS = {
       /* v96q：状态（1/2 宽）放在 编号/持有/购入价格/购入渠道 之后 */
       {k:'状态',t:'checks',o:STATES_OWN,def:['在库'],statusRow:true},
       /* v96p：端盒 / 隐藏款 —— 单选取向（布尔）。端盒选中后同系列所有 item 自动置端盒，价格同步；隐藏款作为筛选条件 */
-      {k:'端盒',t:'check',quarter:true},
-      {k:'隐藏款',t:'check',quarter:true},
+      /* v133：端盒 / 隐藏款 合成一格（stack:'boxpair' → 上下叠放，共占 25%）；
+         腾出来的那一格给「品牌」下拉，紧跟在它们右边。
+         ⚠️ v135：这里**不要**加 rowstart —— 加了会把「端盒/隐藏款 + 品牌」整组推到下一行
+         （状态本来就自己占一行开头，跟在它后面正好满行）。 */
+      {k:'端盒',t:'check',quarter:true,stack:'boxpair'},
+      {k:'隐藏款',t:'check',quarter:true,stack:'boxpair'},
+      /* v133：品牌 —— 下拉 + 「＋」新增，清单全局共享（详见 getBrands / addBrand） */
+      {k:'品牌',t:'brand',quarter:true},
       /* v75fix：存放位置 = 单个字段（占 50%），内部三段下拉 房间/柜墙/层，
          与「购入日期」的年/月/日同一套路；不再拆成三个独立字段 */
       {k:'存储地点',t:'loc3',lab:'存放位置',rowstart:true},
@@ -5118,6 +5124,52 @@ async function saveCustomFieldsToIndex(module, fields){
   idx.customFields[module] = fields;
   await fsWriteIndex(idx);
 }
+/* ==========================================================================
+   v133：藏品「品牌」清单
+   --------------------------------------------------------------------------
+   下拉里的品牌 = ①主索引 lifedesk.json 的 brands（正式登记，会跟着数据走）
+                ∪ ②本机 localStorage 的 lifedesk_brands（没连本地目录时的兜底）
+                ∪ ③已经被某条记录用过的值（老数据、换设备后都能选回来）
+   点表单里的「＋」→ 弹输入框 → 确认 → 写进 ①②，于是**所有物品**的下拉里都有它。
+   ========================================================================== */
+function getBrands(){
+  var out = [], seen = {};
+  function push(x){
+    var s = String(x == null ? '' : x).trim();
+    if (!s || seen[s]) return;
+    seen[s] = 1; out.push(s);
+  }
+  try { var idx = _idxCache || {}; if (Array.isArray(idx.brands)) idx.brands.forEach(push); } catch(e){}
+  try { var ls = JSON.parse(localStorage.getItem('lifedesk_brands') || '[]'); if (Array.isArray(ls)) ls.forEach(push); } catch(e){}
+  return out;
+}
+async function addBrand(name){
+  var nm = String(name == null ? '' : name).trim();
+  if (!nm) return getBrands();
+  var list = getBrands();
+  if (list.indexOf(nm) < 0) list.push(nm);
+  try { localStorage.setItem('lifedesk_brands', JSON.stringify(list)); } catch(e){}
+  /* ⚠️ 只有连着本地数据目录（_fsaHandle）时才去写主索引。
+     没连的时候 fsReadIndex() 会返回一个**空索引**，再经 fsWriteIndex 覆盖 _idxCache，
+     会把 shards / entityFiles 一起冲掉（页面当场读不到分片）。
+     这种情况就只留 localStorage 那份，靠「已用过的值」合并进下拉，不影响使用。 */
+  if (_fsaHandle){
+    try { await saveBrandsToIndex(list); } catch(e){}
+  }
+  return list;
+}
+/* 下拉实际要渲染的清单：登记过的 ∪ 数据里用过的（保持「登记在前、用完的在后」） */
+function brandOptionsAll(){
+  var out = [], seen = {};
+  function push(x){
+    var s = String(x == null ? '' : x).trim();
+    if (!s || seen[s]) return;
+    seen[s] = 1; out.push(s);
+  }
+  getBrands().forEach(push);
+  ((store.collection && store.collection.rows) || []).forEach(function(r){ push(r['品牌']); });
+  return out;
+}
 /* 六大模块的可读名称（用于页面管理标题） */
 var MODULE_LABELS = { collection:'藏品馆', av:'影音厅', travel:'遐方坞', food:'馐馔坊', study:'文渊斋', idea:'灵思阁' };
 /* 各模块内置字段名列表（页面管理里只读展示，不可删） */
@@ -5222,6 +5274,7 @@ function fieldTypeLabel(t){
             multi:'预设多选', booktag:'标签分类', booksub:'小分类', stars:'星级',
             hearts:'心级', dyn:'关联选择', geopick:'地图选点', check:'勾选',
             checks:'多选勾选', locopt:'位置选项', loc3:'位置三段',
+            brand:'品牌（下拉+新增）',
             childadd:'按钮', childlist:'子系列' })[t] || (t || '字段');
 }
 async function persistFieldLayout(pending){
@@ -5430,7 +5483,7 @@ function activeFields(key, vals){
      这里把未知/缺失的 t 规范化：有预设值就退回 select（下拉框），否则退回 text。 */
   var KNOWN_T = ['text','number','currency','date','isbn','year-date','img','textarea',
                  'select','multi','booktag','booksub','stars','hearts','dyn','geopick','check','checks',
-                 'locopt'];   /* v75fix：存储地点三段 */
+                 'locopt','brand'];   /* v75fix：存储地点三段；v133：品牌下拉 */
   /* v75fix：自定义字段来源 —— 文渊斋的 书籍/杂志 表单其实是 collection 里的「大类=书籍/杂志」录入，
      但它们的自定义字段在「文渊斋 · 页面管理」里维护（存在 customFields.study），
      所以书籍/杂志表单要同时读 study + collection 两处，其它表单读各自模块。 */
@@ -5788,7 +5841,8 @@ function rebuildFormGrid(host){
     /* v113：栅格档位可能随「系列」选择变化（藏品表单选了有子系列的系列 → 切 12 栏），
        所以重绘时连 class 一起刷新 */
     grid.className = 'fgrid'+formGridClass(editing.key, editing.vals);
-    grid.innerHTML = activeFields(editing.key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('');
+    grid.innerHTML = fieldsToGridHTML(activeFields(editing.key, editing.vals), editing.vals,
+                                      formGridClass(editing.key, editing.vals));
   } catch(e){ return; }
   wireFormControls(host, function(){
     if (!editing) return;
@@ -5905,6 +5959,10 @@ var ui = {
     wallGroupAuto:false,
     /* v77：宝可梦 30 周年冰箱贴专用视图状态 */
     pk:{ types:[], both:false, form:'', region:'', group:'', gen:'' }, pkIndex:false, pkGenOpen:{},
+    /* v132：「30周年冰箱贴」的版本切换 —— 同一套图鉴拆成「冰箱贴版 / 贴纸版」，
+       在库 / 想收 各自独立（数据上是两份记录，名字 / 编号 / 封面共用）。
+       只对这一个系列生效，别的系列记录上没有 版本 字段、也不参与过滤。 */
+    seriesVer:'冰箱贴',
     /* v78：批量编辑——selMode 选择模式；sel 选中 id 集合（{id:true}） */
     selMode:false, sel:{} },
   av:{ cat:'', sub:'', q:'', classic:false, stars:false, numOrder:'asc', yearView:false },
@@ -6390,6 +6448,11 @@ function localUpsert(key, id, vals){
   /* v49：collection 的书籍/杂志录入 schema 不渲染「大类」字段，但存储仍需 大类，
      否则文渊斋「我的书架」按 大类 过滤时找不到它们 */
   if (key==='collection' && vals && vals['大类']) row['大类'] = vals['大类'];
+  /* v134：「版本」（30周年冰箱贴的 冰箱贴版 / 贴纸版）不在字段表里，
+     activeFields 不会写它 —— 从「贴纸」视图里新增的条目必须显式带回来，
+     否则新条目会默默落进「冰箱贴版」（表单里看不见，用户根本发现不了）。
+     编辑已有条目时 row 以 prev 为底，本来就有 版本，不受影响。 */
+  if (key==='collection' && vals && vals['版本']!=null && vals['版本']!=='') row['版本'] = String(vals['版本']);
   /* v54：av 的电影/留声机 schema 也不渲染「大类」，但渲染和分片都靠它，必须存回 row */
   if (key==='av' && vals && vals['大类']) row['大类'] = vals['大类'];
   /* v48：food / recipe 在 db 模式下暂时共表，用隐藏字段 _module 区分；本地模式下也保留，方便后续拆分 */
@@ -6401,6 +6464,12 @@ function localUpsert(key, id, vals){
     if (vals['纬度']!=null && vals['纬度']!=='') row['纬度']=num(vals['纬度'])||0;
     if (vals['经度']!=null && vals['经度']!=='') row['经度']=num(vals['经度'])||0;
   }
+  /* v137：**属于某个系列的藏品不许留空状态** —— 状态空的就当「云游」（没在库＝还没到手）。
+     第 1 道防线是 seriesAddPrefill（表单打开时就是云游），这里再兜一道，
+     把「批量添加子项」「手动选了系列」「用户把状态全取消」这些路径一起覆盖掉。
+     ⚠️ 只在状态**完全为空**时才补 —— 已经有「想收 / 已预订」的不动，
+       免得把「想要」和「云游」这两个概念搅在一起。 */
+  if (key==='collection' && String(row['系列']||'').trim() && !stArr(row).length) row['状态'] = ['云游'];
   /* v102：打同步时间戳。
      _upd = 最后修改时间（毫秒），_rev = 改过几次。
      增量同步（只推/拉比上次同步新的记录）和冲突判断全靠这两个字段。
@@ -7088,7 +7157,10 @@ function collectionWall(rows, cols){
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
       '<div class="cover'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
       (hasCover(r)?'':'<b>'+esc(String(t).slice(0,1))+'</b>')+
-      '<span class="tag">'+esc(r['大类']||'')+'</span>'+
+      '<span class="tag">'+esc(pkCardTag(r))+'</span>'+
+      /* v132：只有「贴纸版」加角标 —— 冰箱贴版是默认版本，不加免得 1300 张卡都挂个牌子。
+         两份记录名字/封面一模一样，没这个角标在平铺列表里根本分不出谁是谁。
+         v134：角标去掉了 —— 30周年冰箱贴的左上角标签本身就直接写「冰箱贴 / 贴纸」。 */
       (no?'<span class="no">'+esc(no)+'</span>':'')+
       (num(r['星级'])?'<span class="score">'+stars(r['星级'])+'</span>':'')+
       pkQuickBtnsHTML(r)+
@@ -7105,6 +7177,8 @@ function collectionList(rows){
       (r['编号']?' · #'+esc(r['编号']):'')+
       (r['IP']?' · '+esc(r['IP']):'')+
       (r['系列']?' · '+esc(r['系列']):'')+
+      /* v132：贴纸版在列表里也标一下，否则与冰箱贴版看不出区别 */
+      (pkVerOf(r)==='贴纸'?' · <b style="color:var(--ink)">贴纸版</b>':'')+
       (dstr(r['购入日期'])?' · 入手 '+dstr(r['购入日期']):'')+'</span>'+
       (r['短评']?'<em>'+esc(r['短评'])+'</em>':'')+'</div>'+
       '<span class="loc">'+(r['存储地点']?esc(r['存储地点']):'未指定位置')+'</span>'+
@@ -9818,6 +9892,8 @@ document.addEventListener('click', function(ev){
     rebuildFormGrid($('sheetHost'));
     return;
   }
+  /* v136：品牌新增不再走独立按钮 —— 入口是下拉里最后那个「＋ 新增品牌…」，
+     处理逻辑在 wireFormControls 的 select[data-brand] 那段。 */
   if (act==='childok'){
     if (!editing) return;
     var _h = $('sheetHost');
@@ -9914,7 +9990,18 @@ document.addEventListener('click', function(ev){
     return;
   }
   if (act==='go'){ ui.view=key; if(key==='collection'){ ui.collection.classic=false; ui.collection.cat=''; ui.collection.sub=''; ui.collection.seriesId=null; ui.collection.seriesStatus='全部'; ui.collection.seriesSort='no'; } if(key==='av'){ ui.av.classic=false; ui.av.cat=''; ui.av.sub=''; } if(key==='study'){ ui.study.classic=false; ui.study.ccat=''; } window.scrollTo(0,0); render(); return; }
-  if (act==='add'){ openForm(key, null); return; }
+  if (act==='add'){
+    /* v134：正在某个系列详情里时，顶栏的「+藏品」也把该系列的上下文带上
+       （系列 / IP / 大类 / 小类 / 子系列 / 版本），跟系列里那个「＋」一致。
+       以前这个入口是空表单，很容易录出一个脱离系列的孤儿条目。 */
+    var _apf = null;
+    if (key==='collection' && ui.collection.seriesId){
+      var _ase = store.series.rows.filter(function(x){ return String(x._id)===String(ui.collection.seriesId); })[0];
+      if (_ase) _apf = seriesAddPrefill(_ase);
+    }
+    openForm(key, null, _apf ? {prefill:_apf} : undefined);
+    return;
+  }
   if (act==='avaddmovie'){ openForm('av', null, {prefill:{'大类':'赏戏'}}); return; }
   if (act==='avaddmusic'){ openForm('av', null, {prefill:{'大类':'留音'}}); return; }
   if (act==='avclassic'){ ui.av.classic=true; ui.av.cat=''; ui.av.sub=''; render(); return; }
@@ -10020,6 +10107,12 @@ document.addEventListener('click', function(ev){
   }
   if (act==='seriesback'){ ui.collection.seriesId=null; ui.collection.seriesStatus='全部'; ui.collection.seriesSort='no'; ui.collection.pkIndex=false; ui.collection.seriesChild=''; render(); return; }
   if (act==='seriesfilt'){ ui.collection.seriesStatus=node.getAttribute('data-v')||'全部'; render(); return; }
+  /* v132：冰箱贴系列切版本（冰箱贴版 / 贴纸版）。分页游标归零，避免上一版的「加载更多」页码残留。 */
+  if (act==='seriesver'){
+    ui.collection.seriesVer = (node.getAttribute('data-v')==='贴纸') ? '贴纸' : '冰箱贴';
+    ui.collection.pkShown = 0;
+    render(); return;
+  }
   if (act==='serieswish'){
     var wid=node.getAttribute('data-id');
     /* v77fix：改走 toggleRowStatus —— 原来直接把 store 的 row 丢给 updateRow，
@@ -10457,24 +10550,7 @@ document.addEventListener('click', function(ev){
   if (act==='addseriesitem'){
     var ase=store.series.rows.filter(function(x){ return String(x._id)===String(node.getAttribute('data-id')); })[0];
     if (!ase){ toast('系列已不存在'); return; }
-    var aits=seriesItems(ase['系列名称']||'');
-    var apf={ '系列': ase['系列名称']||'' };
-    var aip = ase['所属IP'] || (aits.filter(function(r){ return r['IP']; })[0]||{})['IP'] || '';
-    if (aip) apf['IP']=aip;
-    /* 大类：跟随当前「按类别」的大类，否则取系列内任意一件 */
-    var acat = (ui.collection.mode==='cat' && ui.collection.cat) ? ui.collection.cat
-             : ((aits.filter(function(r){ return r['大类']; })[0]||{})['大类']||'');
-    if (acat) apf['大类']=acat;
-    /* 小类：优先用系列内当前选中的类型，其次按类别的小类，最后取系列内任意一件 */
-    var asub = ui.collection.seriesSub
-            || ((ui.collection.mode==='cat') ? (ui.collection.sub||'') : '')
-            || ((aits.filter(function(r){ return r['小类']; })[0]||{})['小类']||'');
-    if (asub) apf['小类']=asub;
-    /* v111：子系列 —— 只在用户已在系列内选定了某个子系列时才带出。
-       有多种子系列时不该瞎猜一个（Road trip 的 徽章/冰箱贴/行李牌 各占 1/3），
-       留空让用户自己填更稳妥。 */
-    if (ui.collection.seriesChild) apf['子系列']=ui.collection.seriesChild;
-    openForm('collection', null, {prefill:apf});
+    openForm('collection', null, {prefill:seriesAddPrefill(ase)});
     return;
   }
   if (act==='fillmiss'){
@@ -10645,10 +10721,23 @@ function dynOptions(src){
   if (src==='loc') return (store.loc.rows || []).map(locDisplayName).filter(Boolean);
   return [];
 }
+/* v136：下拉里最后那个「＋ 新增…」选项的文案/标题按用途区分
+   （小类 / 子系列 / IP / 系列 / 存储地点 共用同一套 din 机制）。 */
+function dynAddLabel(src){
+  return ({ sub:'＋ 新增小类…', child:'＋ 新增子系列…', ip:'＋ 新增 IP…',
+            series:'＋ 新增系列…', loc:'＋ 新增存储地点…' })[src] || '＋ 自定义…';
+}
+function dynAddTitle(src){
+  return ({ sub:['新增小类', '小类名称（如 冰箱贴 / 徽章 / 钥匙扣）'],
+            child:['新增子系列', '子系列名称（如 徽章 / 行李牌）'],
+            ip:['新增 IP', 'IP 名称（如 宝可梦 / 三丽鸥）'],
+            series:['新增系列', '系列名称'],
+            loc:['新增存储地点', '地点名称'] })[src] || ['新增选项', '名称'];
+}
 function fillDynField(host, k){
   var w=host.querySelector('.dynwrap[data-k="'+k+'"]'); if (!w) return;
   var src=w.getAttribute('data-src');
-  var sel=w.querySelector('[data-dyn-sel]'), cus=w.querySelector('[data-dyn-cus]');
+  var sel=w.querySelector('[data-dyn-sel]');
   if (!sel) return;
   var opts=dynOptions(src);
   var cur=String(editing.vals[k]||'');
@@ -10660,11 +10749,11 @@ function fillDynField(host, k){
   opts.forEach(function(o){
     html += '<option value="'+esc(o)+'"'+(o===cur?' selected':'')+'>'+esc(o)+'</option>';
   });
-  html += '<option value="__custom__"'+((cur && !known)?' selected':'')+'>＋ 自定义…</option>';
+  /* v136：当前值不在候选里（老数据、或刚在别处用过的值）→ 直接并进列表并选中。
+     以前这种情况会显示一个藏在下面的文本框，点了往往「像没反应」，那个框已经删掉了。 */
+  if (cur && !known) html += '<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>';
+  html += '<option value="__custom__">'+dynAddLabel(src)+'</option>';
   sel.innerHTML=html;
-  var showCus=!!(cur && !known);
-  cus.style.display = showCus ? 'block' : 'none';
-  cus.value = showCus ? cur : '';
 }
 function statesFor(cat){ return cat==='观影' ? STATES_VIEW : STATES_OWN; }
 function refillStateOptions(host){
@@ -10874,14 +10963,15 @@ function wireFormControls(host, saveDraft){
   });
   host.querySelectorAll('[data-f]:not([data-v])').forEach(function(inp){
     var k=inp.getAttribute('data-f');
-    inp.addEventListener('input', function(){
+    /* v136：下拉里那个「＋ 新增…」是操作项、不是值 —— 绝不能写进 editing.vals，
+       否则用户点了又取消，就会把 '__custom__' 当成真值存下去（品牌就是这么处理的）。 */
+    function sync(){
+      if (inp.value === '__custom__') return;
       editing.vals[k] = inp.type==='checkbox' ? inp.checked : inp.value;
       if (saveDraft) saveDraft();
-    });
-    inp.addEventListener('change', function(){
-      editing.vals[k] = inp.type==='checkbox' ? inp.checked : inp.value;
-      if (saveDraft) saveDraft();
-    });
+    }
+    inp.addEventListener('input', sync);
+    inp.addEventListener('change', sync);
   });
   /* 购入日期：年 / 月 / 日 三段共用一个 hidden input（data-f），
      左边选年右边就预存这个年，月日不填则只存 "2026"；右边选了月/日，年份自动补上 */
@@ -10996,45 +11086,99 @@ function wireFormControls(host, saveDraft){
   });
   host.querySelectorAll('.dynwrap').forEach(function(w){
     var k=w.getAttribute('data-k');
-    var sel=w.querySelector('[data-dyn-sel]'), cus=w.querySelector('[data-dyn-cus]');
+    var src=w.getAttribute('data-src');
+    var sel=w.querySelector('[data-dyn-sel]');
+    if (!sel) return;
     sel.onchange=function(){
-      if (sel.value==='__custom__'){ cus.style.display='block'; cus.focus(); editing.vals[k]=cus.value||''; }
-      else {
-        cus.style.display='none'; cus.value=''; editing.vals[k]=sel.value;
-        /* v115：换了 IP → 系列下拉只列属于这个 IP 的系列；
-           原来选的系列若不属于新 IP，就一起清掉（连同它下面的子系列），
-           免得出现「IP=宝可梦、系列=某个三丽鸥系列」这种自相矛盾的记录。 */
-        if (w.getAttribute('data-src')==='IP'){
-          if (editing.vals['系列']){
-            var _okS = seriesNamesOfIp(sel.value);
-            if (_okS.indexOf(String(editing.vals['系列']))<0){
-              editing.vals['系列']=''; editing.vals['子系列']='';
+      if (sel.value==='__custom__'){
+        /* v136：选下拉里最后那个「＋ 新增…」→ 弹输入框，确认后把新名字写进这一项并选中。
+           先把选择还原回原值，免得用户点「取消」之后停在一个并不存在的选项上。
+           （旧做法是原地露出一个文本框，点了常常像「没反应」，那个框已删除。） */
+        sel.value = String(editing.vals[k]||'');
+        var _t = dynAddTitle(src);
+        promptDialog(_t[0], _t[1], '', '添加', function(name){
+          var nm = String(name||'').trim();
+          if (!nm) return '名称不能为空';
+          editing.vals[k] = nm;
+          /* 小类：走已有的 addUserSub —— 它会同时写进内存的 SUBS[大类] 和主索引的 userSubs
+             （跟「页面管理里新增小类」同一个登记表），重开页面也还在。
+             ⚠️ 没连本地目录时不写索引：fsReadIndex() 会返回一个空索引，
+               经 fsWriteIndex 会把 _idxCache 覆盖掉，shards / entityFiles 全丢。
+               那种情况下只补进内存，保存这条记录后 dynOptions 也会按「已用过的值」收录。 */
+          if (src==='sub'){
+            var _cat = String(editing.vals['大类']||'');
+            if (_cat){
+              if (_fsaHandle) addUserSub(_cat, nm);
+              else {
+                if (!SUBS[_cat]) SUBS[_cat] = [];
+                if (SUBS[_cat].indexOf(nm) < 0) SUBS[_cat].push(nm);
+              }
             }
           }
-        }
-        /* 选了系列就把它的 IP 带上，省得再选一次 */
-        if (w.getAttribute('data-src')==='series' && sel.value){
-          var se=store.series.rows.filter(function(r){ return r['系列名称']===sel.value; })[0];
-          if (se && se['所属IP'] && !editing.vals['IP']) fillDynField(host,'IP');
-          if (se && se['所属IP'] && editing.vals['IP']!==se['所属IP']){
-            editing.vals['IP']=se['所属IP'];
-            var ipw=host.querySelector('.dynwrap[data-k="IP"]');
-            if (ipw){ var ipsel=ipw.querySelector('[data-dyn-sel]'); if (ipsel) ipsel.value=se['所属IP']; }
-          }
-          /* v113：换了系列 → 子系列下拉换成新系列登记过的子系列；旧值不属于新系列就清掉。
-             （要是新系列根本没登记过子系列，下面 rebuildFormGrid 会把这个字段整个拿掉。） */
-          if (editing.vals['子系列']){
-            var _ok=seriesChildOptions(sel.value);
-            if (_ok.indexOf(String(editing.vals['子系列']))<0) editing.vals['子系列']='';
-          }
-        }
-        if (saveDraft) saveDraft();
+          rebuildFormGrid(host);          /* 重绘 → fillDynField 会把新值并进下拉并选中 */
+          if (saveDraft) saveDraft();
+          toast('已新增「'+nm+'」');
+          return null;
+        });
+        return;
       }
+      editing.vals[k]=sel.value;
+      /* v115：换了 IP → 系列下拉只列属于这个 IP 的系列；
+         原来选的系列若不属于新 IP，就一起清掉（连同它下面的子系列），
+         免得出现「IP=宝可梦、系列=某个三丽鸥系列」这种自相矛盾的记录。 */
+      if (src==='IP'){
+        if (editing.vals['系列']){
+          var _okS = seriesNamesOfIp(sel.value);
+          if (_okS.indexOf(String(editing.vals['系列']))<0){
+            editing.vals['系列']=''; editing.vals['子系列']='';
+          }
+        }
+      }
+      /* 选了系列就把它的 IP 带上，省得再选一次 */
+      if (src==='series' && sel.value){
+        var se=store.series.rows.filter(function(r){ return r['系列名称']===sel.value; })[0];
+        if (se && se['所属IP'] && !editing.vals['IP']) fillDynField(host,'IP');
+        if (se && se['所属IP'] && editing.vals['IP']!==se['所属IP']){
+          editing.vals['IP']=se['所属IP'];
+          var ipw=host.querySelector('.dynwrap[data-k="IP"]');
+          if (ipw){ var ipsel=ipw.querySelector('[data-dyn-sel]'); if (ipsel) ipsel.value=se['所属IP']; }
+        }
+        /* v113：换了系列 → 子系列下拉换成新系列登记过的子系列；旧值不属于新系列就清掉。
+           （要是新系列根本没登记过子系列，下面 rebuildFormGrid 会把这个字段整个拿掉。） */
+        if (editing.vals['子系列']){
+          var _ok=seriesChildOptions(sel.value);
+          if (_ok.indexOf(String(editing.vals['子系列']))<0) editing.vals['子系列']='';
+        }
+      }
+      if (saveDraft) saveDraft();
       /* v75：IP/系列/小类 切换后重算范围字段 */
       rebuildFormGrid(host);
     };
-    cus.addEventListener('input', function(){ editing.vals[k]=cus.value; if (saveDraft) saveDraft(); });
     fillDynField(host, k);
+  });
+  /* v136：品牌下拉 —— 「＋ 新增品牌…」也放在下拉里（不再是右边那个加号按钮）。
+     新增的品牌是全局清单，所以走 addBrand（写 lifedesk.json.brands + localStorage）。 */
+  host.querySelectorAll('select[data-brand]').forEach(function(sel){
+    sel.onchange=function(){
+      if (sel.value!=='__custom__'){
+        editing.vals['品牌']=sel.value;
+        if (saveDraft) saveDraft();
+        return;
+      }
+      sel.value = String(editing.vals['品牌']||'');
+      promptDialog('新增品牌', '品牌名称（如 万代 / Funko / 泡泡玛特）', '', '添加', function(name){
+        var nm = String(name||'').trim();
+        if (!nm) return '品牌名称不能为空';
+        var _had = getBrands().indexOf(nm) >= 0;
+        addBrand(nm).then(function(){
+          editing.vals['品牌'] = nm;
+          rebuildFormGrid(host);                   /* 重绘后新品牌就在下拉里且被选中 */
+          if (saveDraft) saveDraft();
+          toast(_had ? ('品牌「'+nm+'」已经有了，已选上') : ('已新增品牌「'+nm+'」'));
+        });
+        return null;
+      });
+    };
   });
   /* v113：子系列输入框（名称 / 数量）—— 边打字边存草稿，
      这样中途因切换系列等原因重绘时，已经敲进去的内容不会被清掉。 */
@@ -11279,6 +11423,52 @@ function pkGenOf(no){
 }
 function pkIsPkm(r){ return !!r && r['IP']===PK_IP && r['系列']===PK_SERIES; }
 function pkIsPkmSeries(se){ return !!se && (se['系列名称']||'')===PK_SERIES && (se['所属IP']||'')===PK_IP; }
+/* v130：哪些系列按「宝可梦图鉴系列」对待 —— 决定系列详情里出不出
+   「属性 / 特殊形态 / 图鉴组 / 世代组」筛选栏、卡片上显不显示属性图标、
+   是否按「图鉴号 + 形态序」排序、收集进度是否只数基础形态（formCode 为空）。
+   原来写死只认「30周年冰箱贴」，现在放宽为：
+     IP 是宝可梦，且该系列确实带图鉴字段（属性 / 特殊形态 / 世代组 / formCode）。
+   这样「全图鉴金属徽章」这类同样按图鉴号建的系列也能用上同一套筛选。 */
+function pkLikeSeries(se){
+  if (!se) return false;
+  if ((se['所属IP']||'') !== PK_IP) return false;
+  var nm = se['系列名称'] || '';
+  if (nm === PK_SERIES) return true;
+  var rs = seriesItems(nm) || [];
+  for (var i = 0; i < rs.length; i++){
+    var r = rs[i];
+    if (r['属性'] || r['特殊形态'] || r['世代组'] || r['formCode']) return true;
+  }
+  return false;
+}
+/* ============================================================
+   v132：「30周年冰箱贴」的 冰箱贴版 / 贴纸版
+   ------------------------------------------------------------
+   同一套图鉴（名字 / 编号 / 封面 / 属性 全共用），但在库 / 想收 各记各的。
+   做法：数据上复制成两份记录，只有 _id / 版本 / 状态 / _upd / _rev 不同，
+   图片路径指向同一批文件（不占额外存储，推 R2 也不重复）。
+     · 没有 版本 字段的老记录 = 冰箱贴版（默认版本）
+     · 版本:'贴纸' 的那一份才有「贴纸版」角标
+   只对这一个系列生效；其它系列记录上根本没有 版本 字段。
+   ============================================================ */
+var PK_VER_SERIES = '30周年冰箱贴';
+var PK_VERSIONS = ['冰箱贴', '贴纸'];
+function pkIsVerSeries(se){
+  return !!se && (se['系列名称']||'')===PK_VER_SERIES && (se['所属IP']||'')===PK_IP;
+}
+/* 一条记录属于哪个版本；没有 版本 字段的老记录一律算「冰箱贴版」 */
+function pkVerOf(r){ return (r && r['版本']==='贴纸') ? '贴纸' : '冰箱贴'; }
+/* 当前正在看哪个版本（视图状态；非本系列时不会被任何地方读取） */
+function pkCurVer(){ return ui.collection.seriesVer==='贴纸' ? '贴纸' : '冰箱贴'; }
+/* v134：30周年冰箱贴是**特殊项目** —— 展示卡左上角那个「大类」标签，对它不再写「周边」，
+   直接写版本名：冰箱贴版 → 「冰箱贴」，贴纸版 → 「贴纸」。
+   这样两版的卡片一眼能分清，也不用再额外挂一个「贴纸」角标。
+   其它系列 / 其它物品照旧显示大类。 */
+function pkCardTag(r){
+  if (!r) return '';
+  if (String(r['系列']||'') === PK_VER_SERIES && String(r['IP']||'') === PK_IP) return pkVerOf(r);
+  return String(r['大类'] || '');
+}
 function pkTypeSrc(t, sh){
   var en = PK_TYPE_EN[t];
   if (!en) return '';
@@ -11294,7 +11484,9 @@ function pkSetShape(v){ try { localStorage.setItem('pk_icon_shape', v==='circle'
 /* 展示卡内属性图标：主属性 + 副属性并排；副属性为空则只显示主属性
    「方形 / 圆形」开关决定图标来源（sv/ 或 swsh/） */
 function pkTypeIconsHTML(r){
-  if (!pkIsPkm(r)) return '';
+  /* v130：原来写死只给「30周年冰箱贴」，导致「全图鉴金属徽章」这类同样带属性的系列
+     卡片上没有属性图标。现在改为「宝可梦 IP + 确实有属性字段」即可。 */
+  if (!r || r['IP'] !== PK_IP) return '';
   var t1 = r['属性'] || '', t2 = r['副属性'] || '';
   if (!t1 && !t2) return '';
   var sh = pkShape();
@@ -11421,6 +11613,44 @@ function seriesItems(name){
   /* v58：书籍/杂志归文渊斋管，系列详情里不显示它们 */
   return store.collection.rows.filter(function(r){ return r['系列']===name && LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
 }
+/* v134：从系列里「添加物品」时要带上的上下文。
+   系列详情的「＋」和顶栏「+藏品」共用这一份（以前各写一遍，容易跑偏）。
+     · 系列：必带
+     · IP：系列记录的 所属IP，没有就取系列内任意一件
+     · 大类：跟随当前「按类别」的大类，否则取系列内任意一件
+     · 小类：系列内选中的类型 → 按类别的小类 → 系列内任意一件
+     · 子系列：只在用户已选定某个子系列时才带（Road trip 有 徽章/冰箱贴/行李牌，
+       瞎猜一个反而错，留空让用户自己选）
+     · 版本：仅「30周年冰箱贴」—— 在「贴纸」视图里加的新条目也该是贴纸版 */
+function seriesAddPrefill(se){
+  var pf = {};
+  if (!se) return pf;
+  var sname = se['系列名称'] || '';
+  var its = seriesItems(sname);
+  pf['系列'] = sname;
+  var ip = se['所属IP'] || (its.filter(function(r){ return r['IP']; })[0]||{})['IP'] || '';
+  if (ip) pf['IP'] = ip;
+  var cat = (ui.collection.mode==='cat' && ui.collection.cat) ? ui.collection.cat
+          : ((its.filter(function(r){ return r['大类']; })[0]||{})['大类']||'');
+  if (cat) pf['大类'] = cat;
+  var sub = ui.collection.seriesSub
+          || ((ui.collection.mode==='cat') ? (ui.collection.sub||'') : '')
+          || ((its.filter(function(r){ return r['小类']; })[0]||{})['小类']||'');
+  if (sub) pf['小类'] = sub;
+  if (ui.collection.seriesChild) pf['子系列'] = ui.collection.seriesChild;
+  if (pkIsVerSeries(se)) pf['版本'] = (ui.collection.seriesVer==='贴纸') ? '贴纸' : '冰箱贴';
+  /* v137：系列里新录入的条目默认「云游」，不是「在库」——
+     系列（尤其是图鉴那种成百上千个的）通常是先把「要收的清单」建起来，
+     再逐个勾在库。默认在库的话，1025 个条目得一个个取消，完全没法用。
+     勾了「在库」时 clearOwnedConflicts 会自动把云游去掉，所以两种用法都顺。 */
+  pf['状态'] = ['云游'];
+  /* 云游＝未入手，持有数写死 0。
+     ⚠️ 必须在这里（= 预填里）定死：openForm 里那条「持有默认」只在**持有为空**时才生效，
+        一条残留草稿里的「持有:1」会把它整条跳过（实测过），于是云游条目会显示成持有 1。
+        放进预填就能压过草稿（v133 起预填优先级最高）。勾「在库」时会被自动改成 1。 */
+  pf['持有'] = 0;
+  return pf;
+}
 function sortByNo(items){
   function key(r){
     var v=String(r['编号']||'').replace(/^[#＃]/,'').trim();
@@ -11444,6 +11674,26 @@ function missingNos(items, target){
   for(var i=1;i<=target;i++) if(!have[i]) miss.push(i);   /* 存原始整数，显示时再按目标位数补零 */
   return miss;
 }
+/* v131：把条目按「号码」归并 —— 一个号码就是一个槽位。
+   同一个号码可能有多个形态（超级进化 / 地区形态 / 未知图腾 A~Z…），
+   所以统计要看号码、不看行数：
+     · 号码下还有任意一条 → 这个号码就不算缺
+     · 号码下任意一条是「在库」→ 这个号码就算收到
+   （原来只认 formCode 为空的那一条，于是把未知图腾的基础条删掉后，
+     整个 0201 被判成缺号、还显示成「待录入」且删不掉。）
+   返回：[{no: 号码整数, owned: 是否收到, rep: 代表条目（优先基础形态）}] */
+function pkSlotStats(items){
+  var byNo = {}, order = [];
+  (items || []).forEach(function(r){
+    var n = parseInt(String(r['编号']||'').replace(/^[#＃]/,''), 10);
+    if (isNaN(n)) return;
+    if (!byNo[n]){ byNo[n] = { no:n, owned:false, rep:r }; order.push(n); }
+    var e = byNo[n];
+    if (!String(r.formCode||'') && String(e.rep.formCode||'')) e.rep = r;   /* 基础形态优先当代表 */
+    if (hasStatus(r, '在库')) e.owned = true;
+  });
+  return order.map(function(n){ return byNo[n]; });
+}
 function renderSeriesMode(){
   /* v96k：号码索引已取消，进系列一律直接渲染系列详情 */
   if (ui.collection.seriesId) return renderSeriesDetail();
@@ -11457,6 +11707,9 @@ function renderSeriesMode(){
     var name=se['系列名称']||'未命名';
     var target=num(se['目标数量']);
     var items=seriesItems(name);
+    /* v132：冰箱贴系列分「冰箱贴版 / 贴纸版」两份记录，系列卡上的在库数按当前版本算，
+       否则两份叠在一起会翻倍。 */
+    if (pkIsVerSeries(se)) items=items.filter(function(r){ return pkVerOf(r)===pkCurVer(); });
     var owned=ownedCount(items);
     var pct= target? Math.min(100, Math.round(owned/target*100)) : 0;
     return '<div class="ipcard" data-act="seriesopen" data-id="'+esc(se._id)+'"'+
@@ -11496,7 +11749,10 @@ function seriesCloudWall(rows, cols){
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
       '<div class="cover'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
       (hasCover(r)?'':'<b>'+esc(String(t).slice(0,1))+'</b>')+
-      '<span class="tag">'+esc(r['大类']||'')+'</span>'+
+      '<span class="tag">'+esc(pkCardTag(r))+'</span>'+
+      /* v132：只有「贴纸版」加角标 —— 冰箱贴版是默认版本，不加免得 1300 张卡都挂个牌子。
+         两份记录名字/封面一模一样，没这个角标在平铺列表里根本分不出谁是谁。
+         v134：角标去掉了 —— 30周年冰箱贴的左上角标签本身就直接写「冰箱贴 / 贴纸」。 */
       (no?'<span class="no">'+esc(no)+'</span>':'')+
       (num(r['星级'])?'<span class="score">'+stars(r['星级'])+'</span>':'')+
       pkQuickBtnsHTML(r)+
@@ -11655,10 +11911,18 @@ function renderSeriesDetail(){
   if (!se){ ui.collection.seriesId=null; return renderSeriesMode(); }
   var name=se['系列名称']||'未命名';
   var target=num(se['目标数量']);
+  /* v132：冰箱贴系列 —— 版本切换（冰箱贴版 / 贴纸版）。进系列时把视图状态校正到合法值。 */
+  var isVer = pkIsVerSeries(se);
+  if (isVer && ui.collection.seriesVer!=='贴纸') ui.collection.seriesVer='冰箱贴';
   /* v77：宝可梦冰箱贴按「图鉴号 + 基础形态优先」排序，保证无副编号的那张排在其他形态前面
      （通用 sortByNo 在同号时按名称排，会把基础形态插到形态中间） */
-  var isPk = pkIsPkmSeries(se);
+  /* v130：由 pkIsPkmSeries（写死冰箱贴）改为 pkLikeSeries —— 任何「宝可梦 IP + 带图鉴字段」
+     的系列都享受这整套：属性/形态/图鉴组/世代组 筛选栏、按图鉴号排序、进度只数基础形态。 */
+  var isPk = pkLikeSeries(se);
   var itemsAll = isPk ? pkSortItems(seriesItems(name)) : sortByNo(seriesItems(name));
+  /* v132：只保留当前版本的记录 —— 收集进度、筛选栏计数、子项墙全都跟着它走。
+     （两份记录的名字 / 编号 / 封面完全相同，靠 版本 字段区分。） */
+  if (isVer) itemsAll = itemsAll.filter(function(r){ return pkVerOf(r)===ui.collection.seriesVer; });
   /* v110：系列内按「类别 / 物品类型（小类）」筛选。
      只有当系列里确实存在多种类型时才收窄 —— 单一类型（如 30 周年冰箱贴）不过滤、
      也不显示下拉框，免得个别漏填 大类/小类 的记录被误排除、把 1025 的收集进度算少。 */
@@ -11684,14 +11948,15 @@ function renderSeriesDetail(){
   if (fcs.seriesChild) itemsAll = itemsAll.filter(function(r){ return (r['子系列']||'')===fcs.seriesChild; });
   var inLib=itemsAll.filter(function(r){ return hasStatus(r,'在库'); });
   var miss= target ? missingNos(itemsAll, target) : [];
-  /* v77：宝可梦冰箱贴 —— 完成度只数 base 槽位（formCode 为空），形态卡不计入目标 */
-  var pkBase = isPk ? itemsAll.filter(function(r){ return !String(r.formCode||''); }) : itemsAll;
-  /* 普通系列「已有」按在库实物件数（持有累加）；宝可梦冰箱贴同样按「在库」实物体数（形态卡不计入目标） */
-  var pkOwned = isPk ? pkBase.filter(function(r){ return hasStatus(r,'在库'); }).length : 0;
+  /* v77/v131：宝可梦图鉴系列 —— 完成度按**号码**算（一个号码一个槽位），形态卡不额外加数。
+     v131 起不再「只看 formCode 为空的基础条」：只要这个号码下还有任意一条就不算缺号，
+     只要任意一条是「在库」这个号码就算收到（未知图腾只收了几个字母也算收到）。 */
+  var pkSlots = isPk ? pkSlotStats(itemsAll) : null;
+  var pkOwned = isPk ? pkSlots.filter(function(e){ return e.owned; }).length : 0;
   var cntAll = isPk ? pkOwned : ownedCount(itemsAll);
   var pct = target ? Math.min(100, Math.round(cntAll/target*100)) : 0;
   if (isPk){
-    miss = target ? missingNos(pkBase, target) : [];
+    miss = target ? missingNos(pkSlots.map(function(e){ return { '编号': String(e.no) }; }), target) : [];
   }
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+esc(name)+'</h2>'+
@@ -11779,7 +12044,21 @@ function renderSeriesDetail(){
       '<option value=""'+(fcs.seriesChild?'':' selected')+'>全部子系列</option>'+
       childs.map(function(c){ return '<option value="'+esc(c)+'"'+(fcs.seriesChild===c?' selected':'')+'>'+esc(c)+'</option>'; }).join('')+
     '</select>') : '';
-  h += '<div class="segline" style="margin:0 0 14px"><div class="seg seriesfilt">'+
+  /* v132：冰箱贴 / 贴纸 双版本切换（只对「30周年冰箱贴」出现）。
+     数量按号码算不合适（两份都满 1025），所以这里显示条目数，点一下即切。 */
+  var verSeg = '';
+  if (isVer){
+    var allForVer = seriesItems(name);
+    var vcnt = {};
+    allForVer.forEach(function(r){ var v=pkVerOf(r); vcnt[v]=(vcnt[v]||0)+1; });
+    verSeg = '<div class="seg seriesver">'+PK_VERSIONS.map(function(v){
+      return '<button type="button" data-act="seriesver" data-v="'+esc(v)+'"'+
+        ' class="'+(ui.collection.seriesVer===v?'on':'')+'"'+
+        ' title="切到「'+esc(v)+'版」（在库 / 想收 与另一版各自独立记录）">'+
+        esc(v)+'<i class="fb">'+(vcnt[v]||0)+'</i></button>';
+    }).join('')+'</div>';
+  }
+  h += '<div class="segline" style="margin:0 0 14px">'+verSeg+'<div class="seg seriesfilt">'+
     segBtn('全部', itemsAll.length)+segBtn('在库', inLib.length)+
     segBtn('云游', wandering.length)+segBtn('想收', wishedAll.length)+hiddenSeg()+'</div>'+
     subSel+childSel+
@@ -12029,6 +12308,12 @@ function openForm(key, id, opts){
   if ((key==='collection' || key==='av') && !id){
     var _dcat = seed['大类'] || editing.vals['大类'] || '';
     if (_dcat) draftKey += '_' + _dcat;
+    /* v133：从某个系列点「＋」进来的，草稿再按系列隔离。
+       原来只按大类隔离 → 同大类下所有系列共用一份草稿，于是在 Road Trip 里录半截、
+       跑去欢趣白昼录半截，两份会互相覆盖；再从系列进来还会把上一次的「名称」等
+       一起带出来，看着像「没填对」。按系列分开之后，各系列的半截草稿互不打扰。 */
+    var _dser = (opts && opts.prefill && opts.prefill['系列']) || '';
+    if (_dser) draftKey += '_' + _dser;
   }
   /* v96q 修复：saveDraft 在 openForm 作用域内声明一次，供 wireFormControls 与下方
      端盒/云游 联动 IIFE 共用——之前只在 wireFormControls 的参数里定义，IIFE 里引用的是
@@ -12052,6 +12337,16 @@ function openForm(key, id, opts){
       editing.vals['大类'] = opts.prefill['大类'];
     }
   } catch(e){}
+  /* v133（血泪）：草稿绝不能盖掉「入口自带的上下文」。
+     从系列详情点「＋」进来时会预填 系列 / IP / 小类 / 子系列，但一条上次没写完的草稿
+     （键 = 模块 + 大类，同大类的所有系列共用一份）会在上面把它覆盖成上一次的系列 ——
+     典型症状：进「Road Trip 第二弹」点添加物品，表单里却写着「欢趣白昼」。
+     所以读完草稿之后，把本次预填的字段**再盖回去**（预填优先级最高）。 */
+  if (opts && opts.prefill){
+    Object.keys(opts.prefill).forEach(function(k){
+      if (opts.prefill[k] != null) editing.vals[k] = opts.prefill[k];
+    });
+  }
 
   /* 持有默认：新藏品默认状态是在库，没填过持有则默认 1（手里至少这一件）；
      v96d：云游（未入手）状态的新藏品默认持有 0，而不是留空。 */
@@ -12075,7 +12370,7 @@ function openForm(key, id, opts){
       '<button class="guiwei" type="button" data-act="guiwei" title="清空所有已填信息，归位到默认">归位</button>'+
       '<button class="x" type="button" data-x="1" aria-label="关闭">×</button>'+
     '</div></div>'+
-    '<div class="fgrid'+formGridClass(key, editing.vals)+'">'+activeFields(key, editing.vals).map(function(f){ return fieldHTML(f, editing.vals[f.k]); }).join('')+'</div>'+
+    '<div class="fgrid'+formGridClass(key, editing.vals)+'">'+fieldsToGridHTML(activeFields(key, editing.vals), editing.vals, formGridClass(key, editing.vals))+'</div>'+
     '<div class="sheet-actions">'+
     (id?'<button class="btn ghost" type="button" id="delBtn" style="margin-right:auto;color:var(--red)">删除</button>':'')+
     '<button class="btn ghost" type="button" data-x="1">取消</button>'+
@@ -12285,6 +12580,35 @@ function openForm(key, id, opts){
     });
   };
 }
+/* v133：把一串字段渲染成表单栅格。
+   相邻且 `stack` 相同的字段合并进**同一个格子**（格内上下叠放）——
+   目前用于「端盒 / 隐藏款」：原来各占 25% 横排，现在合成一格竖排，
+   省下的那一格给「品牌」下拉。格子的宽度与 rowstart 取组内第一个字段的。 */
+/* v135：`gridCls` 仅为兼容调用方保留（判定已取消，见下）。
+   ⚠️ 曾经给「端盒」加过 rowstart（强制另起一行），那是**多余**的：
+      实测（4 栏与 12 栏两种表单都量过）「状态」本来就会从新的一行开头排
+      （它前面那行 编号/持有/购入价格/购入渠道 正好占满），
+      所以叠放格 + 品牌直接跟在状态后面就正好凑满一行；一旦强制另起一行，
+      反而把「端盒/隐藏款」和「品牌」推到了下一行 —— 就是用户看到的那个换行。 */
+function fieldsToGridHTML(fields, vals, gridCls){
+  var out = '', list = fields || [], i = 0;
+  while (i < list.length){
+    var f = list[i];
+    if (f && f.stack){
+      var grp = [];
+      while (i < list.length && list[i] && list[i].stack === f.stack){ grp.push(list[i]); i++; }
+      var span = fieldSpanOf(f, curFieldLayout());
+      out += '<div class="f stackcell'+(span===1?' q':'')+(span===3?' w3':'')+(span===4?' full':'')+
+             (f.rowstart?' rs':'')+'">'+
+        grp.map(function(g){ return fieldHTML(g, vals ? vals[g.k] : undefined); }).join('')+
+      '</div>';
+    } else {
+      out += fieldHTML(f, vals ? vals[f.k] : undefined);
+      i++;
+    }
+  }
+  return out;
+}
 function fieldHTML(f, v){
   /* v75fix：quarter:true 或自定义字段 w===1 → .q（占 1 格＝25%）；rowstart:true → .rs（强制新行开头）。
      一行按 4 格算：默认 2 格(50%)，w=1 时 1 格(25%)。
@@ -12480,9 +12804,10 @@ function fieldHTML(f, v){
     }
     body+='</div>';
   } else if (f.t==='dyn'){
+    /* v136：不再在下面藏一个「自定义」文本框 —— 新增入口就是下拉里最后那个
+       「＋ 新增…」选项，选中它 → 弹输入框（见 wireFormControls 的 .dynwrap 处理）。 */
     body='<div class="dynwrap" data-k="'+f.k+'" data-src="'+f.src+'">'+
       '<select data-dyn-sel="'+f.k+'"><option value="">（无）</option></select>'+
-      '<input data-dyn-cus="'+f.k+'" type="text" placeholder="自定义…" style="display:none" autocomplete="off">'+
       '</div>';
   } else if (f.t==='geopick'){
     var isAmap = (f.mode==='amap');
@@ -12495,6 +12820,19 @@ function fieldHTML(f, v){
       '<span class="imgnote">'+esc(isAmap?'输入店名 / 城市搜高德自动填坐标，或点地图手动选':'输入地点名搜高德自动填坐标，或在地球上手动选')+'</span>';
   } else if (f.t==='check'){
     body='<label class="checkrow"><input data-f="'+f.k+'" type="checkbox"'+(v?' checked':'')+'>'+esc(f.k)+'</label>';
+  } else if (f.t==='brand'){
+    /* v133：品牌 —— 下拉候选 = 登记过的品牌 ∪ 数据里用过的品牌（brandOptionsAll）；
+       老记录里的品牌若还没登记过，也临时插进列表显示，不会被悄悄清空。
+       v136：新增入口改为**下拉里的「＋ 新增品牌…」**（原来右边那个加号按钮已去掉，
+       跟小类的自定义保持一致）。选中它 → 弹输入框 → 写进全局清单 → 所有物品都能选到。 */
+    var _bcur = String(v == null ? '' : v);
+    var _bopts = brandOptionsAll();
+    if (_bcur && _bopts.indexOf(_bcur) < 0) _bopts = [_bcur].concat(_bopts);
+    body='<select data-f="'+f.k+'" data-brand="1">'+
+        '<option value=""'+(_bcur?'':' selected')+'>（无）</option>'+
+        _bopts.map(function(b){ return '<option value="'+esc(b)+'"'+(b===_bcur?' selected':'')+'>'+esc(b)+'</option>'; }).join('')+
+        '<option value="__custom__">＋ 新增品牌…</option>'+
+      '</select>';
   } else if (f.t==='checks'){
     var arr=(v||[]);
     var rowCls = (f.statusRow ? ' checksrow statusrow' : ' checksrow');
