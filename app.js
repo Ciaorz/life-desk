@@ -1057,6 +1057,35 @@ async function storageSaveV2(snapshot){
       if (!okw) okAll = false;
     }
   }
+  /* v145：把「已经没有记录」的分类文件清空。
+     ------------------------------------------------------------------
+     上面那个循环是 `for (var cat in buckets)`，只写【有行的】分片。于是
+     「把某个分类的最后一条记录删掉」时，那个文件压根不会被重写，磁盘上还留着旧内容 ——
+     下次加载（storageLoadV2 按 idx.shards[cat].file 逐个读）又把它读回来，
+     表现就是「这条删不掉，过一会儿自己又冒出来了」。
+     实测案例（2026-10-04）：用户那本「中国古代文化常识辞典」在两个分片里各有一份
+     （书籍-data.json 的未分类一份 + 工具语言-data.json 一份，都来自 2026-09-18 的分片迁移），
+     删掉任意一份都会让它变成空分片 → 文件不被重写 → 复活。两份都这样 ⇒ 怎么删都删不掉。
+     这里补一遍：注册过、但本次没有任何行的分片，如果盘上还有内容，就写成 rows:[]。
+     ⚠️ 只动「文件已经存在且还有行」的：不新建文件，免得给每个注册过但没用过的
+       分片都留一个空 data.json 在 data/ 里。 */
+  for (var eCat in idx.shards){
+    if (!Object.prototype.hasOwnProperty.call(idx.shards, eCat)) continue;
+    if (buckets[eCat]) continue;                       /* 有行的上面那个循环已经写过 */
+    var eSh = idx.shards[eCat] || {};
+    if (eSh.dirShard) continue;                        /* ip / series 逐实体处理，下面 saveEntityModule 管 */
+    var eFile = eSh.file || shardFileName(eCat);
+    try {
+      var eOld = await fsReadJSON(eFile);
+      if (eOld && (eOld.rows || []).length){
+        var okE = await fsWriteJSON(eFile, {
+          schema: SCHEMA_V2, cat: (eOld.cat || eCat),
+          module: (eSh.module || eOld.module || ''), rows: []
+        });
+        if (!okE) okAll = false;
+      }
+    } catch(e){}
+  }
   /* v68：逐实体写 IP / 系列（每个实体一个文件；改名 / 删除会自动挪文件与图片文件夹、更新引用） */
   await saveEntityModule('ip', snapshot.ip || []);
   await saveEntityModule('series', snapshot.series || []);
@@ -3150,6 +3179,10 @@ function cloudRowToLocal(r){
   rec._id = id;
   rec._upd = Number(d._upd) || Number(r.updated_at) || 0;
   rec._rev = Math.max(Number(d._rev) || 0, Number(r.rev) || 0);
+  /* v144：日期一律补零。**合并**（cloudRowsToSnap）和**台账**（cloudHashPut）都走这一个函数，
+     所以两边一定同形 —— 不然云端存着 `2026-10-2`、本机规整成 `2026-10-02` 时，
+     台账与本机内容会永远对不上，白报「待上传」。 */
+  normDateFields(rec);
   return rec;
 }
 function cloudBase(){
@@ -3769,7 +3802,12 @@ function mergeLoadData(localData, cloudData){
           o[k] = cv; return;
         }
         if (JSON.stringify(cv) === JSON.stringify(lv)){ o[k] = lv; return; }
-        o[k] = (cupd > lupd) ? cv : lv;                      /* 真冲突：整条 _upd 较新者赢 */
+        /* v144：整条 _upd **相同时改成云端赢**（原来本机赢）。
+           为什么：批量编辑以前不打时间戳，会留下「两端内容不同、_upd 却一样」的记录；
+           本机赢的话拉取后本机仍是自己那份，而台账记的是云端那份 → 本机永远报「待上传 N 条」，
+           而且谁也不认谁新、永远同步不上。云端是共享真相，平手就让它赢。
+           （本机真的改过时 _upd 一定更大 —— v144 起批量编辑也会打时间戳。） */
+        o[k] = (cupd >= lupd) ? cv : lv;                      /* 真冲突：整条 _upd 较新者赢 */
       });
       merged.push(o);
     });
@@ -5914,11 +5952,34 @@ function tryMigrateFoodRecipe(){
   migrateFoodToRecipe();
 }
 
+/* v144：日期统一成「补零的 YYYY-MM-DD」。
+   为什么必须做：`2026-10-2` 和 `2026-10-02` 是同一个日期、两个不同的字符串，
+   在「内容指纹（cloudRowSig）」和「合并时整条 _upd 较新者赢」这两处都会被当成两份不同的数据 →
+   两端 _upd 相同却各留一份，于是**永远**显示「待上传 N 条」，而且永远同步不上（实测：手机 25 条）。 */
+var DATE_FIELDS = { '购入日期':1, '出行日期':1, '开始日期':1, '目标日期':1,
+                    '打卡日期':1, '记录日期':1, '完成日期':1 };
+function normDateStr(v){
+  if (v == null || v === '') return v;
+  var s = String(v).trim();
+  var m = s.match(/^(\d{4})[-.\/](\d{1,2})[-.\/](\d{1,2})$/);
+  if (!m) return v;                       /* 只认「年-月-日」；「2026」「2026-10」原样留着 */
+  var out = m[1] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[3]).slice(-2);
+  return (out === s) ? v : out;           /* 已经规范就原样返回，避免无谓改动 */
+}
+/* 就地规范一行里的日期字段 */
+function normDateFields(r){
+  if (!r) return r;
+  Object.keys(DATE_FIELDS).forEach(function(k){
+    if (r[k] != null && r[k] !== '') r[k] = normDateStr(r[k]);
+  });
+  return r;
+}
 /* v13：旧大类名重命名（观影→电影，音乐→留声机）；新建/筛选/统计时把旧值规范化 */
 function normalizeRow(r){
   if (!r) return r;
   var c = r['大类'];
   if (c && LEGACY_CATS[c]) r['大类'] = LEGACY_CATS[c];
+  normDateFields(r);                      /* v144：顺手把日期补零，根治「等价却不同串」的假差异 */
   return r;
 }
 function normalizeRows(rows){
@@ -6445,8 +6506,11 @@ function localUpsert(key, id, vals){
     else if (f.t==='multi') row[f.k] = (v && v.length) ? v : null;
     else if (f.t==='check') row[f.k] = !!v;
     else if (f.t==='stars' || f.t==='number' || f.t==='currency') row[f.k] = num(v);
-    else if (f.t==='date') row[f.k] = v ? String(v) : null;
-    else row[f.k] = (v===''||v==null) ? null : v;
+    else if (f.t==='date') row[f.k] = v ? normDateStr(String(v)) : null;
+    else {
+      /* v144：t:'year-date'（购入日期）等普通文本字段里的日期，落库前统一补零 */
+      row[f.k] = (v===''||v==null) ? null : (DATE_FIELDS[f.k] ? normDateStr(v) : v);
+    }
   });
   /* v49：collection 的书籍/杂志录入 schema 不渲染「大类」字段，但存储仍需 大类，
      否则文渊斋「我的书架」按 大类 过滤时找不到它们 */
@@ -14110,6 +14174,13 @@ function detailStep(dir){
 function patchRowFields(key, id, patch){
   var row=(store[key].rows||[]).filter(function(r){ return String(r._id)===String(id); })[0];
   if (!row) return false;
+  /* v144：日期先补零再比 —— 否则用户把 `2026-10-2` 改成 `2026-10-02`（同一日期）
+     会被当成真改动，白刷 _upd、白报一条「待上传」。 */
+  patch = patch || {};
+  Object.keys(patch).forEach(function(k){
+    var v = patch[k];
+    if (v !== '' && v != null && DATE_FIELDS[k]) patch[k] = normDateStr(v);
+  });
   /* v127：值没变 → 不刷 _upd、不落盘。
      这条路径是快速按钮（在库/想收/收服）和详情页内联小编辑走的，
      「点一下再点回来」几乎全发生在这里 —— 以前每次都白刷时间戳，
@@ -14477,8 +14548,20 @@ function applyBatchPatch(ids, patch){
   }
   /* 本地 / 文件 / gh：一次性改完所有行再统一落盘（避免每行全量重写） */
   var set={}; ids.forEach(function(id){ set[String(id)]=true; });
+  var now = Date.now();
   (store[key].rows||[]).forEach(function(r){
-    if (set[String(r._id)]){ Object.keys(patch).forEach(function(k){ r[k] = (patch[k]==null)?null:patch[k]; }); }
+    if (!set[String(r._id)]) return;
+    var changed = false;
+    Object.keys(patch).forEach(function(k){
+      var nv = (patch[k]==null) ? null : patch[k];
+      if (DATE_FIELDS[k]) nv = normDateStr(nv);        /* v144：日期先补零，免得写出「等价不同串」 */
+      if (cloudStableStr(r[k]) !== cloudStableStr(nv)){ r[k] = nv; changed = true; }
+    });
+    /* v144：批量编辑以前**完全不动 _upd / _rev**，改动对「增量同步」是隐形的 ——
+       上传时靠指纹能发现「内容变了」，所以云端会更新；但另一端拉取时看到
+       _upd 与本机相同就不覆盖 → 双端各留一份、永远报「待上传」，还会互相盖。
+       现在真的改了内容就打新时间戳；值没变的行不打（免得又出现「无改动也报待上传」）。 */
+    if (changed){ r._upd = now; r._rev = (Number(r._rev) || 0) + 1; }
   });
   if (MODE==='gh'){ queueGhSave(); localCacheSet(); }
   else if (MODE==='localfile'){ queueLocalSave(); }
