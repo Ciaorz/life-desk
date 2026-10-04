@@ -14165,7 +14165,11 @@ function openItemDetail(key, id){
       '<div><u>'+(row['端盒']?'端盒价':'价格')+'</u>'+ed('购入价格', price?esc('¥'+price.toFixed(2)):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
       '<div><u>存放位置</u>'+ed('存储地点', loc?esc(loc):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没指定</span>')+'</div>'+
       '<div><u>购入渠道</u>'+ed('购入渠道', ch?esc(ch):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
-      '<div><u>持有</u>'+ed('持有', function(){ var h=effHold(row); return h!=null?esc(h):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>'; }())+'</div>'+
+      '<div class="holdcell"><u>持有</u><div class="holdrow">'+
+        '<button type="button" class="hstep" data-hold="-1" title="减 1 件"'+(num(effHold(row))<=0?' disabled':'')+'>−</button>'+
+        ed('持有', function(){ var h=effHold(row); return h!=null?esc(h):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>'; }())+
+        '<button type="button" class="hstep" data-hold="1" title="加 1 件">＋</button>'+
+      '</div></div>'+
     '</div></div>'+
     (row['短评']?'<p class="dnote">'+esc(row['短评'])+'</p>':'')+
     '<div class="sheet-actions">'+
@@ -14180,6 +14184,12 @@ function openItemDetail(key, id){
   });
   host.querySelectorAll('[data-edin]').forEach(function(n){
     n.onclick=function(e){ e.stopPropagation(); beginInlineEdit(key, id, n.getAttribute('data-edin'), n); };
+  });
+  host.querySelectorAll('[data-hold]').forEach(function(n){
+    n.onclick=function(e){
+      e.stopPropagation();
+      bumpHold(key, id, parseInt(n.getAttribute('data-hold'),10));
+    };
   });
   bindSheetBackdrop(host);
   $('dEdit').onclick=function(){ closeSheet(); openForm(key, id); };
@@ -14196,6 +14206,28 @@ function openItemDetail(key, id){
     ui.view='collection'; ui.collection.mode='ip'; ui.collection.ipId=target._id;
     render();
   };
+}
+/* v143：详情卡「持有」的 ＋ / − —— 一次点击就改，不必先点开输入框再打字。
+   基准值取 effHold（在库没填过=1、云游=0、其它未填=0），最低 0；
+   写回的是**显式数字**（0 也写 0，不是 null），这样「减到 0」是明确的记录而非清空。
+   改完重画详情卡（数字立刻变），并刷新背后的列表（在库件数是按持有累加的）。 */
+function bumpHold(key, id, delta){
+  var row=(store[key].rows||[]).filter(function(r){ return String(r._id)===String(id); })[0];
+  if (!row || !delta) return;
+  var raw = effHold(row);
+  var cur = (raw==null || raw==='') ? 0 : num(raw);
+  var v = Math.max(0, Math.round(cur) + delta);
+  if (v === Math.round(cur)) return;              /* 已经在 0，再点减号什么都不做 */
+  if (MODE==='db'){
+    var vals={};
+    activeFields(key, row).forEach(function(f){ vals[f.k]=fieldVal(row,f); });
+    vals['持有']=v;
+    updateRow(key, id, vals, function(){ openItemDetail(key, id); });
+    return;
+  }
+  if (!patchRowFields(key, id, {'持有':v})) return;
+  render();                     /* 背后的列表 / 统计同步 */
+  openItemDetail(key, id);      /* 重画详情卡 */
 }
 /* v62：购入信息四项的原地编辑 —— 点一下变成输入框，回车/失焦保存，Esc 取消 */
 function beginInlineEdit(key, id, field, bEl){
@@ -14323,14 +14355,50 @@ function batchRow(k, type, ph){
   return '<div class="batchrow"><label class="bchk"><input type="checkbox" data-bf="'+k+'"> '+k+'</label>'+
     '<div class="bin"><input type="'+(type==='number'?'number':'text')+'" data-bv="'+k+'" placeholder="'+ph+'"></div></div>';
 }
+/* v143：批量改「大类 / 小类」。
+   候选值来源与表单一致：大类 = CATS ∪ 用户新增大类 ∪ 数据里用过的；
+   小类 = SUBS[大类] ∪ 该大类下数据里用过的（同 dynOptions('sub')）。
+   小类下拉**跟着大类联动**；大类留「（不修改）」时列出全部小类，方便只改小类。 */
+function batchCatList(){
+  var out = CATS.slice();
+  (USER_CATS||[]).forEach(function(c){ if (c && out.indexOf(c)<0) out.push(c); });
+  (store.collection.rows||[]).forEach(function(r){ var c=r['大类']; if (c && out.indexOf(c)<0) out.push(c); });
+  return out;
+}
+function batchSubList(cat){
+  var out=[], seen={};
+  function add(s){ if (s && !seen[s]){ seen[s]=1; out.push(s); } }
+  if (cat){
+    (SUBS[cat]||[]).forEach(add);
+    (store.collection.rows||[]).forEach(function(r){
+      if (String(r['大类']||'')===String(cat)) add(r['小类']);
+    });
+  } else {
+    /* 没选大类：预定义全量 + 数据里用过的全都列出来 */
+    Object.keys(SUBS).forEach(function(k){ (SUBS[k]||[]).forEach(add); });
+    (store.collection.rows||[]).forEach(function(r){ add(r['小类']); });
+  }
+  return out;
+}
+function batchOpts(list){
+  return '<option value="">（不修改）</option>'+
+    list.map(function(v){ return '<option value="'+esc(v)+'">'+esc(v)+'</option>'; }).join('');
+}
+function batchCatRows(){
+  return '<div class="batchrow"><label class="bchk"><input type="checkbox" data-bf="大类"> 大类</label>'+
+      '<div class="bin"><select data-bv="大类" data-bsel="cat">'+batchOpts(batchCatList())+'</select></div></div>'+
+    '<div class="batchrow"><label class="bchk"><input type="checkbox" data-bf="小类"> 小类</label>'+
+      '<div class="bin"><select data-bv="小类" data-bsel="sub">'+batchOpts(batchSubList(''))+'</select></div></div>';
+}
 /* 打开批量编辑面板 */
 function openBatchEdit(){
   var ids=selectedIds(), host=$('sheetHost');
   var stOpts=STATES_OWN.map(function(s){ return '<label class="stchk"><input type="checkbox" data-bf-status="'+esc(s)+'"> '+esc(s)+'</label>'; }).join('');
   host.innerHTML='<div class="sheet"><div class="sheet-head"><div><p>批量编辑</p><h2>写入 '+ids.length+' 件藏品</h2></div>'+
     '<button class="x" type="button" data-x="1" aria-label="关闭">×</button></div>'+
-    '<div class="batchnote">只写入勾选的字段，未勾选的保持原样；价格与持有留空则不写。</div>'+
+    '<div class="batchnote">只写入勾选的字段，未勾选的保持原样；价格与持有留空则不写，大类 / 小类选「（不修改）」则不写。</div>'+
     '<div class="batchfields">'+
+      batchCatRows()+
       batchRow('购入价格','number','如 129.00')+
       batchRow('持有','number','如 1')+
       '<div class="batchrow states"><label class="bchk"><input type="checkbox" data-bf="状态"> 状态</label><div class="stchecks">'+stOpts+'</div></div>'+
@@ -14345,6 +14413,15 @@ function openBatchEdit(){
   host.hidden=false;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
   bindSheetBackdrop(host);
+  /* v143：小类下拉跟着所选大类联动；换大类后旧小类不再合法就回落成「（不修改）」 */
+  var catSel=host.querySelector('[data-bsel="cat"]'), subSel=host.querySelector('[data-bsel="sub"]');
+  if (catSel && subSel){
+    catSel.addEventListener('change', function(){
+      var keep=subSel.value, list=batchSubList(catSel.value);
+      subSel.innerHTML=batchOpts(list);
+      if (list.indexOf(keep)>=0) subSel.value=keep;
+    });
+  }
   $('batchApply').onclick=applyBatchEdit;
 }
 /* 应用：把勾选字段合并写入每一个选中项 */
@@ -14361,6 +14438,15 @@ function applyBatchEdit(){
       if ((k==='购入价格'||k==='持有') && !/^-?\d+(\.\d+)?$/.test(v)){ toast(k+' 请填数字'); return; }
       patch[k]=(k==='购入价格'||k==='持有')?num(v):v;
     }
+  });
+  /* v143：大类 / 小类（下拉）。选「（不修改）」= 空值 → 不写这一项。
+     ⚠️ 小类同时是**分片键**：改成一个还没有独立数据文件的小类，
+     保存后这些条目会先落在主文件里，app 会弹「为「xx」新建数据文件」问一句（maybeOfferNewShard）。 */
+  ['大类','小类'].forEach(function(k){
+    if (!checked(k)) return;
+    var el=sheet.querySelector('[data-bv="'+k+'"]');
+    var v=el?String(el.value||'').trim():'';
+    if (v) patch[k]=v;
   });
   if (checked('状态')){
     var st=[]; sheet.querySelectorAll('input[data-bf-status]').forEach(function(c){ if(c.checked) st.push(c.getAttribute('data-bf-status')); });
