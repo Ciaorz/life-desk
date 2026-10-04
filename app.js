@@ -5957,6 +5957,9 @@ var ui = {
        不是用户手动点的。这样清空搜索、取消隐藏款时能自动收回「按系列」，
        避免留下上千条物品平铺；而用户手动点过的选择不会被覆盖。 */
     wallGroupAuto:false,
+    /* v139/v140：筛选 —— `adv` = 已生效的条件 {字段:[值…]}；`advOpen` = 卡片展开着；
+       `advDraft` = 编辑中的条件（点「应用」才写进 adv）。见 openAdv* / advCardHTML()。 */
+    adv:{}, advOpen:false, advDraft:null,
     /* v77：宝可梦 30 周年冰箱贴专用视图状态 */
     pk:{ types:[], both:false, form:'', region:'', group:'', gen:'' }, pkIndex:false, pkGenOpen:{},
     /* v132：「30周年冰箱贴」的版本切换 —— 同一套图鉴拆成「冰箱贴版 / 贴纸版」，
@@ -6746,6 +6749,16 @@ function filtered(key){
     /* v102：IP 下拉筛选 —— 一个类目里可能混着多个 IP，选中后只看这个 IP 的东西 */
     if (f.ipf) rows=rows.filter(function(r){ return (r['IP']||'')===f.ipf; });
     if (f.hidden) rows=rows.filter(function(r){ return !!r['隐藏款']; });   /* v96p：隐藏款筛选 */
+    /* v139：筛选卡的条件 —— 字段之间 AND（逐个筛），字段内部 OR（任一选中值命中即可）。
+       与上面的 大类/小类/IP/搜索 是并列关系，一起叠加。 */
+    var _adv = f.adv || {};
+    Object.keys(_adv).forEach(function(ak){
+      var vals = _adv[ak];
+      if (!vals || !vals.length) return;
+      var def = advFieldByKey(ak);
+      if (!def) return;
+      rows = rows.filter(function(r){ return advMatchRow(r, def, vals); });
+    });
     if (q) rows=rows.filter(function(r){
       return ((r['名称']||'')+' '+(r['IP']||'')+' '+(r['系列']||'')+' '+(r['编号']||'')+' '+(r['存储地点']||'')+' '+(r['购入渠道']||'')+' '+(r['短评']||'')).toLowerCase().indexOf(q)>=0; });
     rows.sort(function(a,b){
@@ -6793,6 +6806,212 @@ function filtered(key){
     rows.sort(function(a,b){ return dstr(b['记录日期']).localeCompare(dstr(a['记录日期'])); });
   }
   return rows;
+}
+
+/* ================= v139/v140：藏品馆「筛选」=================
+   搜索栏后面那个「筛选」按钮 **内嵌** 展开的卡片（`ui.collection.advOpen`，再点一次收起）：
+   只有 大类 / 小类 / IP / 状态 / 品牌 五个字段，每个都支持多选（片子上带条数）。
+   点「应用」后墙上只留同时满足所有字段条件的物品（字段之间 AND、字段内部 OR）。
+   典型用法：IP=宝可梦 + 状态=已预订 → 只看宝可梦里已经预订的。
+   —— 与已有的 大类/小类/IP 下拉/搜索/隐藏款 是并列关系，会一起叠加。
+   ⚠️ `状态` 是数组字段（一条记录可同时挂多个状态），匹配用「有交集」而不是「相等」。
+   ⚠️ 编辑中的选择放在 `ui.collection.advDraft`（不是 adv）—— **点「应用」才写进 adv**，
+      所以收起卡片 / 点 × 都等于「这次没改」。 */
+var ADV_STATUS_ORDER = ['想收','已预订','在库','已出','云游'];
+var ADV_FIELDS = [
+  {k:'大类'}, {k:'小类', countOf:function(d){ return advSubCountMap(d['大类']||[]); }},
+  {k:'IP'},
+  {k:'状态', arr:true, order:ADV_STATUS_ORDER},
+  {k:'品牌'}
+];
+function advFieldByKey(k){
+  for (var i=0;i<ADV_FIELDS.length;i++) if (ADV_FIELDS[i].k===k) return ADV_FIELDS[i];
+  return null;
+}
+/* 候选值的取值范围：全部藏品（书籍/杂志归文渊斋，不算在内）。
+   刻意**不用**当前已生效的筛选去收窄 —— 否则选中一个值之后其它值会消失，就切不回去了
+   （和 v102 那个 IP 下拉踩过的坑一样）。 */
+function advBaseRows(){
+  return store.collection.rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
+}
+function advBoolVal(r, k){ return r[k] ? '1' : '0'; }
+/* 某字段的「值 → 条数」表。默认按字段自身统计；带 `countOf` 的字段自己算
+   （现在只有「小类」用 —— 它要跟着已选的大类收窄）。 */
+function advCountMap(def, draft){
+  if (def.countOf) return def.countOf(draft || {});
+  var cnt = {};
+  advBaseRows().forEach(function(r){
+    if (def.bool){ var b=advBoolVal(r, def.k); cnt[b]=(cnt[b]||0)+1; return; }
+    if (def.arr){ stArr(r).forEach(function(s){ cnt[s]=(cnt[s]||0)+1; }); return; }
+    var v = r[def.k]==null ? '' : String(r[def.k]);
+    if (v) cnt[v]=(cnt[v]||0)+1;
+  });
+  return cnt;
+}
+/* v141：小类归属特定大类 —— 选了「大类」之后，小类的候选只列这些大类下面的。
+   cats 为空（没选大类）时列全部小类，当作快捷入口。 */
+function advSubCountMap(cats){
+  var cnt = {};
+  advBaseRows().forEach(function(r){
+    var s = String(r['小类']||'');
+    if (!s) return;
+    if (cats && cats.length && cats.indexOf(String(r['大类']||''))<0) return;
+    cnt[s] = (cnt[s]||0)+1;
+  });
+  return cnt;
+}
+/* 某个字段的可选值 + 各自条数。已选中的值即使当前一条都没有也保留，方便取消。 */
+function advOptions(def, sel, draft){
+  var cnt = advCountMap(def, draft);
+  var keys = Object.keys(cnt);
+  if (def.order){
+    keys.sort(function(a,b){
+      var ia=def.order.indexOf(a), ib=def.order.indexOf(b);
+      if (ia<0) ia=999; if (ib<0) ib=999;
+      return (ia-ib) || String(a).localeCompare(String(b),'zh');
+    });
+  } else {
+    keys.sort(function(a,b){ return String(a).localeCompare(String(b),'zh'); });
+  }
+  (sel||[]).forEach(function(v){ if (keys.indexOf(v)<0) keys.push(v); });
+  return keys.map(function(v){ return { v:v, n:cnt[v]||0 }; });
+}
+function advMatchRow(r, def, vals){
+  if (!vals || !vals.length) return true;
+  if (def.bool) return vals.indexOf(advBoolVal(r, def.k))>=0;
+  if (def.arr){
+    var a = stArr(r);
+    for (var i=0;i<a.length;i++) if (vals.indexOf(a[i])>=0) return true;
+    return false;
+  }
+  return vals.indexOf(r[def.k]==null ? '' : String(r[def.k]))>=0;
+}
+/* 「筛选」按钮上的数字：已选中的条件值总个数（不是字段数） */
+function advActiveCount(){
+  var a = ui.collection.adv || {}, n = 0;
+  Object.keys(a).forEach(function(k){ n += (a[k]||[]).length; });
+  return n;
+}
+/* 应用一组筛选条件（空 = 取消全部筛选）。
+   规则（v142 明确）：**某个字段没选任何标签 = 这个字段不参与筛选（等于"全部"）**，
+   只有选了具体标签才按选中的那些筛；字段之间 AND、字段内部 OR。
+   与 applyCollectionSearch 一个套路：有筛选时自动切「按物品」平铺
+   —— 用户要的就是「只看符合这些条件的物品」；清空时再自动收回「按系列」。
+   用户手动点过「按物品」（wallGroupAuto=false）就不动他的选择。
+   ⚠️ 应用后**要清掉工具栏上跟卡片同名的快速筛选**（大类 chip / 小类 chip / IP 下拉）：
+   它们和卡片里的条件是两个平行的筛选源，不清就会「卡片里没选 IP、却还在按 IP 筛」。
+   清掉之后，这五个字段的唯一筛选源就是卡片本身 —— 所见即所筛。 */
+function applyCollectionAdv(next){
+  var out = {};
+  Object.keys(next || {}).forEach(function(k){
+    var v = (next[k]||[]).filter(function(x){ return String(x)!==''; });
+    if (v.length) out[k] = v;
+  });
+  ui.collection.adv = out;
+  ui.collection.cat = '';
+  ui.collection.sub = '';
+  ui.collection.ipf = '';
+  ui.collection.page = 1;
+  var on = Object.keys(out).length > 0;
+  if (on){
+    if (!ui.collection.wallGroupAuto){ ui.collection.wallGroup='item'; ui.collection.wallGroupAuto=true; }
+  } else if (ui.collection.wallGroupAuto){
+    ui.collection.wallGroup='series'; ui.collection.wallGroupAuto=false;
+  }
+}
+/* —— v140：内嵌筛选卡 ——
+   卡片直接渲染在搜索栏下面（包在 .panel 里），由 `ui.collection.advOpen` 控制展开/收起。
+   编辑中的选择放 `ui.collection.advDraft`，点「应用」才写进 `adv` 生效。 */
+function advDraftOf(){
+  if (!ui.collection.advDraft) ui.collection.advDraft = {};
+  return ui.collection.advDraft;
+}
+function advDraftCount(d){
+  var n = 0;
+  Object.keys(d||{}).forEach(function(k){ n += (d[k]||[]).length; });
+  return n;
+}
+function advCardHTML(){
+  var d = advDraftOf(), body = '';
+  /* v141：紧凑版 —— 没有标题行、没有总览行；每个字段就是「大类：」+ 一排圆片，
+     标题与选项同行（标签固定宽度，几行自然对齐）。收起卡片用「筛选」按钮本身。 */
+  ADV_FIELDS.forEach(function(def){
+    var sel = d[def.k] || [];
+    var opts = advOptions(def, sel, d);
+    if (!opts.length) return;                    /* 数据里一个值都没有的字段整行不显示 */
+    body += '<div class="advrow">'+
+      '<span class="advlab">'+esc(def.k)+'：</span>'+
+      '<div class="advopts">'+opts.map(function(o){
+        var on = sel.indexOf(o.v)>=0;
+        var lab = def.bool ? (o.v==='1' ? '是' : '否') : o.v;
+        return '<button type="button" class="advopt'+(on?' on':'')+'" data-act="advpick"'+
+          ' data-g="'+esc(def.k)+'" data-v="'+esc(o.v)+'">'+esc(lab)+'<i>'+o.n+'</i></button>';
+      }).join('')+'</div></div>';
+  });
+  var n = advDraftCount(d);
+  return '<div class="advbox" id="advBox">'+
+    (body || '<p class="advempty">还没有可以筛选的字段。</p>')+
+    '<div class="advfoot">'+
+      '<button type="button" class="btn ghost sm" data-act="advclear">清空</button>'+
+      '<button type="button" class="btn primary sm" data-act="advapply">'+(n ? ('应用（'+n+' 项）') : '应用')+'</button>'+
+    '</div></div>';
+}
+/* 只重画卡片本身 —— 点一下条件就整页 render() 的话，藏品馆墙上上千张卡会明显卡顿 */
+function advRepaint(){
+  var box = $('advBox');
+  if (!box || !box.parentNode) return;
+  var tmp = document.createElement('div');
+  tmp.innerHTML = advCardHTML();
+  if (tmp.firstChild) box.parentNode.replaceChild(tmp.firstChild, box);
+}
+function advToggleOpen(){
+  if (ui.collection.advOpen){
+    ui.collection.advOpen = false;
+    ui.collection.advDraft = null;      /* 收起 = 放弃这次没点「应用」的选择 */
+    return;
+  }
+  ui.collection.advOpen = true;
+  var d = {}, cur = ui.collection.adv || {};
+  Object.keys(cur).forEach(function(k){ if ((cur[k]||[]).length) d[k] = cur[k].slice(); });
+  /* v142：把工具栏上那几个「快速筛选」也当成卡片里的标签显示出来 ——
+     大字 chip（大类）/ 小类 chip / IP 下拉，本来就是同一批条件的另一个入口。
+     不并进来的话，卡片上看不到它们、却又在生效，就会出现
+     「我卡片里没选 IP，怎么还在按 IP 筛」的错觉。字段自己的 adv 优先。 */
+  if (!d['大类'] && ui.collection.cat) d['大类'] = [ui.collection.cat];
+  if (!d['小类'] && ui.collection.sub) d['小类'] = [ui.collection.sub];
+  if (!d['IP']   && ui.collection.ipf) d['IP']   = [ui.collection.ipf];
+  /* 小类可能是从「大类」带出来的，但它的归属大类没选上 —— 顺带对齐一次，避免出现
+     「大类：手办 + 小类：徽章」这种筛不出东西的组合。 */
+  if (d['小类'] && d['小类'].length && d['大类'] && d['大类'].length){
+    var map = advSubCountMap(d['大类']);
+    var keep = d['小类'].filter(function(s){ return !!map[s]; });
+    if (keep.length) d['小类'] = keep; else delete d['小类'];
+  }
+  ui.collection.advDraft = d;           /* 从「已生效的条件 + 工具栏快速筛选」开一份草稿 */
+}
+function advPick(g, v){
+  var d = advDraftOf();
+  if (!d[g]) d[g] = [];
+  var i = d[g].indexOf(v);
+  if (i>=0) d[g].splice(i,1); else d[g].push(v);
+  if (!d[g].length) delete d[g];
+  /* v141：小类归属于大类 —— 大类的选择一变，把已经不属于这些大类的小类去掉，
+     免得留下「大类=手办 + 小类=徽章」这种永远筛不出东西的组合。 */
+  if (g==='大类' && d['小类'] && d['小类'].length){
+    var map = advSubCountMap(d['大类']||[]);
+    var keep = d['小类'].filter(function(s){ return !!map[s]; });
+    if (keep.length) d['小类'] = keep; else delete d['小类'];
+  }
+  advRepaint();
+}
+function advClearDraft(){
+  ui.collection.advDraft = {};
+  advRepaint();
+}
+function advApplyDraft(){
+  applyCollectionAdv(advDraftOf());
+  ui.collection.advOpen = false;
+  ui.collection.advDraft = null;
 }
 
 /* ============ 小组件 ============ */
@@ -7224,6 +7443,7 @@ function renderCollection(){
 }
 function renderCatMode(){
   var f=ui.collection, s=store.collection, rows=filtered('collection');
+  var _advN = advActiveCount();          /* v139：筛选按钮上的条数 */
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     /* v112：手机端「按类别 / 按 IP / 按系列」要与「藏品」标题同一行、居右 —— 靠
        .phtxt{display:contents} 把 h2 与 seg 变成同一容器里的两项实现（桌面端结构不变）。
@@ -7238,8 +7458,16 @@ function renderCatMode(){
       '<div class="searchwrap" style="flex:1;min-width:0;margin-bottom:0;display:flex">'+
         '<input class="search" autocomplete="off" id="q_collection" placeholder="搜名称 / IP / 系列 / 地点 / 短评" value="'+esc(f.qDraft!=null?f.qDraft:f.q)+'">'+
         '<button type="button" class="searchgo" data-act="dosearch" data-k="collection" title="执行搜索">搜索</button>'+
+        /* v139/v140：筛选入口 —— 就在搜索栏后面。有生效条件时变实心并带上条数，
+           一眼能看出「现在不全」以及筛了几项；卡片展开时描边高亮，再点一次收起。 */
+        '<button type="button" class="searchgo filtgo'+(f.advOpen?' open':'')+(_advN?' on':'')+'"'+
+          ' data-act="advtoggle"'+
+          ' title="'+(f.advOpen ? '收起筛选' : (_advN ? ('正在筛选 '+_advN+' 项，点开修改') : '按 大类 / 小类 / IP / 状态 / 品牌 筛选'))+'">'+
+          '筛选'+(_advN?(' '+_advN):'')+'</button>'+
       '</div>'+
     '</div>'+
+    /* v140：筛选卡 —— 内嵌在 panel 里、紧跟在搜索栏下面（不是弹层），由 advOpen 控制展开/收起 */
+    (f.advOpen ? advCardHTML() : '')+
     '<div class="chips cat6">'+
     CATS.map(function(t){
       /* 六大类 chip：只做筛选入口，不显示数量 */
@@ -9508,7 +9736,9 @@ function applyCollectionSearch(val){
      用户手动点过分组按钮（wallGroupAuto=false）则不被覆盖。 */
   if (v.trim()){
     if (!ui.collection.wallGroupAuto){ ui.collection.wallGroup='item'; ui.collection.wallGroupAuto=true; }
-  } else if (ui.collection.wallGroupAuto){
+  } else if (ui.collection.wallGroupAuto && !advActiveCount()){
+    /* v139：筛选卡的条件还在时不要收回「按系列」——否则清掉搜索词会看到系列卡，
+       像是筛选失效了（其实还在，按钮上仍挂着条数）。 */
     ui.collection.wallGroup='series'; ui.collection.wallGroupAuto=false;
   }
 }
@@ -9770,6 +10000,11 @@ document.addEventListener('click', function(ev){
   if (!node) return;
   var act = node.getAttribute('data-act');
   var key = node.getAttribute('data-key');
+  /* v139/v140：藏品「筛选」—— 按钮开关卡片、点条件只重画卡片、应用才生效 */
+  if (act==='advtoggle'){ advToggleOpen(); render(); return; }
+  if (act==='advpick'){ advPick(node.getAttribute('data-g'), node.getAttribute('data-v')); return; }
+  if (act==='advclear'){ advClearDraft(); return; }
+  if (act==='advapply'){ advApplyDraft(); render(); return; }
   if (act==='geopick'){ openGlobePicker(); return; }
   if (act==='amappick'){
     /* v58：美食与遐方坞统一用高德地图点选（地球不好选），选完坐标回填输入框 */
@@ -10601,7 +10836,8 @@ document.addEventListener('click', function(ev){
         if (k==='hidden'){
           if (v==='1'){
             if (!ui.collection.wallGroupAuto){ ui.collection.wallGroup='item'; ui.collection.wallGroupAuto=true; }
-          } else if (ui.collection.wallGroupAuto){
+          } else if (ui.collection.wallGroupAuto && !advActiveCount()){
+            /* v139：筛选卡还在生效时同样不要收回「按系列」（同 applyCollectionSearch） */
             ui.collection.wallGroup='series'; ui.collection.wallGroupAuto=false;
           }
         }
@@ -11415,6 +11651,9 @@ var PK_GENS = [
   {n:'第八世代',a:810,b:905,bg:'#E0F2F1',bd:'#80CBC4',fg:'#00695C'},
   {n:'第九世代',a:906,b:1025,bg:'#FCE4EC',bd:'#F48FB1',fg:'#880E4F'}
 ];
+/* v138：手机端「世代组」chip 的短标签 —— 去掉尾巴上的「世代」：「第一世代」→「第一」。
+   只影响显示；筛选用的值仍是全名（见 chipsHTML 的 data-v）。 */
+function pkGenShort(v){ return String(v==null?'':v).replace(/世代$/,''); }
 function pkGenOf(no){
   var n = parseInt(String(no||'').replace(/^[#＃]/,''),10);
   if (isNaN(n)) return PK_GENS[0];
@@ -11787,11 +12026,18 @@ function pkFilterBar(rows){
   var sh = pkShape();
   function cnt(f, v){ return (rows||[]).filter(function(r){ return String(r[PK_FIELD_OF[f]]||'')===v; }).length; }
   /* 通用：一组「全部 + 若干 chip」（每个都是再点一次取消的开关） */
-  function chipsHTML(f, list){
+  /* v138：`labelOf` 可选 —— 把「值」换成更短的「显示文字」。
+     值本身不变（`data-v` 还是全名），筛选、计数、会话记忆全都不受影响。
+     手机端「世代组」靠它把「第一世代」显示成「第一」，见下面的 panel('gen', …)。 */
+  function chipsHTML(f, list, labelOf){
     var s = '<button type="button" class="pkchip'+(p[f]?'':' on')+'" data-act="pkfilt" data-f="'+f+'" data-v="">全部</button>';
     list.forEach(function(v){
+      var lab = labelOf ? labelOf(v) : v;
+      var short = String(lab) !== String(v);
+      var hint = short ? (esc(lab)+' · '+esc(v)) : '';
+      if (p[f]===v) hint += (hint ? ' · ':'') + '再点一次取消筛选';
       s += '<button type="button" class="pkchip'+(p[f]===v?' on':'')+'" data-act="pkfilt" data-f="'+f+'" data-v="'+esc(v)+'"'+
-        ' title="'+(p[f]===v?'再点一次取消筛选':'')+'">'+esc(v)+'<i>'+cnt(f,v)+'</i></button>';
+        ' title="'+hint+'">'+esc(lab)+'<i>'+cnt(f,v)+'</i></button>';
     });
     return s;
   }
@@ -11849,7 +12095,11 @@ function pkFilterBar(rows){
     if (p.form === '地区形态') formInner += '<div class="pkchips pkchips-sub">'+chipsHTML('region',PK_REGIONS)+'</div>';
     h += panel('form', formInner);
     h += panel('group', '<div class="pkchips">'+chipsHTML('group',PK_GROUPS)+'</div>');
-    h += panel('gen', '<div class="pkchips">'+chipsHTML('gen',PK_GENS.map(function(g){ return g.n; }).concat(['第十世代']))+'</div>');
+    /* v138：手机端世代 chip 只显示「第一 / 第二 …」——
+       十个「第N世代」各带一个计数徽章太占宽，在这个面板里会折成 4 行。
+       去掉尾巴上的「世代」后一行能放下大半，值仍是全名，筛选/计数照旧。 */
+    h += panel('gen', '<div class="pkchips">'+chipsHTML('gen',
+      PK_GENS.map(function(g){ return g.n; }).concat(['第十世代']), pkGenShort)+'</div>');
     return h+'</div>';
   }
 

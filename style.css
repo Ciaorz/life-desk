@@ -2812,6 +2812,38 @@ input.search:focus{border-color:var(--accent);background:#fff}
 }
 .searchwrap .searchgo:hover { opacity: 0.86; }
 
+/* --- v139/v140：搜索栏后面的「筛选」按钮 + 内嵌在 panel 里的筛选卡 ---
+   按钮常态是白底描边（跟实心的「搜索」区分开），有生效条件时变主题色实心并带上条数，
+   卡片展开时描边高亮。 */
+.searchwrap .searchgo.filtgo{ background:#fff; color:var(--ink); border:1px solid var(--line); padding:4px 12px; }
+.searchwrap .searchgo.filtgo:hover{ opacity:1; background:#f6f1e8; }
+.searchwrap .searchgo.filtgo.open{ border-color:var(--accent); color:var(--accent); }
+.searchwrap .searchgo.filtgo.on{ background:var(--accent); border-color:var(--accent); color:#fff; }
+.searchwrap .searchgo.filtgo.on:hover{ opacity:.88; }
+/* 卡片本体（v141 紧凑版）：包在 .panel 里的一个浅色小卡（不是弹层，页面照常滚动）。
+   没有标题行、没有已选总览 —— 每行就是「大类：」+ 一排圆片，标签与选项同行。 */
+.advbox{ border:1px solid var(--line); border-radius:14px; background:#fbf8f3;
+  padding:10px 12px 8px; margin:0 0 12px; }
+.advrow{ display:flex; align-items:flex-start; gap:7px; margin-bottom:7px; }
+.advlab{ flex:0 0 auto; padding-top:5px; font-size:12px; line-height:1; color:var(--muted);
+  white-space:nowrap; letter-spacing:.04em; }
+.advopts{ display:flex; flex-wrap:wrap; gap:5px; flex:1 1 auto; min-width:0; }
+.advopt{ display:inline-flex; align-items:center; gap:4px; padding:4px 9px; border-radius:999px;
+  border:1px solid var(--line); background:#fff; color:var(--ink);
+  font-size:11.5px; font-family:inherit; cursor:pointer; }
+.advopt i{ font-style:normal; font-size:10px; color:var(--muted); }
+.advopt.on{ background:var(--ink); border-color:var(--ink); color:#fff; }
+.advopt.on i{ color:rgba(255,255,255,.72); }
+.advempty{ color:var(--muted); font-size:13px; }
+.advfoot{ display:flex; gap:8px; justify-content:flex-end; margin-top:9px; }
+.advfoot .btn.sm{ min-height:30px; }
+/* 手机上「搜索 / 筛选」两个按钮收窄一点，把宽度让给输入框（398px 宽时输入框还有 ~180px） */
+@media (max-width:560px){
+  .searchwrap{ padding:0 6px; }
+  .searchwrap .searchgo{ padding:4px 9px; font-size:11.5px; margin-left:3px; }
+  .searchwrap .search{ font-size:12.5px; padding:0 4px; }
+}
+
 .searchwrap .sclear:hover {
   background: rgba(96, 78, 54, 0.26);
   color: var(--ink);
@@ -3767,6 +3799,14 @@ input.search{margin-bottom:12px}
 .pkchip i{ font-style:normal; font-size:10.5px; color:var(--muted); }
 .pkchip.on{ background:var(--ink); color:#fff; border-color:var(--ink); }
 .pkchip.on i{ color:rgba(255,255,255,.72); }
+/* v138：手机端「世代组」面板的 chip 收窄。
+   文案已经不再重复「世代」二字（「第一世代」→「第一」，见 app.js 的 pkGenShort），
+   这里再把内边距 / 间距 / 字号收紧一点，十一个 chip 就从 4 行收到 2 行。
+   ⚠️ 用 `.pkbar-m` 限定 —— 这个类由 JS 按 `IS_MOBILE` 加上，**不依赖视口宽度**：
+   手机上横屏 / PWA 可能到 600~980px，只写 `@media (max-width:…)` 会失效（见 MEMORY 第十一节）。 */
+.pkbar-m .pkpanel[data-panel="gen"] .pkchips{ gap:4px; }
+.pkbar-m .pkpanel[data-panel="gen"] .pkchip{ padding:3px 5px; font-size:11px; gap:2px; }
+.pkbar-m .pkpanel[data-panel="gen"] .pkchip i{ font-size:9.5px; }
 /* v110：属性图标直接浮在 pkbar 上 —— 去掉边框与白底，不再是一个个「按钮框」；
    只保留圆角与内边距作为点击热区。选中态改用极淡的底色 + 细描边提示（必须能看出选了哪个）。 */
 .pktbtn{ width:30px; height:30px; border:0; background:transparent; border-radius:8px; padding:3px;
