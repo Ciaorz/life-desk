@@ -4717,11 +4717,42 @@ function coverViewport(row){
   return {s:1,x:0,y:0};
 }
 function hasCover(row){ return !!coverImg(row); }
+
+/* v146：封面视口（缩放 / 位移）的**唯一换算处**。
+   --------------------------------------------------------------------------
+   以前「卡片样式」「表单里的初始内联样式」「拖拽/滑杆时的实时更新」三处各写一份尺寸换算，
+   而且都拿 Math.max(50,…) 兜底 —— 想放宽缩放范围就得改三个地方，很容易漏掉一个
+   （漏了就是「表单里能拉到 30%、卡片上却还是 50%」这种半吊子状态）。
+   现在统一走 vpSizeCss / vpPosCss：
+     · 缩放 30%–180%（VP_ZMIN / VP_ZMAX）；只有 keepContain 且 s=1 时用 'contain'（整图完整显示），
+       卡片那条路一直用百分比，保持和以前一样的观感。
+     · 位移 (50-x)% (50-y)%：x/y 的单位是「背景溢出的百分比」，与滑杆、拖拽同一套。
+       范围放宽到 ±200，允许把图推出框外，方便做裁切式构图。
+   ⚠️ VP_ZMIN / VP_ZMAX / VP_PAN 必须「先赋值、后使用」，所以放在这里（文件靠前处），
+      别再挪到下面去 —— 卡片渲染在页面加载时就会读到它们。 */
+var VP_ZMIN = 0.3, VP_ZMAX = 1.8, VP_PAN = 200;
+function vpClampS(s){
+  var lo = (typeof VP_ZMIN === 'number') ? VP_ZMIN : 0.3;
+  var hi = (typeof VP_ZMAX === 'number') ? VP_ZMAX : 1.8;
+  var v = (s == null || isNaN(s)) ? 1 : Number(s);
+  if (!isFinite(v)) v = 1;
+  return Math.max(lo, Math.min(hi, v));
+}
+function vpSizeCss(s, keepContain){
+  var v = (s == null || isNaN(s)) ? 1 : Number(s);
+  if (!isFinite(v)) v = 1;
+  if (keepContain && Math.abs(v - 1) < 0.005) return 'contain';
+  return Math.round(vpClampS(v) * 100) + '% auto';
+}
+function vpPosCss(vp){
+  var x = num(vp && vp.x), y = num(vp && vp.y);
+  return (50 - x) + '% ' + (50 - y) + '%';
+}
 function coverStyle(row,title){
   var u = coverImg(row);
   var vp = coverViewport(row);
   /* 用单引号包裹 URL：外部 HTML 的 style 属性使用双引号，内部若再用双引号会截断属性，导致封面整片空白 */
-  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-repeat:no-repeat;background-position:"+(50-vp.x)+"% "+(50-vp.y)+"%;background-size:"+Math.max(50,Math.round(vp.s*100))+"% auto;background-color:#fff";
+  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-repeat:no-repeat;background-position:"+vpPosCss(vp)+";background-size:"+vpSizeCss(vp.s,false)+";background-color:#fff";
   var h = hue(title), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -4950,6 +4981,10 @@ var MODS = {
     desc:'先有 IP，再有它下面那一堆东西。', addLabel:'新增 IP',
     fields:[
       {k:'IP名称',t:'text',req:1,ph:'如 宝可梦 / 三丽鸥 / 某部番剧',full:1},
+      /* v148：两级 IP —— 填了「上级IP」就成子 IP（如 星际宝贝 属于 迪士尼）。
+         下拉只列**顶级 IP**（且不含自己），所以只能挂两层、不会成环。
+         留空＝顶级 IP。例：迪士尼（留空）、米老鼠 / 星际宝贝 / 小熊维尼（都填「迪士尼」）。 */
+      {k:'上级IP',t:'dyn',src:'ipParent',full:1},
       {k:'IP图像',t:'img',ph:'图片链接，或点右侧上传',full:1},
       {k:'简介',t:'textarea',ph:'这个 IP 的来历，你喜欢它什么',full:1}
     ]},
@@ -6810,8 +6845,11 @@ function filtered(key){
     rows=rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
     if (f.cat) rows=rows.filter(function(r){ return r['大类']===f.cat; });
     if (f.sub) rows=rows.filter(function(r){ return r['小类']===f.sub; });
-    /* v102：IP 下拉筛选 —— 一个类目里可能混着多个 IP，选中后只看这个 IP 的东西 */
-    if (f.ipf) rows=rows.filter(function(r){ return (r['IP']||'')===f.ipf; });
+    /* v102：IP 下拉筛选 —— 一个类目里可能混着多个 IP，选中后只看这个 IP 的东西。
+       v148：按层级聚合 —— 选中父级「迪士尼」时，旗下「星际宝贝」这类子 IP 的东西也算命中
+       （scope 在这里算一次，不要在每行的回调里算）。 */
+    if (f.ipf){ var _ipScope = ipScopeNames(f.ipf);
+      rows=rows.filter(function(r){ return _ipScope.indexOf(String(r['IP']||''))>=0; }); }
     if (f.hidden) rows=rows.filter(function(r){ return !!r['隐藏款']; });   /* v96p：隐藏款筛选 */
     /* v139：筛选卡的条件 —— 字段之间 AND（逐个筛），字段内部 OR（任一选中值命中即可）。
        与上面的 大类/小类/IP/搜索 是并列关系，一起叠加。 */
@@ -6821,6 +6859,15 @@ function filtered(key){
       if (!vals || !vals.length) return;
       var def = advFieldByKey(ak);
       if (!def) return;
+      /* v148：IP 条件要认层级 —— 选中父级「迪士尼」时，旗下子 IP 的东西也要命中。
+         所以先把选中值各自展开成「它 + 它的子 IP」得到一个白名单，再一次性过滤
+         （别放进 advMatchRow 里逐行算，那会重复建树）。 */
+      if (ak === 'IP'){
+        var _allow = {};
+        vals.forEach(function(v){ ipScopeNames(v).forEach(function(n){ _allow[n] = 1; }); });
+        rows = rows.filter(function(r){ return !!_allow[String(r['IP']||'')]; });
+        return;
+      }
       rows = rows.filter(function(r){ return advMatchRow(r, def, vals); });
     });
     if (q) rows=rows.filter(function(r){
@@ -6938,7 +6985,29 @@ function advOptions(def, sel, draft){
     keys.sort(function(a,b){ return String(a).localeCompare(String(b),'zh'); });
   }
   (sel||[]).forEach(function(v){ if (keys.indexOf(v)<0) keys.push(v); });
-  return keys.map(function(v){ return { v:v, n:cnt[v]||0 }; });
+  var labelOf = {};
+  /* v148：IP 字段要认层级 ——
+     ① 父级 IP（如「迪士尼」）自己可能没有直接挂着的记录，但旗下子 IP 有：把它补进候选，
+        条数用**整棵子树**的合计，这样才有「筛出迪士尼旗下全部」这个用法；
+     ② 子 IP 的文案带上「父 ·」前缀（值仍是子 IP 名，写进筛选条件的是它）；
+     ③ 顺序按层级：顶级 IP 在前，紧跟它的子 IP。 */
+  if (def.k === 'IP'){
+    var _t = ipTree();
+    Object.keys(_t.children).forEach(function(pn){
+      var total = 0;
+      [pn].concat(_t.children[pn]).forEach(function(n){ total += (cnt[n] || 0); });
+      _t.children[pn].forEach(function(n){ labelOf[n] = pn + ' · ' + n; });
+      if (total > 0){ cnt[pn] = total; if (keys.indexOf(pn) < 0) keys.push(pn); }
+    });
+    var _ord = [];
+    _t.tops.forEach(function(tn){
+      if (keys.indexOf(tn) >= 0) _ord.push(tn);
+      (_t.children[tn] || []).forEach(function(kn){ if (keys.indexOf(kn) >= 0) _ord.push(kn); });
+    });
+    keys.forEach(function(k){ if (_ord.indexOf(k) < 0) _ord.push(k); });
+    keys = _ord;
+  }
+  return keys.map(function(v){ return { v:v, n:cnt[v]||0, label:labelOf[v]||v }; });
 }
 function advMatchRow(r, def, vals){
   if (!vals || !vals.length) return true;
@@ -7007,7 +7076,8 @@ function advCardHTML(){
       '<span class="advlab">'+esc(def.k)+'：</span>'+
       '<div class="advopts">'+opts.map(function(o){
         var on = sel.indexOf(o.v)>=0;
-        var lab = def.bool ? (o.v==='1' ? '是' : '否') : o.v;
+        /* v148：IP 项可能带 label（子 IP 显示成「迪士尼 · 星际宝贝」，值仍是子 IP 名） */
+        var lab = def.bool ? (o.v==='1' ? '是' : '否') : (o.label || o.v);
         return '<button type="button" class="advopt'+(on?' on':'')+'" data-act="advpick"'+
           ' data-g="'+esc(def.k)+'" data-v="'+esc(o.v)+'">'+esc(lab)+'<i>'+o.n+'</i></button>';
       }).join('')+'</div></div>';
@@ -7186,7 +7256,9 @@ function hasStatus(r, v){ return stArr(r).indexOf(v) >= 0; }
    （v99 起「在库」的卡片本就不再显示「想收」按钮，但底层状态没被清掉，
    于是它会同时出现在「在库」和「想收」两个筛选里，收集进度与统计也跟着脏）。
    云游同理：已回库就不该还挂在云游里。
-   ⚠️ 三个写入路径都要走它：快速按钮（toggleRowStatus）、表单保存（doSave）、批量编辑。 */
+   ⚠️ **四个写入路径都要走它（或自己做等价处理）**：
+     快速按钮（`toggleRowStatus`）、表单保存（`doSave`）、批量编辑（`applyBatchPatch`）、
+     **以及录入表单里点「在库」的那个 change 处理器**（v147：这里原来只处理了云游）。 */
 /* v130：状态里只要出现「在库」，这几个都要自动清掉 —— 东西已经到手了，
    不该还挂着「想收 / 已预订 / 云游」。**名单只此一份**，
    clearOwnedConflicts（清）、ownedExtraStatuses（提示文案）、toggleRowStatus（脏数据兜底）
@@ -7552,11 +7624,12 @@ function renderCatMode(){
      v125：判定范围从「全部藏品」收窄成**当前大类/小类/IP 范围**，并顺带清掉失效的筛选状态
            —— 原来用 s.rows（全库）判断，于是没有隐藏款的类目里按钮照样出现，
            点一下列表就空了，而且切回去之前都没法关掉它。 */
+  var _hfScope = f.ipf ? ipScopeNames(f.ipf) : null;   /* v148：父级 IP 也要把子 IP 的行算进来 */
   var _scope = s.rows.filter(function(r){
     if (LEGACY_BOOK_CATS.indexOf(r['大类'])>=0) return false;
     if (f.cat && r['大类']!==f.cat) return false;
     if (f.sub && r['小类']!==f.sub) return false;
-    if (f.ipf && (r['IP']||'')!==f.ipf) return false;
+    if (_hfScope && _hfScope.indexOf(String(r['IP']||''))<0) return false;
     return true;
   });
   var hasHidden = hiddenFilterScope(_scope);
@@ -7569,6 +7642,24 @@ function renderCatMode(){
     if (r['IP']) _ipSeen[r['IP']] = 1;
   });
   var ipList = Object.keys(_ipSeen).sort(function(a,b){ return String(a).localeCompare(String(b),'zh'); });
+  /* v148：IP 下拉也按层级来 ——
+     ① 把出现过 IP 的**上级**补进来（否则父级「迪士尼」根本没法选，就没法一键看旗下全部）；
+     ② 顺序改成「顶级 IP → 紧跟它的子 IP」，子 IP 的选项文案带「父 ·」前缀（值仍是子 IP 名）；
+     ③ 万一筛选里存的 IP 已经不在候选里（列表是按当前大类/小类算的），补一条，免得筛选项莫名回到「全部 IP」。 */
+  var _ipTree2 = ipTree();
+  var _ipOpts = [];
+  _ipTree2.tops.forEach(function(tn){
+    var seenKids = (_ipTree2.children[tn] || []).filter(function(k){ return _ipSeen[k]; });
+    if (!_ipSeen[tn] && !seenKids.length) return;      /* 这一家在当前范围里都没出现 → 不列 */
+    _ipOpts.push({ v: tn, label: tn });
+    seenKids.forEach(function(k){ _ipOpts.push({ v: k, label: tn + ' · ' + k }); });
+  });
+  ipList.forEach(function(n){
+    if (_ipOpts.some(function(o){ return o.v === n; })) return;
+    var _p = _ipTree2.parentOf[n];
+    _ipOpts.push({ v: n, label: _p ? (_p + ' · ' + n) : n });
+  });
+  if (f.ipf && !_ipOpts.some(function(o){ return o.v === f.ipf; })) _ipOpts.push({ v: f.ipf, label: f.ipf });
   if (f.cat && subList.length){
     /* v112：小类整行包一层带背景的「框」（.subbox），手机端与上面大类的 .cattab 凸起连成
        「文件夹标签」的样子，直观表达「这些小类从属于当前大类」。
@@ -7595,10 +7686,10 @@ function renderCatMode(){
       ' data-v="'+(f.wallGroup==='item'?'':'item')+'" title="'+(f.wallGroup==='item'?'取消，回到按系列分组':'直接把符合条件的物品平铺出来')+'">按物品</button>'+
     /* v102：IP 下拉 —— 一个类目里常混着多个 IP，选一个就只看它的东西。
        选项取自「当前大类/小类」下真实出现过的 IP（不含 IP 自身的筛选，避免选中后列表塌陷成只剩它自己）。 */
-    (ipList.length ? '<select id="ipFilterSel" class="ipfilter" title="只看某个 IP">'+
+    (ipList.length ? '<select id="ipFilterSel" class="ipfilter" title="只看某个 IP（选父级会包含它旗下的子 IP）">'+
       '<option value="">全部 IP</option>'+
-      ipList.map(function(n){
-        return '<option value="'+esc(n)+'"'+(f.ipf===n?' selected':'')+'>'+esc(n)+'</option>';
+      _ipOpts.map(function(o){
+        return '<option value="'+esc(o.v)+'"'+(f.ipf===o.v?' selected':'')+'>'+esc(o.label)+'</option>';
       }).join('')+'</select>' : '')+
     /* v102：隐藏款切换按钮 —— 紧随分组方式之后；默认（未选中）即「全部」，点一次选中、再点取消。 */
     /* v112/v119：.chipflat —— 手机端把这两个切换按钮压到与 IP 下拉框同高（34px）、左右收窄，
@@ -7702,6 +7793,79 @@ function renderPagedWall(rows, label){
   h += (f.view==='wall'?collectionWall(pageRows):collectionList(pageRows))+'</div>';
   return h;
 }
+/* ============================================================
+   v148：IP 支持两级 —— 顶级 IP（迪士尼）→ 子 IP（米老鼠 / 星际宝贝 / 小熊维尼）
+   ------------------------------------------------------------
+   · 关系存在 **IP 记录自己的「上级IP」字段**里（跟「系列靠 所属IP 挂到 IP 下」一个套路）。
+   · ⚠️ **藏品记录里的 IP 一个字都不改**：东西仍挂在自己名下（如「星际宝贝」），
+     父级只在**展示 / 筛选 / 统计**时做聚合（`ipScopeNames`）——
+     这样万一以后不想用层级了，数据侧不用回滚。
+   · 只做**两级**：上级下拉只列顶级 IP 且排除自己（`dynOptions` 的 `'ipParent'` 分支），
+     所以不会出现环、也不会出现「三层以上」没人管的情况。
+   · `上级IP` 为空 / 指向不存在的名字 / 指向自己 → 一律当**顶级 IP**：
+     避免一个打错的父级名让整个 IP 从库里消失（那是最难排查的一类问题）。
+   ============================================================ */
+function ipParentName(row){
+  var p = String((row && row['上级IP']) || '').trim();
+  if (!p) return '';
+  var self = String((row && row['IP名称']) || '').trim();
+  if (!self || p === self) return '';
+  var ok = (store.ip.rows || []).some(function(r){ return String(r['IP名称']||'').trim() === p; });
+  return ok ? p : '';
+}
+/* 一次算好整棵树，供 IP 库 / IP 详情 / 筛选 / 统计共用。
+   IP 记录只有几个，每次调用重算的成本可以忽略（也避免缓存过期那类暗坑）。
+   返回：tops=[顶级IP名]，children={父: [子…]}（只有真的是父级的才有这个键），
+        parentOf={名: 父名}（顶级为 ''），rowOf={名: IP 记录}。 */
+function ipTree(){
+  var t = { tops: [], children: {}, parentOf: {}, rowOf: {} };
+  (store.ip.rows || []).forEach(function(r){
+    var n = String(r['IP名称'] || '').trim();
+    if (!n || t.rowOf[n]) return;              /* 同名只认第一条 */
+    t.rowOf[n] = r;
+  });
+  Object.keys(t.rowOf).forEach(function(n){ t.parentOf[n] = ipParentName(t.rowOf[n]); });
+  /* 只允许两层：若某个父级自己也有父级，说明数据被手改出了三层 →
+     把它拉平成顶级，保证渲染出来的一定是「顶级 → 子」两层（不会有点不到的孤儿）。 */
+  Object.keys(t.parentOf).forEach(function(n){
+    if (t.parentOf[n] && t.parentOf[t.parentOf[n]]) t.parentOf[n] = '';
+  });
+  Object.keys(t.parentOf).forEach(function(n){
+    var p = t.parentOf[n];
+    if (p){ (t.children[p] = t.children[p] || []).push(n); }
+    else t.tops.push(n);
+  });
+  return t;
+}
+function ipParentOfName(name){
+  return ipTree().parentOf[String(name||'').trim()] || '';
+}
+function ipTopNames(){ return ipTree().tops.slice(); }
+/* 「这个 IP 及其直接子 IP」的名字数组（含自己）—— 父级聚合就靠它：
+   IP 详情、IP 卡片计数、工具栏 IP 筛选、筛选卡的 IP 条件、以及 `filtered()` 都走这一个口径。 */
+function ipScopeNames(name){
+  var n = String(name||'').trim();
+  if (!n) return [];
+  return [n].concat(ipTree().children[n] || []);
+}
+/* v149：「折叠旗下子 IP」的开关状态 —— 纯界面偏好，存 localStorage，
+   **不进数据文件、不参与云同步**（换台设备各自记各自的折叠状态，互不影响）。
+   默认是「展开」：新挂上去的子 IP 一定看得见，不会被一个残留的折叠状态藏起来。
+   键用 IP 名字（不是 _id）—— 名字改了折叠状态自然重置，不会张冠李戴。 */
+var IP_FOLD_KEY = 'lifedesk_ipfold';
+function ipFoldMap(){
+  try {
+    var o = JSON.parse(localStorage.getItem(IP_FOLD_KEY) || '{}');
+    return (o && typeof o === 'object') ? o : {};
+  } catch(e){ return {}; }
+}
+function ipIsFolded(name){ return !!ipFoldMap()[String(name||'').trim()]; }
+function ipSetFolded(name, on){
+  var n = String(name||'').trim(); if (!n) return;
+  var m = ipFoldMap();
+  if (on) m[n] = 1; else delete m[n];
+  try { localStorage.setItem(IP_FOLD_KEY, JSON.stringify(m)); } catch(e){}
+}
 function renderIpMode(){
   if (ui.collection.ipId) return renderIpDetail();
   var s=store.ip, c=store.collection;
@@ -7710,16 +7874,43 @@ function renderIpMode(){
     '<div class="hint">同一个 IP 下的手办、毛绒、居陈、周边都归在一起</div></div>'+modeSeg(true)+'</div>';
   if (s.status==='loading'){ h += emptyHTML('正在读线上数据…',''); return h+'</section>'; }
   if (s.status==='error'){ h += emptyHTML('没能读到 IP 库','点上面的「重试」再拉一次。'); return h+'</section>'; }
-  h += '<div class="ipgrid" style="--cs:'+csGet()+'">'+s.rows.map(function(ip){
-    var name=ip['IP名称']||'未命名';
-    /* 每种 IP：只统计在库实物件数（按持有累加）；书籍/杂志已归文渊斋，不计入 IP */
-    var items=c.rows.filter(function(r){ return r['IP']===name && LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
+  /* v149：IP 库的层级 = 「平铺 + 折叠」——
+     所有 IP（迪士尼自己、迪士尼旗下的、以及跟谁都不沾边的）都排进**同一张网格**，
+     子 IP 的卡紧跟在父卡后面，就是普通大小的一张卡（只多一个 ↳ 标记表示从属）；
+     父卡右上角一个极小的折叠开关，点一下把旗下子 IP 一起收起 / 展开。
+     § 上一版是「父卡下面挂一条通栏的内嵌小网格」，等于把网格劈成两半、
+       子卡还被缩得更小（128px）—— 改成现在这种平铺式。
+     ⚠️ 计数按 `ipScopeNames` 聚合：父级卡片显示的是「旗下全部（含子 IP）」的在库件数。 */
+  var tree = ipTree();
+  function ipCardHTML(ip, name, parentName){
+    var scope = ipScopeNames(name);
+    var kids = tree.children[name] || [];
+    /* 只统计在库实物件数（按持有累加）；书籍/杂志已归文渊斋，不计入 IP */
+    var items=c.rows.filter(function(r){ return scope.indexOf(String(r['IP']||''))>=0 && LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
     var by=ownedByCat(items);
     var desc=Object.keys(by).map(function(k){ return k+' '+by[k]; }).join(' · ') || '还没挂东西';
-    return '<div class="ipcard" data-act="ipopen" data-id="'+esc(ip._id)+'"'+
+    if (kids.length) desc = kids.length+' 个子 IP · '+desc;
+    var fold = '';
+    if (kids.length){
+      var folded = ipIsFolded(name);
+      fold = '<button class="ipfold" type="button" data-act="ipfold" data-name="'+esc(name)+'"'+
+        ' title="'+esc((folded?'展开':'折叠')+'「'+name+'」旗下的 '+kids.length+' 个子 IP')+'"'+
+        ' aria-label="折叠 / 展开旗下子 IP"><span class="chev">'+(folded?'▸':'▾')+'</span></button>';
+    }
+    return '<div class="ipcard'+(kids.length?' ipparent':'')+(parentName?' ipchild':'')+'"'+
+      ' data-act="ipopen" data-id="'+esc(ip._id)+'"'+
+      (parentName?' title="属于「'+esc(parentName)+'」"':'')+
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
       '<div class="ph" style="'+coverStyle(ip,name)+'">'+(hasCover(ip)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
-      '<div class="bd"><strong>'+esc(name)+'</strong><span>'+esc(desc)+'</span></div></div>';
+      '<div class="bd"><strong>'+esc(name)+'</strong><span>'+esc(desc)+'</span></div>'+fold+'</div>';
+  }
+  h += '<div class="ipgrid" style="--cs:'+csGet()+'">'+ tree.tops.map(function(tn){
+    var out = ipCardHTML(tree.rowOf[tn], tn, '');
+    var kids = tree.children[tn] || [];
+    if (kids.length && !ipIsFolded(tn)){
+      out += kids.map(function(kn){ return ipCardHTML(tree.rowOf[kn], kn, tn); }).join('');
+    }
+    return out;
   }).join('')+
   '<div class="ipcard add" data-act="add" data-key="ip">'+
     '<div class="ph">＋</div><div class="bd"><strong>新增 IP</strong><span>先建 IP，再往里挂东西</span></div></div>'+
@@ -7736,23 +7927,52 @@ function renderIpDetail(){
   var ip=store.ip.rows.filter(function(r){ return String(r._id)===String(ui.collection.ipId); })[0];
   if (!ip){ ui.collection.ipId=null; return renderIpMode(); }
   var name=ip['IP名称']||'未命名';
+  /* v148：IP 详情按「本 IP + 它的子 IP」聚合 —— 所以点「迪士尼」能看到旗下全部东西。
+     子 IP 自己的详情页则只有自己的东西（它没有下级）。 */
+  var tree = ipTree();
+  var parent = tree.parentOf[name] || '';
+  var kids = tree.children[name] || [];
+  var scope = ipScopeNames(name);
   /* v58/v70：书籍/杂志归文渊斋管，IP 详情里不显示它们 */
-  var items=store.collection.rows.filter(function(r){ return r['IP']===name && LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
+  var items=store.collection.rows.filter(function(r){ return scope.indexOf(String(r['IP']||''))>=0 && LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+esc(name)+'</h2>'+
-    '<div class="hint">这个 IP 下的全部东西</div></div>'+modeSeg(true)+'</div>'+
-    '<div style="margin-bottom:14px"><button class="btn link" type="button" data-act="ipback">← 返回 IP 库</button></div>'+
+    '<div class="hint">'+(kids.length ? ('这个 IP 旗下 '+kids.length+' 个子 IP 的全部东西') : '这个 IP 下的全部东西')+'</div></div>'+modeSeg(true)+'</div>'+
+    '<div style="margin-bottom:14px">'+
+      '<button class="btn link" type="button" data-act="ipback">← 返回 IP 库</button>'+
+      (parent && tree.rowOf[parent]
+        ? ' <button class="btn link" type="button" data-act="ipopen" data-id="'+esc(tree.rowOf[parent]._id)+'" title="回到上级 IP">↑ 属于「'+esc(parent)+'」</button>'
+        : '')+
+    '</div>'+
     '<div class="iphero">'+
       '<div class="ph" style="'+coverStyle(ip,name)+'">'+(hasCover(ip)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
       '<div><h3>'+esc(name)+'</h3>'+
       (ip['简介']?'<p>'+esc(ip['简介'])+'</p>':'')+
+      (parent?'<p style="color:var(--muted)">上级 IP：'+esc(parent)+'</p>':'')+
       '<div class="acts">'+
         '<button class="btn primary sm" type="button" data-act="addinitem" data-ip="'+esc(name)+'">+ 在这个 IP 下添加</button>'+
         '<button class="btn ghost sm" type="button" data-act="edit" data-key="ip" data-id="'+esc(ip._id)+'">编辑 IP</button>'+
         '<button class="btn ghost sm" type="button" data-act="delip" data-id="'+esc(ip._id)+'" style="color:var(--red)">删除 IP</button>'+
       '</div></div></div>';
+
+  /* v148：子 IP 区块 —— 点进去看某一个子 IP（它自己那一份东西）。 */
+  if (kids.length){
+    h += '<div class="grp"><h4>旗下 IP <i>'+kids.length+' 个</i></h4>'+
+      '<div class="ipgrid ipgrid-sub" style="--cs:'+csGet()+'">'+
+      kids.map(function(kn){
+        var kip = tree.rowOf[kn];
+        var kitems = store.collection.rows.filter(function(r){ return String(r['IP']||'')===kn && LEGACY_BOOK_CATS.indexOf(r['大类'])<0; });
+        var kby = ownedByCat(kitems);
+        var kdesc = Object.keys(kby).map(function(k){ return k+' '+kby[k]; }).join(' · ') || '还没挂东西';
+        return '<div class="ipcard" data-act="ipopen" data-id="'+esc(kip._id)+'">'+
+          '<div class="ph" style="'+coverStyle(kip,kn)+'">'+(hasCover(kip)?'':'<b>'+esc(String(kn).slice(0,1))+'</b>')+'</div>'+
+          '<div class="bd"><strong>'+esc(kn)+'</strong><span>'+esc(kdesc)+'</span></div></div>';
+      }).join('')+'</div></div>';
+  }
+
   if (!items.length){
-    h += emptyHTML('这个 IP 下还没有东西','点「在这个 IP 下添加」，手办、毛绒、居陈，或者任何别的都行。');
+    h += emptyHTML(kids.length ? '这个 IP 和它旗下都还没有东西' : '这个 IP 下还没有东西',
+                   '点「在这个 IP 下添加」，手办、毛绒、居陈，或者任何别的都行。');
     return h+'</section>';
   }
 
@@ -10392,6 +10612,14 @@ document.addEventListener('click', function(ev){
   }
   if (act==='view'){ ui[ui.view].view=node.getAttribute('data-v'); render(); return; }
   if (act==='cmode'){ ui.collection.mode=node.getAttribute('data-v'); ui.collection.ipId=null; ui.collection.seriesId=null; render(); return; }
+  /* v149：IP 卡的折叠开关 —— 只切界面（localStorage），不动数据。
+     ⚠️ 按钮在 `[data-act="ipopen"]` 的卡片**内部**，靠 `closest` 取到最近的
+        `[data-act]`（也就是这个按钮）才不会误开 IP 详情页。 */
+  if (act==='ipfold'){
+    var _fn = node.getAttribute('data-name') || '';
+    if (_fn) ipSetFolded(_fn, !ipIsFolded(_fn));
+    render(); return;
+  }
   if (act==='ipopen'){ ui.collection.ipId=node.getAttribute('data-id'); render(); return; }
   if (act==='ipback'){ ui.collection.ipId=null; render(); return; }
   if (act==='seriesopen'){
@@ -10717,7 +10945,10 @@ document.addEventListener('click', function(ev){
     var id=node.getAttribute('data-id');
     var ipn=(store.ip.rows.filter(function(x){ return String(x._id)===String(id); })[0]||{})['IP名称']||'';
     var used=store.collection.rows.filter(function(x){ return x['IP']===ipn; }).length;
-    askConfirm('删除 IP「'+ipn+'」？'+(used?'它下面还挂着 '+used+' 件东西，那些东西会变成「未绑定 IP」。':'')+' 删掉就找不回来了。', function(){
+    /* v148：删父级 IP 时要说清子 IP 的下场（它们会变成顶级 IP，不会被一起删掉） */
+    var kids=(ipTree().children[ipn]||[]);
+    var kidMsg = kids.length ? ('它旗下还有 '+kids.length+' 个子 IP（'+kids.join('、')+'），删掉后那些子 IP 会变成**顶级 IP**（东西不会丢）。') : '';
+    askConfirm('删除 IP「'+ipn+'」？'+(used?'它下面还挂着 '+used+' 件东西，那些东西会变成「未绑定 IP」。':'')+kidMsg+' 删掉就找不回来了。', function(){
       deleteRow('ip', id, ipn);
       if (ui.collection.ipId===id){ ui.collection.ipId=null; }
     });
@@ -11012,7 +11243,26 @@ function dynOptions(src){
     var _sn = (editing && editing.vals) ? editing.vals['系列'] : '';
     return seriesChildOptions(_sn);
   }
-  if (src==='ip')  return (store.ip.rows  || []).map(function(r){ return r['IP名称'];   }).filter(Boolean);
+  if (src==='ip'){
+    /* v148：带层级的候选 —— 子 IP 显示成「迪士尼 · 星际宝贝」，但**值仍是它自己的名字**
+       （藏品记录里存的始终是子 IP 名，父级只在展示/筛选时聚合）。
+       顺序：顶级 IP 按记录顺序，紧接着它的子 IP。 */
+    var _t = ipTree(), _out = [];
+    _t.tops.forEach(function(tn){
+      _out.push({ v: tn, label: tn });
+      (_t.children[tn] || []).forEach(function(kn){ _out.push({ v: kn, label: tn + ' · ' + kn }); });
+    });
+    Object.keys(_t.rowOf).forEach(function(n){
+      if (!_out.some(function(o){ return o.v === n; })) _out.push({ v: n, label: n });
+    });
+    return _out;
+  }
+  /* v148：上级 IP 下拉 —— 只列**顶级 IP**，并且排除自己。
+     这样「只能挂两层」是**结构性保证**的，不靠用户自觉（也更不会出现 A 上B、B 上A 的环）。 */
+  if (src==='ipParent'){
+    var _self = String((editing && editing.vals && editing.vals['IP名称']) || '').trim();
+    return ipTopNames().filter(function(n){ return n !== _self; });
+  }
   /* v115：系列按 IP 过滤 —— 先选了 IP（如宝可梦），系列下拉就只列属于这个 IP 的系列；
      IP 没选（「不属于任何 IP」）时才列全部。系列归属靠系列记录的「所属IP」字段。 */
   if (src==='series') return seriesNamesOfIp((editing && editing.vals) ? editing.vals['IP'] : '');
@@ -11039,20 +11289,29 @@ function fillDynField(host, k){
   var src=w.getAttribute('data-src');
   var sel=w.querySelector('[data-dyn-sel]');
   if (!sel) return;
-  var opts=dynOptions(src);
+  /* v148：候选可以是纯字符串，也可以是 {v,label}（label 只用于显示 —— 比如子 IP 显示成
+     「迪士尼 · 星际宝贝」，但写进字段的**值仍是「星际宝贝」**）。这里统一成 {v,label}。 */
+  var opts=(dynOptions(src)||[]).map(function(o){
+    if (o && typeof o === 'object') return { v:String(o.v==null?'':o.v), label:String(o.label==null?o.v:o.label) };
+    return { v:String(o), label:String(o) };
+  });
   var cur=String(editing.vals[k]||'');
-  var known=opts.indexOf(cur)>=0;
+  var known=opts.some(function(o){ return o.v === cur; });
   var emptyLabel = src==='ip' ? '（不属于任何 IP）'
+    : (src==='ipParent' ? '（不属于任何上级 IP，即顶级 IP）'
     : (src==='loc' ? '（暂不指定）'
-    : (src==='child' ? '（不属于任何子系列）' : '（无）'));
+    : (src==='child' ? '（不属于任何子系列）' : '（无）')));
   var html='<option value=""'+(cur===''?' selected':'')+'>'+emptyLabel+'</option>';
   opts.forEach(function(o){
-    html += '<option value="'+esc(o)+'"'+(o===cur?' selected':'')+'>'+esc(o)+'</option>';
+    html += '<option value="'+esc(o.v)+'"'+(o.v===cur?' selected':'')+'>'+esc(o.label)+'</option>';
   });
   /* v136：当前值不在候选里（老数据、或刚在别处用过的值）→ 直接并进列表并选中。
      以前这种情况会显示一个藏在下面的文本框，点了往往「像没反应」，那个框已经删掉了。 */
   if (cur && !known) html += '<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>';
-  html += '<option value="__custom__">'+dynAddLabel(src)+'</option>';
+  /* v148：「上级IP」不提供「＋ 新增…」—— 它必须指向一个**已经存在**的 IP 记录
+     （新名字会让 ipParentName() 判成无效、直接退回顶级，等于白填）。
+     正确顺序：先去 IP 库建那个父级 IP，再回来选它。 */
+  if (src !== 'ipParent') html += '<option value="__custom__">'+dynAddLabel(src)+'</option>';
   sel.innerHTML=html;
 }
 function statesFor(cat){ return cat==='观影' ? STATES_VIEW : STATES_OWN; }
@@ -11138,9 +11397,9 @@ function setImgPreview(prev, url, k){
 function applyImgViewport(prev, k){
   if (!prev || !k) return;
   var vp = (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0};
-  prev.style.backgroundPosition = (50-vp.x)+'% '+(50-vp.y)+'%';
-  prev.style.backgroundSize = (vp.s && vp.s>1) ? (Math.max(100,Math.round(vp.s*100))+'% auto')
-                          : (vp.s && vp.s<1) ? (Math.max(50,Math.round(vp.s*100))+'% auto') : 'contain';
+  /* v146：尺寸/位置换算统一走 vpSizeCss / vpPosCss（卡片、初始内联样式用的是同一对函数） */
+  prev.style.backgroundPosition = vpPosCss(vp);
+  prev.style.backgroundSize = vpSizeCss(vp.s, true);
 }
 /* ---------- 表单控件绑定（单个表单 / 批量表单共用） ---------- */
 function wireFormControls(host, saveDraft){
@@ -11609,15 +11868,15 @@ function wireFormControls(host, saveDraft){
       e.preventDefault();
       var o=vp(); o.s=Math.max(VP_ZMIN, Math.min(VP_ZMAX, o.s+(e.deltaY<0?0.1:-0.1))); setVp(o);
     };
-    /* 键盘方向键微调（焦点在预览框时） */
+    /* 键盘方向键微调（焦点在预览框时）。v146：边界改成跟滑杆/拖拽同一套 VP_PAN（±200） */
     prev.addEventListener('keydown', function(e){
       if (!prev.style.backgroundImage) return;
       var step = 2;
       var o=vp(), moved=false;
-      if (e.key==='ArrowLeft'){ o.x=Math.max(-80,Math.min(80,o.x-step)); moved=true; }
-      else if (e.key==='ArrowRight'){ o.x=Math.max(-80,Math.min(80,o.x+step)); moved=true; }
-      else if (e.key==='ArrowUp'){ o.y=Math.max(-80,Math.min(80,o.y-step)); moved=true; }
-      else if (e.key==='ArrowDown'){ o.y=Math.max(-80,Math.min(80,o.y+step)); moved=true; }
+      if (e.key==='ArrowLeft'){ o.x=Math.max(-VP_PAN,Math.min(VP_PAN,o.x-step)); moved=true; }
+      else if (e.key==='ArrowRight'){ o.x=Math.max(-VP_PAN,Math.min(VP_PAN,o.x+step)); moved=true; }
+      else if (e.key==='ArrowUp'){ o.y=Math.max(-VP_PAN,Math.min(VP_PAN,o.y-step)); moved=true; }
+      else if (e.key==='ArrowDown'){ o.y=Math.max(-VP_PAN,Math.min(VP_PAN,o.y+step)); moved=true; }
       if (moved){ e.preventDefault(); setVp(o); }
     });
     var dragging=false, sx=0, sy=0, ix=0, iy=0;
@@ -11628,7 +11887,7 @@ function wireFormControls(host, saveDraft){
     window.addEventListener('mousemove', function(e){
       if (!dragging) return;
       var dx=(e.clientX-sx), dy=(e.clientY-sy);
-      var o=vp(); o.x=Math.max(-80,Math.min(80,ix+dx/3)); o.y=Math.max(-80,Math.min(80,iy+dy/3)); setVp(o);
+      var o=vp(); o.x=Math.max(-VP_PAN,Math.min(VP_PAN,ix+dx/3)); o.y=Math.max(-VP_PAN,Math.min(VP_PAN,iy+dy/3)); setVp(o);
     });
     window.addEventListener('mouseup', function(){ dragging=false; prev.style.cursor=''; });
     /* 触摸支持 */
@@ -11639,7 +11898,7 @@ function wireFormControls(host, saveDraft){
     window.addEventListener('touchmove', function(e){
       if (!dragging) return;
       var dx=(e.touches[0].clientX-sx), dy=(e.touches[0].clientY-sy);
-      var o=vp(); o.x=Math.max(-80,Math.min(80,ix+dx/3)); o.y=Math.max(-80,Math.min(80,iy+dy/3)); setVp(o);
+      var o=vp(); o.x=Math.max(-VP_PAN,Math.min(VP_PAN,ix+dx/3)); o.y=Math.max(-VP_PAN,Math.min(VP_PAN,iy+dy/3)); setVp(o);
     });
     window.addEventListener('touchend', function(){ dragging=false; });
     /* 剪切板粘贴 */
@@ -11697,8 +11956,8 @@ var PK_TYPES = ['一般','火','水','电','草','冰','格斗','毒','地面','
 /* v96：分页大小。30周年冰箱贴有 1324 件，一次性渲染 1324 张带封面/阴影/圆角的卡片
    会让手机每次点击筛选都卡好几秒；改成先渲染 60 张，点「加载更多」再追加。 */
 var PK_PAGE = 60;
-/* v96i：封面编辑的视口范围常量。缩放 50%–150%（上限从 400% 收到 150%），平移 ±80（与拖拽/方向键同一范围）。 */
-var VP_ZMIN = 0.5, VP_ZMAX = 1.5, VP_PAN = 80;
+/* v146：视口范围常量（VP_ZMIN / VP_ZMAX / VP_PAN）已上移到文件靠前处 —— 见 vpSizeCss() 上面。
+   ⚠️ 别在这里再声明一次：`var` 会在文件加载时重新赋值，把新范围覆盖回旧值。 */
 var PK_FORMS = ['常规图鉴','超级进化','地区形态','超极巨化','原始回归','无极巨化'];
 var PK_GROUPS = ['传说宝可梦','幻之宝可梦','究极异兽','初始的伙伴'];
 /* v77：地区形态的下级选项——只有「特殊形态 = 地区形态」时才显示这一行 */
@@ -11827,7 +12086,12 @@ function toggleRowStatus(key, id, status){
     var ix = arr.indexOf(status);
     if (ix >= 0){ arr.splice(ix,1); on = false; }
     else { arr.push(status); on = true; }
-    if (status==='在库') clearOwnedConflicts(arr);   /* 点在库 → 自动清掉「想收 / 已预订 / 云游」 */
+    /* v147：在库 与「云游 / 想收 / 已预订」互斥，**双向**都清 ——
+       只在「加上」时清（取消某个状态时不去动别的，免得用户只是想取消「想收」却把「在库」也弄没了）。 */
+    if (on){
+      if (status==='在库') clearOwnedConflicts(arr);                      /* 加在库 → 清掉那三个 */
+      else if (arr.indexOf('在库')>=0) arr.splice(arr.indexOf('在库'),1);  /* 加那三个 → 去掉在库 */
+    }
   }
   if (MODE === 'db'){
     /* db 模式：走 updateRow，字段值先用 fieldVal 摊平成表单形状（img → 字符串 URL） */
@@ -11863,10 +12127,11 @@ function pkQuickBtnsHTML(r){
     /* 在库：没点时是动作「收服」（宝可梦）/「招募」（其它 IP），点过之后是状态「在库」 */
     var actWord = (s==='在库' && !on) ? (isPkm ? '收服' : '招募') : s;
     var tipVerb = (s==='在库')
-      ? (on ? ((hasStatus(r,'云游') || hasStatus(r,'想收'))
-                ? '已「在库」，点一下顺手清掉多余的「想收 / 云游」'
+      ? (on ? (ownedExtraStatuses(r).length
+                ? '已「在库」，点一下顺手清掉多余的「想收 / 已预订 / 云游」'
                 : '已「在库」，再点一次取消')
-            : (isPkm ? '收服了（标记为在库，并自动取消「想收」）' : '招募了（标记为在库，并自动取消「想收」）'))
+            : (isPkm ? '收服了（标记为在库，并自动取消「想收 / 已预订 / 云游」）'
+                     : '招募了（标记为在库，并自动取消「想收 / 已预订 / 云游」）'))
       : (on ? '已「想收」，再点一次取消' : '标记为「想收」');
     /* v126：宝可梦 IP 的「在库」按钮图标化（闭球=已在库、开球=去收服）。
        解析不出图片时（极少数情况）自动退回原来的文字，功能不受影响。 */
@@ -12851,36 +13116,43 @@ function openForm(key, id, opts){
     }
   })();
   /* v96q：云游联动 —— 勾选「云游」时自动取消「在库」并把「持有」清空为 null（云游＝未入手，不应有持有数） */
+  /* v96q / v96s / v147：状态互斥 ——「在库」与「云游 / 想收 / 已预订」互斥，后三者可彼此共存。
+     ⚠️ v147 修的坑：以前这里只写了「勾在库 → 取消云游」，**漏了「想收 / 已预订」**。
+        保存时 `doSave` 有兜底会清掉（数据是对的），但**界面上的勾没跟着掉**，
+        用户看到的就是「录入时点了在库，其他状态不会自动消失」。
+     现在的规则：
+       · 勾「在库」        → 取消另外三个 + 持有填 1（在库＝至少 1 件）
+       · 勾「云游」        → 取消在库 + 清空持有（云游＝还没入手，不该有持有数）
+       · 勾「想收/已预订」 → 取消在库（**不动持有**：也可能是「已经有一件，还想再收一件」）
+     只响应「勾上」这个动作；取消勾选只重算数组。程序改 `.checked` 不会触发 change，所以不会递归。 */
   (function(){
     var statusBox = host.querySelector('.checksrow[data-k="状态"]');
     if (!statusBox) return;
-    var wanderCb = statusBox.querySelector('input[data-v="云游"]');
+    var cbs = [].slice.call(statusBox.querySelectorAll('input[type="checkbox"]'));
     var ownCb = statusBox.querySelector('input[data-v="在库"]');
     var holdInp = host.querySelector('[data-f="持有"]');
     function rebuildStatus(){
       var arr=[];
-      statusBox.querySelectorAll('input[type="checkbox"]').forEach(function(cb){ if(cb.checked) arr.push(cb.getAttribute('data-v')); });
+      cbs.forEach(function(cb){ if (cb.checked) arr.push(cb.getAttribute('data-v')); });
+      clearOwnedConflicts(arr);          /* 兜底：数组里绝不留下「在库 + 其他」的组合 */
       editing.vals['状态']=arr;
       if (saveDraft) saveDraft();
     }
-    if (wanderCb){
-      wanderCb.addEventListener('change', function(){
-        if (!wanderCb.checked) return;        /* 仅「勾选云游」触发；取消云游不反向处理 */
-        if (ownCb) ownCb.checked=false;        /* 自动取消在库 */
-        rebuildStatus();                       /* 从 DOM 重算状态数组（去掉在库） */
-        if (holdInp){ holdInp.value=''; editing.vals['持有']=null; if (saveDraft) saveDraft(); }
+    cbs.forEach(function(cb){
+      var val = cb.getAttribute('data-v');
+      cb.addEventListener('change', function(){
+        if (cb.checked){
+          if (val === '在库'){
+            cbs.forEach(function(o){ if (o !== cb) o.checked = false; });   /* 清掉另外三个 */
+            if (holdInp){ holdInp.value = '1'; editing.vals['持有'] = 1; }
+          } else {
+            if (ownCb) ownCb.checked = false;                              /* 在库与它们互斥 */
+            if (val === '云游' && holdInp){ holdInp.value = ''; editing.vals['持有'] = null; }
+          }
+        }
+        rebuildStatus();
       });
-    }
-    /* v96s：在库联动 —— 勾选「在库」时自动取消「云游」（在库与云游互斥），并把「持有」自动填充为 1（在库＝至少拥有 1 件）。
-       取消在库不反向处理；与「勾选云游→清在库+清持有」互补，二者因只响应各自「勾选」动作、且程序改 .checked 不触发 change，不会互相递归。 */
-    if (ownCb){
-      ownCb.addEventListener('change', function(){
-        if (!ownCb.checked) return;            /* 仅「勾选在库」触发；取消在库不反向处理 */
-        if (wanderCb) wanderCb.checked=false;  /* 自动取消云游 */
-        rebuildStatus();                       /* 从 DOM 重算状态数组（去掉云游） */
-        if (holdInp){ holdInp.value='1'; editing.vals['持有']=1; if (saveDraft) saveDraft(); }
-      });
-    }
+    });
   })();
   var del=$('delBtn');
   if (del) del.onclick=function(){
@@ -13002,17 +13274,16 @@ function fieldHTML(f, v){
       '</div>';
   } else if (f.t==='img'){
     var vp = (editing && editing.vals && editing.vals[f.k+'_vp']) || {s:1,x:0,y:0};
-    /* v96f→v96g：默认 contain（整图完整显示、四周白色补边）；用户放大（s>1）按比例放大；
-       用户缩小（s<1）按比例缩小、最低 50%（Math.max(50,...) 兜底），不再强制 contain 以免无法缩小 */
-    var bgSize = (vp.s && vp.s>1) ? (Math.max(100,Math.round(vp.s*100))+"% auto")
-                : (vp.s && vp.s<1) ? (Math.max(50,Math.round(vp.s*100))+"% auto") : "contain";
-    var prevStyle = v ? ("background-image:url('"+resolveImgUrl(v).replace(/[\"'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+(50-vp.x)+"% "+(50-vp.y)+"%;background-size:"+bgSize) : '';
+    /* v146：默认 contain（整图完整显示、四周白色补边）；放大/缩小按比例（30%–180%），
+       换算统一走 vpSizeCss，与拖拽时 applyImgViewport 完全一致 */
+    var bgSize = vpSizeCss(vp.s, true);
+    var prevStyle = v ? ("background-image:url('"+resolveImgUrl(v).replace(/[\"'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+vpPosCss(vp)+";background-size:"+bgSize) : '';
     var hasV = !!v;
     body='<div class="imgwrap" data-k="'+f.k+'" data-has-img="'+(hasV?1:0)+'">'+
       '<div class="imgprev" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
       /* v75fix：封面框右上角「✕」——一键清掉当前这张图 */
       (v?'<button type="button" class="imgdel" data-act="imgdel" data-k="'+esc(f.k)+'" title="清除这张图片">✕</button>':'')+
-      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动 · 滑杆/滚轮缩放 · 方向键微调 · 双击重置</div>'+
+      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动（可推出边框）· 滑杆/滚轮缩放 30–180% · 方向键微调 · 双击重置</div>'+
       '</div>'+
       '<div class="imgvp-bar" '+(v?'':'hidden')+'>'+
         '<div class="imgvp-sliderwrap">'+
