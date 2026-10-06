@@ -7281,6 +7281,27 @@ function ownedExtraStatuses(row){
 }
 /* 兼容旧名（老代码/外部脚本可能还在引用） */
 function clearWanderWhenOwned(arr){ return clearOwnedConflicts(arr); }
+/* v150：「在库 ⇒ 持有至少 1」。
+   用户要的行为：**任何界面**点一下「在库」，持有数就自动变成 1；要 2 件以上自己点 ＋ 加。
+   为什么不能只靠 effHold 的显示兜底：那只是「显示成 1」，数据里还是空的 ——
+   一打开编辑表单看到空、一导出 JSON 也是空，换个入口看就露馅。
+   ⚠️ 只补「还没记」的情况（空 / 0 / 非法值），**绝不覆盖已经填好的 ≥1**：
+   用户填了 5，随手点一下「在库」就被压回 1 —— 那是数据损失。
+   ⚠️ 四个写状态的入口都要接（v147 那次只接了表单里的 change，
+     所以「点卡片上的快速按钮不涨持有」这个漏点一直留着）：
+     快速按钮 toggleRowStatus、表单 change、表单保存 doSave、批量编辑 applyBatchPatch。
+   返回「要跟着状态一起写进去的补丁」；不需要补就返回空对象
+   （patchRowFields 的 patchIsNoop 会因此不落盘、不白刷 _upd）。 */
+function holdPatchForStatus(statusArr, curHold){
+  var arr = Array.isArray(statusArr)
+    ? statusArr
+    : String(statusArr==null?'':statusArr).split(',').map(function(s){ return String(s).trim(); });
+  if (arr.indexOf('在库') < 0) return {};
+  if (curHold == null || curHold === '') return { '持有': 1 };
+  var n = Number(curHold);
+  if (!isFinite(n) || n < 1) return { '持有': 1 };
+  return {};
+}
 /* 持有数量的有效值：在库藏品若没填过，默认视作 1（「手里至少这一件」）；
    非在库或已填过则按原值。用于详情卡展示、内联编辑、新增表单默认值。 */
 function effHold(r){
@@ -12073,14 +12094,19 @@ function toggleRowStatus(key, id, status){
   /* v128/v130：脏数据兜底 —— 已经是在库、却还挂着想收/已预订/云游（旧版本没清）：
      点一下只清掉这些多余的、保留在库，而不是把在库一起取消掉。
      否则会出现「点『在库』反而把它取消了、多余的还留着」这种反直觉结果。
-     判断名单与 clearOwnedConflicts 共用 OWNED_CONFLICT_STATUS。 */
+     判断名单与 clearOwnedConflicts 共用 OWNED_CONFLICT_STATUS。
+     ⚠️ v151：**「持有还没记」也要算进「需要修一下」**。
+     旧数据里状态是在库、持有却是空的（v150 之前的版本不补持有），
+     用户点这一下本来就想把它补成 1 —— 按老逻辑却会走「再点一次 = 取消在库」，
+     于是「点了在库，持有数还是没变 1」，正是用户报的那条。 */
   if (status==='在库' && arr.indexOf('在库')>=0){
     var extras = OWNED_CONFLICT_STATUS.filter(function(s){ return arr.indexOf(s)>=0; });
-    if (extras.length){
+    var needHold = holdPatchForStatus(['在库'], row['持有'])['持有'] != null;
+    if (extras.length || needHold){
       clearOwnedConflicts(arr);      /* 保留在库，清掉多余的 */
       on = true;
     } else {
-      arr.splice(arr.indexOf('在库'),1); on = false;   /* 干净的在库 → 再点一次取消 */
+      arr.splice(arr.indexOf('在库'),1); on = false;   /* 干净的在库（持有已 ≥1）→ 再点一次取消 */
     }
   } else {
     var ix = arr.indexOf(status);
@@ -12093,15 +12119,21 @@ function toggleRowStatus(key, id, status){
       else if (arr.indexOf('在库')>=0) arr.splice(arr.indexOf('在库'),1);  /* 加那三个 → 去掉在库 */
     }
   }
+  /* v150：点「在库」时顺手把持有补成 1 —— 卡片上的快速按钮就走这条路。
+     不是「在库」、或本来就有 ≥1，补丁为空（不落盘、不白刷 _upd）。 */
+  var holdPatch = holdPatchForStatus(arr, row['持有']);
   if (MODE === 'db'){
     /* db 模式：走 updateRow，字段值先用 fieldVal 摊平成表单形状（img → 字符串 URL） */
     var vals = {};
     activeFields(key, row).forEach(function(f){ vals[f.k] = fieldVal(row, f); });
     vals['状态'] = arr;
+    Object.keys(holdPatch).forEach(function(k){ vals[k] = holdPatch[k]; });
     updateRow(key, id, vals);
   } else {
     /* 本地 / gh / localfile：直接改行内字段再落盘，不经过 localUpsert 的 img 转换 */
-    patchRowFields(key, id, { 状态: arr });
+    var write = { 状态: arr };
+    Object.keys(holdPatch).forEach(function(k){ write[k] = holdPatch[k]; });
+    patchRowFields(key, id, write);
   }
   return on;
 }
@@ -12933,6 +12965,13 @@ function openForm(key, id, opts){
     if (hasStatus(editing.vals,'在库')) editing.vals['持有']=1;
     else if (hasStatus(editing.vals,'云游')) editing.vals['持有']=0;
   }
+  /* v150：编辑**已有**条目同样兜底 —— 状态里勾着「在库」而持有还空着 / 是 0
+     （老数据、或者从「云游」切过来留下的 0），保存时补成 1。
+     只在「还没记」时补，用户填的 ≥1 一个字不动。 */
+  if (key==='collection'){
+    var _hp0 = holdPatchForStatus(editing.vals['状态'], editing.vals['持有']);
+    if (_hp0['持有'] != null) editing.vals['持有'] = _hp0['持有'];
+  }
 
   var host=$('sheetHost');
   /* 表单标题按具体类目个性化：影音厅的电影/留声机、文渊斋的书籍/杂志 */
@@ -13024,6 +13063,11 @@ function openForm(key, id, opts){
           ? editing.vals['状态'].slice()
           : String(editing.vals['状态']||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
         editing.vals['状态'] = clearOwnedConflicts(_sa);
+        /* v150：在库 ⇒ 持有至少 1。上面的 openForm 已经补过一次，这里再兜一道 ——
+           表单里可能先勾「云游」（持有置空/0）再改勾「在库」，
+           或者编辑的是一条持有为空的老数据，保存时必须落成 1。 */
+        var _hpSave = holdPatchForStatus(editing.vals['状态'], editing.vals['持有']);
+        if (_hpSave['持有'] != null) editing.vals['持有'] = _hpSave['持有'];
       }
       /* v96r：端盒联动 —— 选上端盒则同系列所有 item 自动置端盒；端盒价（购入价格）与 购入渠道 同步。
          价格仅在 >0 时同步，渠道仅在非空时同步；用 patchRow 只合并这两个字段，绝不把兄弟项其它字段清成 null。 */
@@ -13144,7 +13188,10 @@ function openForm(key, id, opts){
         if (cb.checked){
           if (val === '在库'){
             cbs.forEach(function(o){ if (o !== cb) o.checked = false; });   /* 清掉另外三个 */
-            if (holdInp){ holdInp.value = '1'; editing.vals['持有'] = 1; }
+            /* v150：持有只在「还没记」时补成 1 —— 用户已经填了 5，不打回 1（那是数据损失） */
+            if (holdInp && holdPatchForStatus(['在库'], holdInp.value)['持有'] != null){
+              holdInp.value = '1'; editing.vals['持有'] = 1;
+            }
           } else {
             if (ownCb) ownCb.checked = false;                              /* 在库与它们互斥 */
             if (val === '云游' && holdInp){ holdInp.value = ''; editing.vals['持有'] = null; }
@@ -14806,6 +14853,13 @@ function applyBatchEdit(){
 /* 逐条写入（兼容 db / 本地 / 文件 / gh 模式） */
 function applyBatchPatch(ids, patch){
   var key='collection';
+  /* v150：整批把状态改成「在库」时，每行还要把「还没记」的持有补成 1。
+     ⚠️ 必须逐行判断，不能把「持有=1」直接塞进 patch —— patch 是整批统一值，
+        会把原本持有 3 的那几条一起压成 1（数据损失）。
+     ⚠️ 用户在批量面板里**自己勾了「持有」**并填了值 → 以他填的为准，这里一个字不动。 */
+  var _stNow = patch['状态'];
+  var _ownedPatch = Array.isArray(_stNow) && _stNow.indexOf('在库') >= 0;
+  var _userHold = Object.prototype.hasOwnProperty.call(patch, '持有');
   if (MODE==='db'){
     ids.forEach(function(id){
       var row=(store[key].rows||[]).filter(function(r){ return String(r._id)===String(id); })[0];
@@ -14813,6 +14867,10 @@ function applyBatchPatch(ids, patch){
       var vals={};
       activeFields(key, row).forEach(function(f){ vals[f.k]=fieldVal(row,f); });
       Object.keys(patch).forEach(function(k){ vals[k]=patch[k]; });
+      if (_ownedPatch && !_userHold){
+        var hp = holdPatchForStatus(vals['状态'], vals['持有']);
+        if (hp['持有'] != null) vals['持有'] = hp['持有'];
+      }
       updateRow(key, id, vals, function(){});
     });
     return;
@@ -14828,6 +14886,11 @@ function applyBatchPatch(ids, patch){
       if (DATE_FIELDS[k]) nv = normDateStr(nv);        /* v144：日期先补零，免得写出「等价不同串」 */
       if (cloudStableStr(r[k]) !== cloudStableStr(nv)){ r[k] = nv; changed = true; }
     });
+    /* v150：状态这轮已写入，再逐行补持有（状态含「在库」且持有空 / 0 → 1） */
+    if (_ownedPatch && !_userHold){
+      var hp2 = holdPatchForStatus(r['状态'], r['持有']);
+      if (hp2['持有'] != null){ r['持有'] = hp2['持有']; changed = true; }
+    }
     /* v144：批量编辑以前**完全不动 _upd / _rev**，改动对「增量同步」是隐形的 ——
        上传时靠指纹能发现「内容变了」，所以云端会更新；但另一端拉取时看到
        _upd 与本机相同就不覆盖 → 双端各留一份、永远报「待上传」，还会互相盖。
