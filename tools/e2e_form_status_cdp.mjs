@@ -264,6 +264,20 @@ async function main() {
   ok(!after['想收'] && !after['已预订'], '附加态也没被带上');
   ok(tip.indexOf('在库') >= 0 && tip.indexOf('云游') >= 0,
     '★ 界面上明说了「已切到在库，云游自动取消了」（用户能看见反馈，不再靠猜）');
+
+  /* 最后重新点一遍「云游」让提示条停在画面上，截一张存档 —— 给用户看"现在有反馈了" */
+  try {
+    const pt2 = await pillCenter('云游');
+    await realClick(pt2);
+    await send('Emulation.setDeviceMetricsOverride', { width: 900, height: 1000, deviceScaleFactor: 2, mobile: false });
+    await sleep(350);
+    const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+    const dir = join(ROOT, '下载图', '_预览');
+    mkdirSync(dir, { recursive: true });
+    const p = join(dir, 'v158-状态互斥提示.png');
+    writeFileSync(p, Buffer.from(shot.data, 'base64'));
+    console.log('  截图存档：' + p);
+  } catch (e) { console.log('  （截图失败，不影响断言：' + (e && e.message) + '）'); }
 }
 
 try { await main(); } catch (e) {

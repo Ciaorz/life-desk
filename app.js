@@ -4951,7 +4951,7 @@ var MODS = {
     desc:'拥有的每一件，都有它自己的位置和来处。', addLabel:'添加藏品',
     fields:[
       /* v75fix：4 列栅格 —— 名称 1/2 + 大类 1/4 + 小类 1/4 同一行 */
-      {k:'名称',t:'text',req:1,ph:'这件东西叫什么'},
+      {k:'名称',t:'text',req:1,ph:'这件东西叫什么',altAdd:1},
       {k:'大类',t:'select',o:CATS_FORM,def:'手办',quarter:true},
       {k:'小类',t:'dyn',src:'sub',quarter:true},
       {k:'IP',t:'dyn',src:'ip'},
@@ -4985,7 +4985,13 @@ var MODS = {
          不弹窗）。字段定义去掉不影响数据：applyFieldVal 是以旧记录为底合并的，
          表单里没有的字段一动不动，值原样留着、照样跟行一起同步。 */
       {k:'封面',t:'img',ph:'图片链接，或点右侧上传',full:1},
-      {k:'短评',t:'textarea',ph:'一句话就够',full:1}
+      {k:'短评',t:'textarea',ph:'一句话就够',full:1},
+      /* v159：备注名 —— 给名字太长的东西起个顺口的别名。
+         用户要的交互：**名称输入框里放一个「+ 备注」**，点了才冒出这个输入框（独立一行）。
+         所以它默认是收起的（`alt:1`），渲染时由 fieldHTML 决定收不放；
+         点 + 只是给它去掉一个 CSS 类，**不需要重绘表单**（表单字段列表是打开时就定死的，
+         重绘会让用户填了一半的东西跳走 —— 这个坑上次做「条件显示」时踩过）。 */
+      {k:'备注名',t:'text',ph:'别名 / 简称，例如「小凳子」',full:1,alt:1}
     ]},
   ip: { key:'ip', db:DB.ip, name:'IP 库', icon:'I', eyebrow:'IP',
     desc:'先有 IP，再有它下面那一堆东西。', addLabel:'新增 IP',
@@ -7913,6 +7919,17 @@ function collStats(){
   return h;
 }
 /* v96：cols=2 / 3 —— 手机端固定每行列数并整体等比缩小（目前只有宝可梦系列详情传入） */
+/* ============================================================
+ * v159：物品名的展示 —— 「名称」黑色 + 「备注名」灰色小一号。
+ * 用户要的：有些东西名字太长（「便携式折叠凳」），想挂个顺口的别名（「小凳子」），
+ * 卡片上写成「便携式折叠凳 小凳子」—— 主名黑的正字、别名灰的小字，一眼分得出主次。
+ * ⚠️ 里面已经 esc 过了，调用方别再包一层。
+ * ============================================================ */
+function nameHTML(row){
+  var nm = (row && row['名称']) || '未命名';
+  var alt = String((row && row['备注名']) || '').trim();
+  return esc(nm) + (alt ? '<span class="altname">'+esc(alt)+'</span>' : '');
+}
 function collectionWall(rows, cols){
   /* v96k：内联写 --cs，首帧就是用户上次的卡片大小，不等 JS 再赋值（避免闪一下） */
   return '<div class="wall'+(cols?' wall-c'+cols:'')+'" style="--cs:'+csGet()+'">'+rows.map(function(r){
@@ -7931,14 +7948,14 @@ function collectionWall(rows, cols){
       (num(r['星级'])?'<span class="score">'+stars(r['星级'])+'</span>':'')+
       pkQuickBtnsHTML(r)+
       pkTypeIconsHTML(r)+
-      '</div><h4>'+esc(t)+'</h4><p>'+esc(sub||'—')+'</p></div>';
+      '</div><h4>'+nameHTML(r)+'</h4><p>'+esc(sub||'—')+'</p></div>';
   }).join('')+'</div>';
 }
 function collectionList(rows){
   return '<div class="rows">'+rows.map(function(r){
     return '<div class="crow" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-      '<div class="t"><b>'+esc(r['名称']||'未命名')+'</b>'+
+      '<div class="t"><b>'+nameHTML(r)+'</b>'+
       '<span>'+esc(r['大类']||'')+(r['小类']?' · '+esc(r['小类']):'')+
       (r['编号']?' · #'+esc(r['编号']):'')+
       (r['IP']?' · '+esc(r['IP']):'')+
@@ -11106,6 +11123,26 @@ document.addEventListener('click', function(ev){
     render(); return;
   }
   if (act==='poeditdone'){ ui.poEdit = null; render(); return; }
+  /* v159（表单）：「＋ 备注」→ 展开下面那一行「备注名」并聚焦。
+     ⚠️ 只切 CSS 类 `.is-hidden`，**不重绘表单** —— 表单的字段列表在打开时就定死了，
+        重绘会让用户填到一半的内容跳走（做「条件显示」时踩过这个坑）。 */
+  if (act==='altadd'){
+    var _ak = node.getAttribute('data-k') || '备注名';
+    var _grid = node.closest ? node.closest('.fgrid') : null;
+    var _fld = null;
+    if (_grid){
+      var _cells = _grid.querySelectorAll('.f');
+      for (var _ci = 0; _ci < _cells.length; _ci++){
+        if (_cells[_ci].querySelector('[data-f="'+_ak+'"]')){ _fld = _cells[_ci]; break; }
+      }
+    }
+    if (_fld){
+      _fld.classList.remove('is-hidden');
+      var _inp = _fld.querySelector('[data-f="'+_ak+'"]');
+      if (_inp && _inp.focus) _inp.focus();
+    }
+    return;
+  }
   /* 就地编辑区容器：点下拉 / 点空白时把事件吃掉 —— 否则会冒到卡片的 `popen`（点开详情）上 */
   if (act==='poeditnoop'){ return; }
   /* v149：IP 卡的折叠开关 —— 只切界面（localStorage），不动数据。
@@ -11673,6 +11710,31 @@ function seriesChildDefs(seriesName){
 }
 function childNamesOf(seriesName){
   return seriesChildDefs(seriesName).map(function(x){ return x['名称']; });
+}
+/* ============================================================
+ * v159：把同一「子系列」的物品聚成一段，中间不插别的。
+ * 用户要的：Road trip 这种一个大系列下分 徽章 / 冰箱贴 / 行李牌，
+ * 按编号排完序三套会混着插（一条徽章、一条冰箱贴…），看着一条一条跳；
+ * 聚拢后一套接一套，顺眼也好清点。
+ * · 子系列之间的先后 = 系列里**登记的顺序**（childNamesOf）；没登记的按首次出现。
+ * · 没填子系列的排最后，各组内部保持传进来的原顺序（也就是编号序）。
+ * ⚠️ 只在**系列详情**里用；全库平铺（按物品）不该动顺序。
+ * ============================================================ */
+function groupByChildSeries(rows, defOrder){
+  var order = [], map = {}, rest = [];
+  (defOrder || []).forEach(function(n){
+    n = String(n||'').trim();
+    if (n && order.indexOf(n) < 0) order.push(n);
+  });
+  (rows || []).forEach(function(r){
+    var c = String((r && r['子系列']) || '').trim();
+    if (!c){ rest.push(r); return; }
+    if (!map[c]){ map[c] = []; if (order.indexOf(c) < 0) order.push(c); }
+    map[c].push(r);
+  });
+  var out = [];
+  order.forEach(function(c){ if (map[c]) out = out.concat(map[c]); });
+  return out.concat(rest);
 }
 /* 老数据兜底：item 上已经写过的「子系列」值（那时还没有登记表） */
 function seriesChildNamesFromItems(seriesName){
@@ -13063,6 +13125,9 @@ function renderSeriesDetail(){
      的系列都享受这整套：属性/形态/图鉴组/世代组 筛选栏、按图鉴号排序、进度只数基础形态。 */
   var isPk = pkLikeSeries(se);
   var itemsAll = isPk ? pkSortItems(seriesItems(name)) : sortByNo(seriesItems(name));
+  /* v159：排完序再按**子系列聚拢**一次 —— 同一子系列的物品连续显示、中间不插别的
+     （详见 groupByChildSeries 的注释）。没有子系列的系列这一步是空操作。 */
+  itemsAll = groupByChildSeries(itemsAll, childNamesOf(name));
   /* v132：只保留当前版本的记录 —— 收集进度、筛选栏计数、子项墙全都跟着它走。
      （两份记录的名字 / 编号 / 封面完全相同，靠 版本 字段区分。） */
   if (isVer) itemsAll = itemsAll.filter(function(r){ return pkVerOf(r)===ui.collection.seriesVer; });
@@ -13809,12 +13874,24 @@ function fieldHTML(f, v){
      v76：宽度可被「页面管理 → 内置字段」覆盖，1=25% / 2=50% / 3=75% / 4=整行。 */
   var _span = fieldSpanOf(f, curFieldLayout());
   var body='', cls='f'+(_span===4?' full':'')+(_span===1?' q':'')+(_span===3?' w3':'')+(f.rowstart?' rs':'')
-    +(f.t==='childadd'?' childaddbox':'');
+    +(f.t==='childadd'?' childaddbox':'')
+    /* v159：「备注名」这类附带字段默认收起（`alt:1`）—— 没值时藏起来，免得每个表单都多占一行。
+       ⚠️ 只是加个 CSS 类（`.is-hidden`），**不重绘表单**：
+          点「＋ 备注」时由事件把类去掉即可，用户填到一半的东西不会跳走。 */
+    +(f.alt ? ' altfield'+(String(v==null?'':v).trim()?'':' is-hidden') : '');
   if (f.t==='text' || f.t==='number' || f.t==='currency' || f.t==='date'){
     var type = f.t==='number'||f.t==='currency' ? 'number' : (f.t==='date'?'date':'text');
     /* autocomplete=off：阻止 Chrome 把「国家地区」之类字段当成用户名去匹配已保存的密码 */
     body='<input data-f="'+f.k+'" type="'+type+'" value="'+esc(v)+'" placeholder="'+esc(f.ph||'')+'" autocomplete="off"'+
       (f.min!=null?' min="'+f.min+'"':'')+(f.max!=null?' max="'+f.max+'"':'')+'>';
+    /* v159：「名称」输入框里挂一个「＋ 备注」—— 点了才冒出下面那一行「备注名」。
+       用户要的就是这个：名字太长时补个别名，但平时不占地方。 */
+    if (f.altAdd){
+      body = '<div class="namewrap">'+body+
+        '<button type="button" class="altadd" data-act="altadd" data-k="备注名"'+
+        ' title="给这件东西加一个备注名（别名），卡片上会跟在名字后面小字显示">＋ 备注</button>'+
+        '</div>';
+    }
   } else if (f.t==='isbn'){
     /* v77：ISBN 输入 + 正下方的「扫码 / 照片识别 / 书名搜索」模块。
        扫码或照片识别出的号码直接填进上面的 ISBN 框；条码扫不到时可用书名搜索。 */

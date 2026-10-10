@@ -4114,3 +4114,23 @@ input.search{margin-bottom:12px}
   .fuzzy-date-wrap select[data-fzg]{flex:1 1 96px}
   .fuzzy-date-wrap select[data-fzd]{flex:0 0 62px}
 }
+
+/* ============================================================
+   v159：物品「备注名」（别名）
+   ① 表单里「名称」输入框内的「＋ 备注」，点了才展开下面那行「备注名」；
+   ② 卡片/列表上：名称（黑）+ 备注名（灰、小一号）
+   ============================================================ */
+.namewrap{position:relative;display:block}
+.f .namewrap input{width:100%;padding-right:80px}
+.altadd{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+  border:1px solid var(--line);background:rgba(111,89,67,.06);color:var(--muted);
+  font-family:inherit;font-size:11px;line-height:1;padding:5px 9px;border-radius:8px;
+  cursor:pointer;white-space:nowrap}
+.altadd:hover{background:rgba(111,89,67,.14);color:var(--ink)}
+.altfield.is-hidden{display:none}
+.altname{color:var(--muted);font-size:.82em;font-weight:400;margin-left:6px;
+  white-space:normal;word-break:break-word}
+@media (max-width:560px){
+  .f .namewrap input{padding-right:70px}
+  .altadd{font-size:10.5px;padding:5px 7px;right:5px}
+}
