@@ -4127,10 +4127,19 @@ input.search{margin-bottom:12px}
   font-family:inherit;font-size:11px;line-height:1;padding:5px 9px;border-radius:8px;
   cursor:pointer;white-space:nowrap}
 .altadd:hover{background:rgba(111,89,67,.14);color:var(--ink)}
-.altfield.is-hidden{display:none}
+.altfield.is-hidden,.catfield.is-hidden{display:none}
 .altname{color:var(--muted);font-size:.82em;font-weight:400;margin-left:6px;
   white-space:normal;word-break:break-word}
 @media (max-width:560px){
   .f .namewrap input{padding-right:70px}
   .altadd{font-size:10.5px;padding:5px 7px;right:5px}
 }
+
+/* v160：预定物卡片上的「定金 / 尾款」—— 就地填金额 */
+.po-num{font-family:inherit;font-size:12px;padding:3px 6px;border-radius:8px;
+  border:1px solid var(--line);background:#fffdf9;color:var(--ink);width:94px}
+.po-num:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+.po-sum{background:rgba(71,115,88,.12);color:var(--green);font-weight:600;white-space:nowrap}
+
+/* v160：手办「比例」字段（只有大类是手办才显示）—— 显隐由 .is-hidden 控制 */
+.catfield{transition:none}

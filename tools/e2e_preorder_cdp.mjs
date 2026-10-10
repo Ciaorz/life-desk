@@ -234,6 +234,40 @@ async function main() {
       out.inlineClosed = !document.querySelector('.po-inlineedit');
     }
 
+    /* ⑧ v160：定金 / 尾款 —— 点标签就地填，然后「到货了」把购入价格自动算成两者之和 */
+    inject();
+    var depChip = document.querySelector('[data-act="poedit"][data-id="po1"][data-f="定金"]');
+    out.depChip = !!depChip;
+    if (depChip){
+      depChip.click();
+      var edN = document.querySelector('.po-inlineedit[data-id="po1"] [data-poseg="num"]');
+      out.hasNumInput = !!edN;
+      if (edN){
+        edN.value = '300';
+        edN.dispatchEvent(new Event('change', {bubbles:true}));
+        var r3 = S.collection.rows.filter(function(x){ return x._id==='po1'; })[0] || {};
+        out.depSaved = r3['定金'];
+      }
+      var balChip = document.querySelector('[data-act="poedit"][data-id="po1"][data-f="尾款"]');
+      out.balChip = !!balChip;
+      if (balChip){
+        balChip.click();
+        var edN2 = document.querySelector('.po-inlineedit[data-id="po1"] [data-poseg="num"]');
+        if (edN2){ edN2.value = '200'; edN2.dispatchEvent(new Event('change', {bubbles:true})); }
+        var r4 = S.collection.rows.filter(function(x){ return x._id==='po1'; })[0] || {};
+        out.balSaved = r4['尾款'];
+        out.totalChip = (stage().indexOf('合计 ¥500') >= 0);
+      }
+      var recv = document.querySelector('[data-act="porecv"][data-id="po1"]');
+      out.recvBtn2 = !!recv;
+      if (recv){
+        recv.click();
+        var r5 = S.collection.rows.filter(function(x){ return x._id==='po1'; })[0] || {};
+        out.statusAfter = r5['状态'];
+        out.priceAfter = r5['购入价格'];
+      }
+    }
+
     out.errs = (window.__errs||[]).slice(0,5);
     return out;
   })()`;
@@ -259,9 +293,10 @@ async function main() {
         S.collection.status='ok';
         S.collection.rows=[
           {_id:'s1',名称:'30周年冰箱贴 · 梦幻',大类:'周边',小类:'冰箱贴',IP:'宝可梦',系列:'30周年冰箱贴',
-           状态:['已预订'],持有:null,预定日期:off(-6),预定出货日期:off(2),_upd:1,_rev:1},
+           状态:['已预订'],持有:null,预定日期:off(-6),预定出货日期:off(2),
+           定金:300,尾款:1200,_upd:1,_rev:1},
           {_id:'s2',名称:'星际宝贝 毛绒挂件',大类:'毛绒',IP:'星际宝贝',状态:['已预订'],持有:null,
-           预定日期:off(-24),预定出货日期:ym(-1),_upd:1,_rev:1},
+           预定日期:off(-24),预定出货日期:ym(-1),定金:200,_upd:1,_rev:1},
           {_id:'s3',名称:'三丽鸥 库洛米 手办',大类:'手办',IP:'三丽鸥',状态:['已预订'],持有:0,
            预定日期:off(-12),预定出货日期:ym(1),_upd:1,_rev:1},
           {_id:'s4',名称:'迪士尼 米老鼠 摆件',大类:'居陈',IP:'米老鼠',状态:['已预订'],持有:null,
@@ -312,6 +347,12 @@ async function main() {
   ok(o.inlineSaved === '2027-Q4', '⑦ 选「2027 + 四季度」→ 立刻写进数据（得到 ' + o.inlineSaved + '）');
   ok(o.stillEditing, '⑦ 写完之后编辑区还在（可以接着改下一段）');
   ok(o.inlineClosed, '⑦ 点 ✓ 能收起');
+  ok(o.depChip, '⑧ 卡片上有「定金」标签');
+  ok(o.hasNumInput, '⑧ ★ 点一下就地出现金额输入框');
+  ok(o.depSaved === 300 && o.balSaved === 200, '⑧ ★ 定金 300 / 尾款 200 都存进去了（得到 ' + o.depSaved + ' / ' + o.balSaved + '）');
+  ok(o.totalChip, '⑧ 卡片上出现「合计 ¥500」');
+  ok(o.recvBtn2, '⑧ 有「到货了」按钮');
+  ok(o.priceAfter === 500, '⑧ ★ 点「到货了」→ 购入价格自动填成 ¥' + o.priceAfter + '（= 定金+尾款）');
   ok(!o.errs || o.errs.length === 0, '⑧ 页面没有 JS 报错' + (o.errs && o.errs.length ? '：' + JSON.stringify(o.errs) : ''));
 }
 

@@ -4907,6 +4907,14 @@ var STATES_OWN  = ['在库','云游','想收','已预订'];   /* v75fix：藏品
    ⚠️ 必须定义在 `MODS` **之前** —— MODS 那个对象字面量在文件执行到那儿时就求值了，
       常量放后面会拿到 undefined，预设就静默失效（这种坑最难查：功能"没坏"，就是没选项）。 */
 var CHANNEL_PRESETS = ['淘宝','京东','小红书','抖音','古月鸟','千树模玩','闲鱼'];
+/* v160：手办「比例」的预设候选（配合 `t:'pick'` 可选可输）。
+   「无比例」也是常见情况（景品 / 扭蛋大多没有比例），单列一项省得每次打字。 */
+var SCALE_PRESETS = ['1/4','1/6','1/7','1/8','1/10','1/12','1/144','无比例'];
+/* v160：预定物管理里的两个金额字段（定金 / 尾款）。
+   ⚠️ **故意不写进 `MODS.collection.fields`** —— 它们只在总览页的预定物卡片上就地编辑，
+      不进编辑表单（用户上次明确要求过那两个日期字段"别占编辑页的地方"，金额同理）。
+      数据仍然挂在行上、跟着云同步走，只是没有表单入口。 */
+var PO_MONEY_FIELDS = ['定金','尾款'];
 var STATES_VIEW = ['想看','在看','看完'];
 var STATES_ALL  = STATES_OWN.concat(STATES_VIEW);
 /* v75fix：影音厅大类定名「赏戏 / 留音」后补上图标（旧名保留） */
@@ -4991,7 +4999,12 @@ var MODS = {
          所以它默认是收起的（`alt:1`），渲染时由 fieldHTML 决定收不放；
          点 + 只是给它去掉一个 CSS 类，**不需要重绘表单**（表单字段列表是打开时就定死的，
          重绘会让用户填了一半的东西跳走 —— 这个坑上次做「条件显示」时踩过）。 */
-      {k:'备注名',t:'text',ph:'别名 / 简称，例如「小凳子」',full:1,alt:1}
+      {k:'备注名',t:'text',ph:'别名 / 简称，例如「小凳子」',full:1,alt:1},
+      /* v160：手办「比例」—— **只有大类是「手办」时才出现**（`onlyCat`）。
+         用 pick（可选可输）：常见比例下拉里点，冷门的直接打字。
+         ⚠️ 显隐靠切 CSS 类 `.is-hidden`，切「大类」时由事件直接改，**不重绘表单**
+            （表单字段列表在打开时就定死了，重绘会把用户填了一半的东西冲掉）。 */
+      {k:'比例',t:'pick',o:SCALE_PRESETS,ph:'选一个，或直接打字',onlyCat:'手办',full:1}
     ]},
   ip: { key:'ip', db:DB.ip, name:'IP 库', icon:'I', eyebrow:'IP',
     desc:'先有 IP，再有它下面那一堆东西。', addLabel:'新增 IP',
@@ -7599,18 +7612,46 @@ function poBookedChip(r){
   return '<em class="po-chip po-chip-btn" data-act="poedit" data-id="'+esc(r._id)+'"'+
     ' data-f="预定日期" title="点一下就地改">'+esc(poWhenText(v, '预订 '))+'</em>';
 }
+/* v160：定金 / 尾款 —— 和日期一样是**可点的标签**，点了就地填数字。
+   金额没填时显示「＋ 定金」，填了显示「定金 ¥100」。 */
+function poMoneyChip(r, k){
+  var raw = r[k];
+  var has = (raw != null && String(raw).trim() !== '' && !isNaN(parseFloat(raw)));
+  var cls = 'po-chip po-chip-btn' + (has ? '' : ' todo');
+  var txt = has ? (k + ' ¥' + Math.round(num(raw))) : ('＋ ' + k);
+  return '<em class="'+cls+'" data-act="poedit" data-id="'+esc(r._id)+'" data-f="'+esc(k)+'"'+
+    ' title="点一下就地填（到货时两项相加会填进「购入价格」）">'+esc(txt)+'</em>';
+}
+/* 两个里填了任意一个就显示「合计」—— 让人提前看到到货后购入价格会是多少 */
+function poTotalChip(r){
+  var d = parseFloat(r['定金']), w = parseFloat(r['尾款']);
+  var hasD = !isNaN(d), hasW = !isNaN(w);
+  if (!hasD && !hasW) return '';
+  var sum = (hasD ? d : 0) + (hasW ? w : 0);
+  return '<em class="po-chip po-sum" title="到货时「购入价格」会自动填成这个数">合计 ¥'+
+    Math.round(sum)+'</em>';
+}
 /* v154：卡片上的**就地编辑区** —— 两个日期各一套下拉：
    · 预定出货日期：年 ／ 月或季度 ／ 日（支持模糊，跟表单里那套同一个口径）
    · 预定日期：年 ／ 月 ／ 日
+   v160：定金 / 尾款是**一个数字输入框**，走同一个 `data-poseg` 约定。
    用 data-poseg 标记（不是表单里的 data-fzy，避免两套绑定互相抢）。 */
 function poInlineEditHTML(r, f){
   var cur = String(r[f]||'').trim();
-  var info = fuzzyDateInfo(cur) || {};
-  var cy = new Date().getFullYear(), y, m, d, q;
   /* ⚠️ 这个容器必须带一个 data-act：卡片外层是 `data-act="popen"`（点开详情），
      事件委托用 `closest('[data-act]')` —— 里面的下拉本身没有 data-act，
      不加这一层的话「点下拉」会被当成「点开详情」，编辑框刚点开就被详情页盖掉。 */
   var h = '<div class="po-inlineedit" data-act="poeditnoop" data-id="'+esc(r._id)+'" data-f="'+esc(f)+'">';
+  var done = '<button type="button" class="po-iedone" data-act="poeditdone" title="收起">✓</button>';
+  if (f === '定金' || f === '尾款'){
+    var shown = (cur === '' || cur == null) ? '' : String(num(cur));
+    h += '<input type="number" class="po-num" data-poseg="num" value="'+esc(shown)+'"'+
+      ' min="0" step="0.01" placeholder="¥ 金额" inputmode="decimal">';
+    h += done;
+    return h+'</div>';
+  }
+  var info = fuzzyDateInfo(cur) || {};
+  var cy = new Date().getFullYear(), y, m, d, q;
   var yo = '<option value="">年</option>';
   for (y = cy + 3; y >= 2000; y--) yo += '<option value="'+y+'"'+(info.y===y?' selected':'')+'>'+y+'</option>';
   h += '<select data-poseg="y" title="年份">'+yo+'</select>';
@@ -7630,7 +7671,7 @@ function poInlineEditHTML(r, f){
     for (d = 1; d <= 31; d++) d2 += '<option value="'+d+'"'+(info.d===d?' selected':'')+'>'+d+'</option>';
     h += '<select data-poseg="d" title="日期">'+d2+'</select>';
   }
-  h += '<button type="button" class="po-iedone" data-act="poeditdone" title="收起">✓</button>';
+  h += done;
   return h+'</div>';
 }
 /* 把就地编辑区里三个下拉合成一个日期字符串写回那一行。
@@ -7641,6 +7682,15 @@ function poInlineCommit(box){
   function seg(n){
     var el = box.querySelector('[data-poseg="'+n+'"]');
     return el ? String(el.value||'') : '';
+  }
+  /* v160：金额字段（定金 / 尾款）—— 一个数字输入框，直接存数字，空就是 null */
+  if (f === '定金' || f === '尾款'){
+    var raw = String(seg('num')).trim();
+    var patchN = {};
+    patchN[f] = (raw === '') ? null : num(raw);
+    if (patchRowFields('collection', id, patchN)) toast(f + (raw === '' ? ' 已清空' : ' 已记下 ¥' + Math.round(num(raw))));
+    render();
+    return;
   }
   var yv = parseInt(seg('y'),10) || 0;
   var val = '';
@@ -7667,18 +7717,23 @@ function poCardHTML(r){
   var same = (String(ed.id || '') === String(r._id));
   var editingDue  = same && ed.f === '预定出货日期';
   var editingBook = same && ed.f === '预定日期';
+  var editingDep  = same && ed.f === '定金';
+  var editingBal  = same && ed.f === '尾款';
   return '<div class="pocard'+(same?' poediting':'')+'" data-act="popen" data-id="'+esc(r._id)+'">'+
     '<div class="pocov" style="'+coverStyle(r, nm)+'">'+(hasCover(r)?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
     '<div class="pobody">'+
-      '<strong>'+esc(nm)+'</strong>'+
+      '<strong>'+nameHTML(r)+'</strong>'+
       (sub?'<span>'+esc(sub)+'</span>':'')+
       '<div class="pochips">'+
         (editingBook ? poInlineEditHTML(r, '预定日期') : poBookedChip(r))+
         (editingDue  ? poInlineEditHTML(r, '预定出货日期') : poDueChip(r))+
+        (editingDep  ? poInlineEditHTML(r, '定金') : poMoneyChip(r, '定金'))+
+        (editingBal  ? poInlineEditHTML(r, '尾款') : poMoneyChip(r, '尾款'))+
+        poTotalChip(r)+
       '</div>'+
     '</div>'+
     '<div class="poacts">'+
-      '<button type="button" class="po-recv" data-act="porecv" data-id="'+esc(r._id)+'" title="到货了：状态改成「在库」，持有补成 1">到货了</button>'+
+      '<button type="button" class="po-recv" data-act="porecv" data-id="'+esc(r._id)+'" title="到货了：状态改成「在库」，持有补成 1，购入价格按 定金+尾款 自动填">到货了</button>'+
     '</div>'+
   '</div>';
 }
@@ -11109,7 +11164,23 @@ document.addEventListener('click', function(ev){
       /* 「到货了」= 把状态从「已预订」换成「在库」。直接走现成的状态切换：
          它会顺带清掉冲突状态（想收/云游）、并把还没记的持有补成 1 —— 与别处口径完全一致。 */
       toggleRowStatus('collection', _rid, '在库');
-      toast('「'+(_rr['名称']||'这件')+'」已记到在库');
+      /* v160：到货时把「购入价格」自动填成 **定金 + 尾款**（用户要的）。
+         两个都没填就不动价格（没数据可算）。如果原来已经记过一个不同的价格，
+         提示里把旧值也报出来 —— 免得用户以为价格被悄悄改了还没处查。 */
+      var _nd = parseFloat(_rr['定金']), _nw = parseFloat(_rr['尾款']);
+      var _hasD = !isNaN(_nd), _hasW = !isNaN(_nw);
+      var _msg = '「'+(_rr['名称']||'这件')+'」已记到在库';
+      if (_hasD || _hasW){
+        var _sum = (_hasD ? _nd : 0) + (_hasW ? _nw : 0);
+        var _old = num(_rr['购入价格']);
+        if (patchRowFields('collection', _rid, { 购入价格: _sum })){
+          _msg += '，购入价格填为 ¥' + Math.round(_sum);
+          if (_old > 0 && Math.round(_old) !== Math.round(_sum)){
+            _msg += '（原来记的是 ¥' + Math.round(_old) + '）';
+          }
+        }
+      }
+      toast(_msg);
       render();
     }
     return;
@@ -12193,6 +12264,19 @@ function wireFormControls(host, saveDraft){
     zsel.addEventListener('change', function(){ syncDay(); commit(); });
     gsel.addEventListener('change', function(){ syncDay(); commit(); });
     dsel.addEventListener('change', commit);
+  });
+  /* v160：切「大类」时联动「比例」字段的显隐（只有手办才有比例）。
+     只切 CSS 类、不重绘表单 —— 用户填到一半的东西不会跳走。 */
+  host.querySelectorAll('[data-f="大类"]').forEach(function(catSel){
+    function syncCatFields(){
+      var cur = String(catSel.value || '');
+      host.querySelectorAll('.catfield[data-onlycat]').forEach(function(cell){
+        if (cell.getAttribute('data-onlycat') === cur) cell.classList.remove('is-hidden');
+        else cell.classList.add('is-hidden');
+      });
+    }
+    catSel.addEventListener('change', syncCatFields);
+    syncCatFields();
   });
   /* v75fix：存放位置三段式（房间 / 柜墙 / 层）——三段下拉合成一个「 · 」分隔的值，
      写进 hidden[data-f]，与「购入日期」的年/月/日同一套路 */
@@ -13878,7 +13962,11 @@ function fieldHTML(f, v){
     /* v159：「备注名」这类附带字段默认收起（`alt:1`）—— 没值时藏起来，免得每个表单都多占一行。
        ⚠️ 只是加个 CSS 类（`.is-hidden`），**不重绘表单**：
           点「＋ 备注」时由事件把类去掉即可，用户填到一半的东西不会跳走。 */
-    +(f.alt ? ' altfield'+(String(v==null?'':v).trim()?'':' is-hidden') : '');
+    +(f.alt ? ' altfield'+(String(v==null?'':v).trim()?'':' is-hidden') : '')
+    /* v160：`onlyCat` 字段（手办的「比例」）—— 大类不是它就不显示。
+       ⚠️ 这里读的是**表单里当前的大类值**（editing.vals），只影响首帧；
+          之后用户改大类由事件直接切类名，不重绘表单。 */
+    +(f.onlyCat ? (' catfield' + (String((editing && editing.vals && editing.vals['大类']) || '') === f.onlyCat ? '' : ' is-hidden')) : '');
   if (f.t==='text' || f.t==='number' || f.t==='currency' || f.t==='date'){
     var type = f.t==='number'||f.t==='currency' ? 'number' : (f.t==='date'?'date':'text');
     /* autocomplete=off：阻止 Chrome 把「国家地区」之类字段当成用户名去匹配已保存的密码 */
@@ -14118,7 +14206,11 @@ function fieldHTML(f, v){
        候选 = 预设 ∪ 数据里用过的（见 channelOptionsAll）——老记录里的写法也选得到。
        ⚠️ 用 `list` 属性关联 id，两边的字符串要一模一样；字段名是中文，HTML5 的 id 允许。 */
     var _pkcur = String(v == null ? '' : v);
-    var _pkopts = (f.o && f.o.length) ? channelOptionsAll() : [];
+    /* 候选 = 字段自己的预设（`f.o`）；「购入渠道」额外并上数据里真正用过的值
+       （v160：原来这里无条件调 channelOptionsAll，加「比例」这类新 pick 字段时会给出
+        一堆渠道名 —— 必须按字段区分）。 */
+    var _pkopts = (f.o || []).slice();
+    if (f.k === '购入渠道') _pkopts = channelOptionsAll();
     if (_pkcur && _pkopts.indexOf(_pkcur) < 0) _pkopts = [_pkcur].concat(_pkopts);
     var _dlid = 'dl_' + f.k;
     body = '<input data-f="'+f.k+'" type="text" list="'+esc(_dlid)+'" value="'+esc(_pkcur)+'"'+
@@ -14180,7 +14272,10 @@ function fieldHTML(f, v){
   /* v113：f.w12 = 在 12 栏栅格（.fgrid.fg12）里占几栏，用 CSS 变量 --w 内联下发；
      .f 那几条 span 规则都写成 span var(--w, 默认档)，不写就还是原来的 4 栏比例。 */
   var _ws = f.w12 ? ' style="--w:'+Number(f.w12)+'"' : '';
-  return '<div class="'+cls+'"'+_ws+'>'+lab+body+
+  /* v160：`onlyCat` = 只在这个大类下显示（目前只有手办的「比例」）。
+     显隐靠 `.is-hidden`，切「大类」时由 wireFormControls 直接改类，不重绘表单。 */
+  var _oc = f.onlyCat ? ' data-onlycat="'+esc(f.onlyCat)+'"' : '';
+  return '<div class="'+cls+'"'+_ws+_oc+'>'+lab+body+
     (f.req?'<span class="err">这一项必填</span>':'')+'</div>';
 }
 /* v58：点背景关闭表单的守卫——必须「按下」和「松开」都在背景上才关闭。

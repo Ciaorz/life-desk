@@ -265,6 +265,37 @@ async function main() {
   ok(tip.indexOf('在库') >= 0 && tip.indexOf('云游') >= 0,
     '★ 界面上明说了「已切到在库，云游自动取消了」（用户能看见反馈，不再靠猜）');
 
+  /* ---------- 第三轮：手办「比例」字段的条件显示（v160）---------- */
+  console.log('\n  —— 第三轮：手办比例 ——\n');
+
+  async function ev2(expr) {
+    const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+    return r.result ? r.result.value : null;
+  }
+  await openForm();
+  ok(await ev2(`!!document.querySelector('.catfield[data-onlycat]')`), '③ 表单里有「比例」字段（带 onlycat 标记）');
+  ok(await ev2(`(function(){var c=document.querySelector('.catfield[data-onlycat]');
+      return !!c && !c.classList.contains('is-hidden');})()`), '③★ 大类是手办 → 比例显示出来');
+  ok(await ev2(`(function(){var i=document.querySelector('[data-f="比例"]');
+      return !!i && i.tagName==='INPUT' && !!i.getAttribute('list');})()`), '③ 比例是「可选可输」（input+datalist）');
+  ok(await ev2(`(function(){var i=document.querySelector('[data-f="比例"]');
+      var dl=document.getElementById(i.getAttribute('list')); if(!dl) return false;
+      return Array.prototype.some.call(dl.querySelectorAll('option'), function(o){ return o.value==='1/7'; });})()`),
+    '③ 候选里有 1/7 这类常用比例');
+
+  await ev2(`(function(){var s=document.querySelector('[data-f="大类"]');
+    var opt=null; Array.prototype.slice.call(s.options).forEach(function(o){ if(o.value && o.value!=='手办') opt=o.value; });
+    s.value=opt; s.dispatchEvent(new Event('change',{bubbles:true})); return opt;})()`);
+  await sleep(250);
+  ok(await ev2(`(function(){var c=document.querySelector('.catfield[data-onlycat]');
+      return c.classList.contains('is-hidden');})()`), '③★ 换成别的大类 → 比例自动藏起来');
+
+  await ev2(`(function(){var s=document.querySelector('[data-f="大类"]');
+    s.value='手办'; s.dispatchEvent(new Event('change',{bubbles:true})); return 1;})()`);
+  await sleep(250);
+  ok(await ev2(`(function(){var c=document.querySelector('.catfield[data-onlycat]');
+      return !c.classList.contains('is-hidden');})()`), '③ 改回手办 → 比例又出来了');
+
   /* 最后重新点一遍「云游」让提示条停在画面上，截一张存档 —— 给用户看"现在有反馈了" */
   try {
     const pt2 = await pillCenter('云游');

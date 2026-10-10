@@ -64,6 +64,7 @@ function extractVar(decl) {
 const FUZZY_FNS = ['fzPad2', 'fuzzyDateInfo', 'fuzzyDateKey', 'fuzzyDateEndKey',
   'fuzzyDateText', 'fuzzyDateIsVague', 'fuzzyDaysFromToday'];
 const PO_FNS = ['poTodayKey', 'poRows', 'poSort', 'poWhenText', 'poDueChip', 'poBookedChip',
+  'poMoneyChip', 'poTotalChip', 'nameHTML',
   'poInlineEditHTML', 'poInlineCommit', 'poCardHTML', 'poMonthCalHTML', 'poCalHTML', 'preorderPanel'];
 const code = [
   extractVar('var FUZZY_Q_NAME'),
@@ -87,6 +88,7 @@ function makeEnv(rows, poCal) {
       var a = Array.isArray(s) ? s : String(s==null?'':s).split(',').map(function(x){ return x.trim(); }).filter(Boolean);
       return a.indexOf(v) >= 0;
     }
+    function num(v){ var n=parseFloat(v); return isNaN(n)?0:n; }
     function coverStyle(){ return ''; }
     function hasCover(){ return false; }
     function emptyHTML(a,b){ return 'EMPTY:' + a; }
@@ -112,7 +114,8 @@ function makeEnv(rows, poCal) {
              poSort:poSort, poRows:poRows, preorderPanel:preorderPanel, poCalHTML:poCalHTML,
              poMonthCalHTML:poMonthCalHTML, poCardHTML:poCardHTML, poInlineEditHTML:poInlineEditHTML,
              poInlineCommit:poInlineCommit, channelOptionsAll:channelOptionsAll,
-             poDueChip:poDueChip, poWhenText:poWhenText, store:store, ui:ui, log:log };`);
+             poDueChip:poDueChip, poWhenText:poWhenText, poMoneyChip:poMoneyChip,
+             poTotalChip:poTotalChip, store:store, ui:ui, log:log };`);
   return factory(store, ui, log);
 }
 
@@ -427,6 +430,64 @@ console.log('[L] 购入渠道「可选可输」的候选');
   eq(opts.length, Array.from(new Set(opts)).length, 'L9 候选不重复');
   eq(opts[0], '淘宝', 'L10 预设排在前面（下拉第一屏就是常用那几个）');
   ok(opts.indexOf('') < 0 && opts.indexOf(null) < 0, 'L11 空值不进候选');
+}
+
+
+/* ---------- M. 定金 / 尾款（v160） ---------- */
+console.log('[M] 定金 / 尾款');
+{
+  const E = makeEnv([mkRow({ _id: 'm1', 名称: '甲' })]);
+  const row = E.store.collection.rows[0];
+
+  /* 标签：没填是「＋ 定金」，填了是「定金 ¥100」 */
+  row['定金'] = 100;
+  const c1 = E.poMoneyChip(row, '定金');
+  ok(c1.indexOf('定金 ¥100') >= 0, 'M1 填了就显示「定金 ¥100」');
+  ok(c1.indexOf('po-chip-btn') >= 0, 'M2 金额标签可点（就地编辑）');
+  delete row['定金'];
+  const c2 = E.poMoneyChip(row, '定金');
+  ok(c2.indexOf('＋ 定金') >= 0, 'M3 没填显示「＋ 定金」');
+  ok(/todo/.test(c2), 'M4 没填时带 todo 样式（虚线框，一眼看出能点）');
+
+  /* 合计：两个都空就不显示；填了任意一个就显示 */
+  eq(E.poTotalChip({}), '', 'M5 两个都没填 → 不显示合计');
+  ok(E.poTotalChip({ 定金: 100, 尾款: 400 }).indexOf('合计 ¥500') >= 0, 'M6 定金+尾款 → 合计 ¥500');
+  ok(E.poTotalChip({ 定金: 100 }).indexOf('合计 ¥100') >= 0, 'M7 只填定金也算合计');
+  ok(E.poTotalChip({ 尾款: 0 }).indexOf('合计 ¥0') >= 0, 'M8 尾款是 0 也算（0 是有效金额）');
+  eq(E.poTotalChip({ 定金: '', 尾款: '' }), '', 'M9 空串当没填');
+
+  /* 就地编辑：数字输入框 */
+  const box = E.poInlineEditHTML(Object.assign({ _id: 'm1' }, { 定金: 88 }), '定金');
+  ok(box.indexOf('data-poseg="num"') >= 0, 'M10 定金用的是数字输入框');
+  ok(box.indexOf('value="88"') >= 0, 'M11 已有的金额会带出来');
+  ok(box.indexOf('type="number"') >= 0, 'M12 type=number（手机弹数字键盘）');
+
+  /* 合成：填数字 → 存成数字（不是字符串） */
+  function nbox(id, f, vals) {
+    return {
+      getAttribute: function (n) { return n === 'data-id' ? id : (n === 'data-f' ? f : null); },
+      querySelector: function (sel) {
+        const m = /data-poseg="([a-z]+)"/.exec(sel);
+        if (!m) return null;
+        const v = vals[m[1]];
+        return (v == null) ? null : { value: String(v) };
+      },
+    };
+  }
+  E.ui.poEdit = { id: 'm1', f: '定金' };
+  E.poInlineCommit(nbox('m1', '定金', { num: '250.5' }));
+  eq(row['定金'], 250.5, 'M13 填 250.5 → 存成数字 250.5');
+  ok(typeof row['定金'] === 'number', 'M14 ★ 存的是数字，不是字符串');
+  E.poInlineCommit(nbox('m1', '尾款', { num: '149.5' }));
+  eq(row['尾款'], 149.5, 'M15 尾款同样存数字');
+  E.poInlineCommit(nbox('m1', '尾款', { num: '' }));
+  eq(row['尾款'], null, 'M16 清空 → 存 null（不是空串）');
+
+  /* 卡片上四个标签 + 合计都在 */
+  row['定金'] = 100; row['尾款'] = 400;
+  const card = E.poCardHTML(row);
+  ok(/data-f="定金"/.test(card) && /data-f="尾款"/.test(card), 'M17 卡片上有定金和尾款的标签');
+  ok(card.indexOf('合计 ¥500') >= 0, 'M18 卡片上显示合计（提前看到到货会填多少）');
 }
 
 /* ---------- 结果 ---------- */
