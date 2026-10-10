@@ -13728,24 +13728,37 @@ function openForm(key, id, opts){
     cbs.forEach(function(cb){
       var val = cb.getAttribute('data-v');
       cb.addEventListener('change', function(){
+        /* v158：勾一个状态时，把**被它挤掉的那些**记下来，最后给一句提示。
+           用户反馈「点『在库』时云游不会自动取消」—— 查下来互斥逻辑本身是好的
+           （本地/线上/真实鼠标点击都验过），但**界面没有任何反馈**：
+           云游那颗药丸只是悄悄灭了，眼睛没跟上就会以为"没生效"。
+           所以现在切换互斥状态时明说一句「刚才替你取消了什么」。 */
+        var cleared = [];
         if (cb.checked){
           if (val === '在库'){
-            cbs.forEach(function(o){ if (o !== cb) o.checked = false; });   /* 清掉另外三个 */
+            cbs.forEach(function(o){
+              if (o !== cb && o.checked){ cleared.push(o.getAttribute('data-v')); o.checked = false; }
+            });
             /* v150：持有只在「还没记」时补成 1 —— 用户已经填了 5，不打回 1（那是数据损失） */
             if (holdInp && holdPatchForStatus(['在库'], holdInp.value)['持有'] != null){
               holdInp.value = '1'; editing.vals['持有'] = 1;
             }
           } else {
-            if (ownCb) ownCb.checked = false;                              /* 在库与它们互斥 */
+            if (ownCb && ownCb.checked){ cleared.push('在库'); ownCb.checked = false; }  /* 在库与它们互斥 */
             if (val === '云游' && holdInp){ holdInp.value = ''; editing.vals['持有'] = null; }
           }
         } else if (val === '云游'){
           /* v155：云游是**在库的反状态**。取消云游 = 东西到手了 → 落回「在库」。
              不允许两个都不亮 —— 那样这条东西会同时从「在库 / 云游 / 想收」三个筛选里消失。
              （反向是对称的：取消「在库」会由下面 rebuildStatus 自动点亮「云游」。） */
-          if (ownCb) ownCb.checked = true;
+          if (ownCb && !ownCb.checked){ cleared.push('云游'); ownCb.checked = true; }
         }
         rebuildStatus();
+        /* 提示语放在 rebuildStatus 之后 —— 那时状态已经归一好了，说的是最终结果。 */
+        if (cleared.length){
+          var finalArr = editing.vals['状态'] || [];
+          toast('已切到「' + String(finalArr[0] || '') + '」，「' + cleared.join('、') + '」自动取消了');
+        }
       });
     });
   })();
