@@ -60,3 +60,10 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ===== v156：本机素材 / 预览截图（不进仓库）=====
+# 下载图/ 是抓图工具与调试脚本的落盘目录（淘宝原图、CDP 截图存档……）：
+# 414 个文件、几十 MB，纯本机素材。线上要用的封面走 data/images（WebP）+ R2，
+# 跟这个目录没有关系。_vertest*/ 是临时合成站点。
+下载图/
+_vertest*/

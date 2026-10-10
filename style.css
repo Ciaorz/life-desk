@@ -4011,3 +4011,106 @@ input.search{margin-bottom:12px}
   /* 6) 分页「加载更多」按钮 */
   .pkmore{ display:flex; justify-content:center; margin:18px 0 4px; }
 }
+
+/* ============================================================
+   v152：总览页「预定物管理」—— 出货日历 + 预定物卡片
+   （取代原来的「最近留下的」时间线；.timeline/.tl 已无引用，样式留着不影响）
+   ============================================================ */
+.po .panel-head{margin-bottom:14px}
+
+/* 提醒条：逾期（红）/ 未来 7 天（黄）/ 没填出货日期（灰） */
+.po-alerts{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.po-alert{padding:9px 13px;border-radius:12px;font-size:12.5px;line-height:1.6}
+.po-alert b{font-weight:700}
+.po-alert.late{background:rgba(180,77,67,.09);color:var(--red);border:1px solid rgba(180,77,67,.18)}
+.po-alert.soon{background:rgba(165,124,69,.12);color:#8a6224;border:1px solid rgba(165,124,69,.2)}
+.po-alert.todo{background:rgba(111,89,67,.06);color:var(--muted);border:1px solid rgba(111,89,67,.12)}
+
+/* 出货日历（v154：一排三个月；手机端只留中间那个） */
+.po-calbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.po-calgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px}
+.po-cal{border:1px solid var(--line);border-radius:14px;padding:11px 11px 9px;background:var(--card)}
+.po-caltitle{font-size:13px;font-weight:650;letter-spacing:.02em;margin-bottom:8px}
+.po-calnav{display:flex;align-items:center;gap:6px}
+.po-calnav button{border:1px solid var(--line);background:transparent;color:var(--muted);
+  min-width:26px;height:26px;border-radius:8px;cursor:pointer;font-size:14px;line-height:1;padding:0 6px}
+.po-calnav button:hover{background:rgba(111,89,67,.07);color:var(--ink)}
+.po-calnav .po-backdue{font-size:11.5px;padding:0 10px}
+.po-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:3px}
+.po-dow span{text-align:center;font-size:10px;color:var(--muted);letter-spacing:.06em}
+.po-cells{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.po-cell{min-height:56px;border-radius:9px;background:rgba(111,89,67,.035);
+  padding:3px 4px;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.po-cell.blank{background:transparent}
+.po-cell.today{background:var(--accent-soft);box-shadow:inset 0 0 0 1px rgba(77,48,69,.22)}
+.po-cell u{font-size:10.5px;color:var(--muted);text-decoration:none;line-height:1.2}
+.po-cell.today u{color:var(--accent);font-weight:700}
+.po-ev{font-style:normal;font-size:10px;line-height:1.4;padding:1px 4px;border-radius:6px;
+  background:rgba(77,48,69,.1);color:var(--accent);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.po-ev:hover{background:rgba(77,48,69,.18)}
+/* ⚠️ 模糊日期（只有月 / 季度）用虚线圈 —— 不能让它看着和精确日期一样确定 */
+.po-ev.vague{background:transparent;border:1px dashed rgba(77,48,69,.45)}
+.po-ev.more{background:transparent;color:var(--muted);cursor:default}
+
+/* 预定物卡片 */
+.po-list{display:flex;flex-direction:column;gap:9px}
+.pocard{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;
+  padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:var(--card);
+  cursor:pointer;transition:.16s}
+.pocard:hover{box-shadow:0 8px 20px rgba(63,48,36,.07);transform:translateY(-1px)}
+.pocov{width:52px;height:52px;border-radius:11px;background:#f2ece2 center/cover no-repeat;
+  display:flex;align-items:center;justify-content:center;overflow:hidden}
+.pocov b{font:700 20px/1 "Songti SC",serif;color:rgba(255,255,255,.92)}
+.pobody{min-width:0}
+.pobody strong{display:block;font-size:13.5px;font-weight:650;line-height:1.35}
+.pobody > span{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+.pochips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.po-chip{font-style:normal;font-size:10.5px;line-height:1.5;padding:2px 8px;border-radius:999px;
+  background:rgba(111,89,67,.08);color:var(--muted);white-space:nowrap}
+.po-chip.late{background:rgba(180,77,67,.12);color:var(--red)}
+.po-chip.soon{background:rgba(165,124,69,.16);color:#8a6224}
+.po-chip.todo{background:transparent;border:1px dashed rgba(111,89,67,.32)}
+/* v154：可点的日期标签 —— 点一下就地编辑（不弹窗） */
+.po-chip-btn{cursor:pointer}
+.po-chip-btn:hover{background:rgba(111,89,67,.16);color:var(--ink)}
+.po-chip-btn.todo:hover{background:rgba(111,89,67,.1);color:var(--ink);border-color:rgba(111,89,67,.5)}
+/* 就地编辑区（卡片里的三个下拉 + ✓） */
+.po-inlineedit{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.po-inlineedit select{font-family:inherit;font-size:11px;padding:3px 4px;border-radius:8px;
+  border:1px solid var(--line);background:#fffdf9;color:var(--ink);cursor:pointer;max-width:106px}
+.po-iedone{border:1px solid rgba(71,115,88,.35);background:rgba(71,115,88,.08);color:var(--green);
+  width:22px;height:22px;border-radius:7px;cursor:pointer;font-size:11px;line-height:1;padding:0;
+  font-family:inherit;flex:0 0 auto}
+.po-iedone:hover{background:rgba(71,115,88,.18)}
+.pocard.poediting{border-color:rgba(77,48,69,.28);box-shadow:0 0 0 2px var(--accent-soft)}
+.poacts{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.po-recv{border:1px solid rgba(71,115,88,.35);background:rgba(71,115,88,.08);color:var(--green);
+  font:650 11.5px/1 inherit;padding:7px 11px;border-radius:10px;cursor:pointer;white-space:nowrap;
+  font-family:inherit}
+.po-recv:hover{background:rgba(71,115,88,.16)}
+
+/* 表单里的模糊日期：沿用 .year-date-wrap 的三段布局，只补「年/月或季度/日」的宽度 */
+.fuzzy-date-wrap{flex-wrap:wrap}
+.fuzzy-date-wrap select[data-fzy]{flex:0 0 92px}
+.fuzzy-date-wrap select[data-fzg]{flex:1 1 118px}
+.fuzzy-date-wrap select[data-fzd]{flex:0 0 74px}
+.fuzzy-date-wrap select:disabled{opacity:.42;cursor:not-allowed}
+
+@media (max-width:560px){
+  /* 手机屏窄，放不下三个月：一排只留**中间那一个**（也就是当前基准月）
+     —— 靠 CSS 隐藏首尾两块，不另写一套 JS 分支，免得两处判断不一致。 */
+  .po-calgrid{grid-template-columns:1fr;gap:0}
+  .po-monthcal:nth-child(1),.po-monthcal:nth-child(3){display:none}
+  .po-cell{min-height:58px;border-radius:8px;padding:3px 4px}
+  .po-ev{font-size:9px;padding:1px 3px}
+  .po-cal{padding:10px 9px 8px}
+  .pocard{grid-template-columns:44px 1fr;row-gap:8px}
+  .pocov{width:44px;height:44px}
+  .poacts{grid-column:2;justify-content:flex-end}
+  .po-inlineedit select{font-size:12px;padding:5px 5px;max-width:96px}
+  .po-iedone{width:26px;height:26px;font-size:12px}
+  .fuzzy-date-wrap select[data-fzy]{flex:0 0 76px}
+  .fuzzy-date-wrap select[data-fzg]{flex:1 1 96px}
+  .fuzzy-date-wrap select[data-fzd]{flex:0 0 62px}
+}

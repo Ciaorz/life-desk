@@ -52,12 +52,19 @@ API = 'https://api.github.com'
 #    ⚠️ 因此下面 orphans 的计算必须排除 ignored 路径，否则 --delete-orphans 会把整座 data/ 删光。
 SKIP_DIRS = {'data', 'data/orig', 'images/_orig', '.workbuddy', '.workbuddy-ai',
              'data/_bak_optimize_20260918',
+             # v156：本机素材 / 预览截图（抓图落盘 + CDP 截图存档），几十 MB，
+             # 跟线上跑的站点无关。之前没排掉，清单里 444 个文件有 414 个是它。
+             '下载图', '_vertest',
              # Python 字节码缓存：跑一次 import / py_compile 就会生成，
              # 是产物不是源码，别让它反复污染仓库。
              '__pycache__'}
 SKIP_PREFIX = ('data/_bak_', 'data/_legacy_')
 SKIP_FILES = {'debug.log', 'yun_probe.js', 'serve.js', 'data/lifedesk.backup.json',
               '推送清单.md', '云同步部署手册.md',
+              # v156：images/ 里这张「未标题-1.png」（704KB）看着是误存的临时图 ——
+              # 线上从没引用过它，别的素材都是 figure-cover.webp 这种有意义命名。
+              # 先不推上线；真要用的那天，把它从这行删掉再推一次即可。
+              'images/未标题-1.png',
               # R2 上传台账：本机续传用的缓存（key→size），不是源码。
               # 换了机器/删了它，最多是重传一遍封面，内容完全一样。
               'tools/.r2_uploaded.json'}
@@ -154,6 +161,10 @@ def ignored(rel):
     for d in SKIP_DIRS:
         if rel == d or rel.startswith(d + '/'):
             return True
+    # __pycache__ 可能出现在任意层级（如 tools/__pycache__/），
+    # SKIP_DIRS 只按「仓库根目录前缀」匹配，匹配不到子目录里的，所以单独判一段。
+    if '__pycache__' in rel.split('/'):
+        return True
     for p in SKIP_PREFIX:
         if rel.startswith(p):
             return True

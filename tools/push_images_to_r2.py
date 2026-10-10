@@ -53,7 +53,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 BASE = os.environ.get('CLOUD_BASE', 'https://life-desk-api.pages.dev')
 TOKEN_FILE = os.environ.get('TOKEN_FILE', r'E:\自制软件\cloud flare D1 R2.txt')
-LEDGER = os.path.join(HERE, '.r2_uploaded.json')
+# v117：台账挪进数据目录，改成 data/.r2_uploaded.json ——
+#   app 云同步面板里的「上传封面」按钮读写的是同一份，
+#   这样命令行和按钮谁传过，对方都认，不会互相重复传。
+#   老位置 tools/.r2_uploaded.json 会在首次 load_ledger() 时自动迁移过来。
+LEDGER = os.environ.get('LEDGER', os.path.join(ROOT, 'data', '.r2_uploaded.json'))
+LEDGER_OLD = os.path.join(HERE, '.r2_uploaded.json')
 DEFAULT_DIR = 'data/thumbs'
 # 每个批次的原文字节上限。base64 会膨胀 4/3，所以 3MB → 约 4MB 的 JSON body。
 # Cloudflare Worker 的请求体上限是 100MB，3MB 留了足够余量，又能把 1438 个文件压成十几次请求。
@@ -126,6 +131,18 @@ def collect(root_dir):
 
 
 def load_ledger():
+    # v117：老台账自动搬到新位置（两边都有就取并集，新值优先），只做一次、幂等
+    if not os.path.isfile(LEDGER) and os.path.isfile(LEDGER_OLD):
+        try:
+            with open(LEDGER_OLD, encoding='utf-8') as f:
+                old = json.load(f)
+            os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
+            with open(LEDGER, 'w', encoding='utf-8') as f:
+                json.dump(old, f, ensure_ascii=False, indent=1, sort_keys=True)
+            os.remove(LEDGER_OLD)
+            log('台账已迁移到 %s（%d 条）' % (LEDGER, len(old)))
+        except Exception as e:
+            log('台账迁移失败（不影响上传）：%s' % e)
     if not os.path.isfile(LEDGER):
         return {}
     try:

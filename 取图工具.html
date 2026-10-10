@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>批量取图工具 · life-desk</title>
+<style>
+:root{--paper:#f5f0e8;--card:#fffdfa;--ink:#17120b;--muted:#5b554c;--line:#ded5c8;
+  --accent:#4d3045;--red:#b44d43;--green:#477358;--sand:#a57c45}
+*{box-sizing:border-box}
+body{margin:0;padding:22px 18px 60px;background:var(--paper);color:var(--ink);
+  font:14px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:940px;margin:0 auto}
+h1{font:700 22px/1.3 "Songti SC",serif;margin:0 0 4px}
+.sub{color:var(--muted);font-size:12.5px;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+  padding:16px 18px;margin-bottom:14px}
+.card>h2{display:flex;align-items:center;gap:8px;font:700 15px/1.4 inherit;margin:0 0 10px}
+.card>h2 .n{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;
+  border-radius:50%;background:var(--accent);color:#fff;font-size:12px;font-weight:700}
+.hint{color:var(--muted);font-size:12.5px;margin:0 0 10px}
+.hint b{color:var(--ink)}
+a,button{font-family:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 14px;
+  border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);
+  font-size:13px;cursor:pointer}
+.btn:hover{background:#f6f1e8}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{opacity:.9;background:var(--accent)}
+.btn.primary[disabled]{opacity:.45;cursor:not-allowed}
+.btn.big{min-height:48px;padding:0 26px;font-size:15px;font-weight:700}
+.btn.sm{min-height:30px;padding:0 10px;font-size:12px;border-radius:8px}
+.bm{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 16px;
+  border-radius:10px;background:#f6f1e8;border:1px dashed var(--sand);color:var(--ink);
+  font-size:13.5px;font-weight:600;text-decoration:none;cursor:grab}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.row+.row{margin-top:10px}
+label.f{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink)}
+label.f input[type=text],label.f input[type=number]{min-height:32px;padding:0 9px;border:1px solid var(--line);
+  border-radius:9px;background:#fff;font-size:13px;font-family:inherit;color:var(--ink)}
+label.f input[type=text]{min-width:230px}
+label.f input[type=number]{width:74px}
+textarea{width:100%;min-height:150px;padding:11px 12px;border:1px solid var(--line);border-radius:12px;
+  background:#fbf8f3;font:12.5px/1.6 Consolas,Menlo,monospace;color:var(--ink);resize:vertical;outline:0}
+textarea:focus{border-color:var(--accent);background:#fff}
+.stat{font-size:13px;color:var(--muted);margin-top:8px}
+.stat b{color:var(--ink)}
+.stat .ok{color:var(--green)}
+.stat .warn{color:var(--red)}
+.dir{display:inline-flex;align-items:center;gap:8px;padding:7px 11px;border-radius:10px;
+  background:#fbf8f3;border:1px solid var(--line);font-size:12.5px;color:var(--muted);max-width:100%}
+.dir b{color:var(--ink);font-weight:600}
+.bar{height:9px;border-radius:999px;background:#eae2d6;overflow:hidden;margin:12px 0 8px}
+.bar>i{display:block;height:100%;width:0;border-radius:999px;background:var(--accent);transition:width .18s}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px;margin-top:12px}
+.item{border:1px solid var(--line);border-radius:11px;overflow:hidden;background:#fff;position:relative}
+.item .ph{height:92px;background:#f2ece2 center/cover no-repeat;display:flex;align-items:center;
+  justify-content:center;color:var(--muted);font-size:11px}
+.item .ph img{width:100%;height:100%;object-fit:cover;display:block}
+.item .nm{padding:5px 7px;font-size:10.5px;color:var(--muted);word-break:break-all;line-height:1.4}
+.item .badge{position:absolute;left:5px;top:5px;padding:1px 6px;border-radius:999px;font-size:10px;
+  font-weight:700;color:#fff;background:var(--green)}
+.item.fail .badge{background:var(--red)}
+.item.skip .badge{background:var(--sand)}
+.err{color:var(--red);font-size:12px;margin-top:8px;min-height:17px}
+.foot{color:var(--muted);font-size:12px;line-height:1.9}
+code{background:#f2ece2;padding:1px 5px;border-radius:5px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>批量取图工具</h1>
+  <div class="sub">从淘宝 / 天猫商品页批量抓图，直接存进 life-desk 的文件夹。<b>不用命令行</b> —— 三个按钮搞定。</div>
+
+  <!-- ============ 1 ============ -->
+  <div class="card">
+    <h2><span class="n">1</span>抓取商品页上的图片地址</h2>
+    <p class="hint">
+      把右边这个按钮 <b>拖到浏览器的书签栏</b>（或者右键收藏也行，见下方备选）。
+      然后在淘宝商品页点一下它，页面上的图片地址就全进剪贴板了，回来粘到第 2 步的框里。
+    </p>
+    <div class="row">
+      <a class="bm" id="bmLink" href="#" title="拖我到书签栏">📥 抓取本页图片</a>
+      <button class="btn sm" id="bmCopy">复制书签代码</button>
+      <button class="btn sm" id="bmToggleRaw">看不到代码？点这里</button>
+      <span class="stat" id="bmCheck"></span>
+    </div>
+    <div id="bmRawBox" style="display:none;margin-top:10px">
+      <p class="hint" style="margin-bottom:6px">① 下面这段整段复制 → ② 浏览器书签管理器里新建一个书签 →
+        名称随便填，<b>网址</b>粘贴这段进去 → ③ 在商品页点它即可。<br>
+        （也可以粘到 F12 控制台里回车运行，效果一样。）</p>
+      <textarea id="bmRaw" readonly style="min-height:110px"></textarea>
+    </div>
+  </div>
+
+  <!-- ============ 2 ============ -->
+  <div class="card">
+    <h2><span class="n">2</span>粘贴图片地址</h2>
+    <p class="hint">一行一个地址，或者直接把从淘宝复制的一整段（含 HTML）粘进来都行 ——
+      会自动挑出图片地址、去掉重复、保持原来的顺序。</p>
+    <textarea id="urls" placeholder="https://gw.alicdn.com/bao/uploaded/i4/xxx.jpg_webp&#10;https://gw.alicdn.com/bao/uploaded/i1/yyy.jpg&#10;…"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="parseBtn">解析一下</button>
+      <button class="btn" id="clearBtn">清空</button>
+      <span class="stat" id="parseStat"></span>
+    </div>
+  </div>
+
+  <!-- ============ 3 ============ -->
+  <div class="card">
+    <h2><span class="n">3</span>保存到哪里 + 怎么命名</h2>
+    <div class="row">
+      <button class="btn" id="pickDir">选择保存文件夹</button>
+      <span class="dir" id="dirBox">还没选文件夹</span>
+    </div>
+    <p class="hint" style="margin-top:8px">
+      建议选 life-desk 里的 <code>data</code> 文件夹 —— 图片会落到 <code>data\_inbox\alicdn-日期\</code>。
+      Chrome 只会在第一次问你一次权限，之后会记住（换浏览器或清缓存后要重选）。
+    </p>
+    <div class="row">
+      <label class="f">子目录 <input type="text" id="subdir"></label>
+      <label class="f"><input type="checkbox" id="numbered" checked> 按顺序编号</label>
+      <label class="f">从 <input type="number" id="startNo" value="1" min="1" step="1"> 开始</label>
+    </div>
+    <div class="row">
+      <label class="f"><input type="checkbox" id="resize" checked> 要 800×800 缩略图（体积小很多，够用）</label>
+      <label class="f">并发 <input type="number" id="workers" value="4" min="1" max="12" step="1"></label>
+      <label class="f"><input type="checkbox" id="manifest" checked> 写一份 _manifest.json 台账</label>
+      <label class="f"><input type="checkbox" id="useDir" checked> 写进指定文件夹</label>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary big" id="goBtn">开始下载</button>
+      <button class="btn" id="retryBtn" style="display:none">重试失败的</button>
+      <button class="btn sm" id="copyList" style="display:none">复制文件清单</button>
+    </div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="stat" id="goStat">还没开始</div>
+    <div class="err" id="errBox"></div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div class="card">
+    <h2>用完之后</h2>
+    <p class="foot">
+      · 图片在 <code>data\_inbox\alicdn-日期\</code> 里，名字形如 <code>0001-xxx.jpg</code> ——
+        序号就是清单里的顺序，如果商品详情图是按图鉴号排的，序号就直接对应号码。<br>
+      · 想把这些图设成藏品封面：在 life-desk 里打开对应条目 → 封面 → 选择本地图片。<br>
+      · 这份工具只是「把图弄到本地」，<b>不会改动你的任何数据</b>，也不会联网上传任何东西。
+    </p>
+  </div>
+</div>
+
+<!-- 书签小工具的源码：放在这里是为了避免转义地狱，页面加载时读它的 textContent -->
+<script type="text/plain" id="bmsrc">
+(function(){
+var H=['alicdn.com','alibaba.com','taobao.com','tmall.com'];
+var E=/\.(jpe?g|png|webp|gif|bmp|avif)(_[a-z0-9]+)?(\.(jpe?g|png|webp))?$/i;
+var s={},o=[];
+function ok(u){var m=/^https?:\/\/([^\/]+)/i.exec(u);if(!m)return false;var h=m[1].toLowerCase();
+  return H.some(function(d){return h===d||h.slice(-(d.length+1))==='.'+d;});}
+function img(u){if(!/^https?:\/\//i.test(u))return false;if(/\.svgz?($|\?)/i.test(u))return false;
+  if(/\.(js|css|json|woff2?|ttf|mp4)($|\?)/i.test(u))return false;
+  return E.test(u.split('?')[0])||/_(webp|\d+x\d+)(\.|$)/i.test(u);}
+function add(u){if(!u)return;u=String(u).trim().replace(/&amp;/g,'&');
+  if(u.slice(0,2)==='//')u=location.protocol+u;u=u.split('#')[0];
+  if(!img(u)||!ok(u))return;var k=u.split('?')[0];if(s[k])return;s[k]=1;o.push(u);}
+try{document.querySelectorAll('img').forEach(function(im){add(im.currentSrc);add(im.src);
+  add(im.getAttribute('data-src'));add(im.getAttribute('data-ks-lazyload'));
+  (im.getAttribute('srcset')||'').split(',').forEach(function(p){add(p.trim().split(/\s+/)[0]);});});
+  document.querySelectorAll('source').forEach(function(x){(x.getAttribute('srcset')||'').split(',').forEach(function(p){add(p.trim().split(/\s+/)[0]);});});
+  document.querySelectorAll('link[rel="preload"][as="image"],link[rel="prefetch"]').forEach(function(l){add(l.getAttribute('href'));});}catch(e){}
+try{document.querySelectorAll('[style*="url("]').forEach(function(el){var m=/url\((['"]?)(.*?)\1\)/gi,r;
+  while((r=m.exec(el.getAttribute('style')||'')))add(r[2]);});}catch(e){}
+try{performance.getEntriesByType('resource').forEach(function(e){add(e.name);});}catch(e){}
+var w={};o.forEach(function(u){if(/_webp$/i.test(u))w[u.replace(/_webp$/i,'')]=1;});
+o=o.filter(function(u){return !(!/_webp$/i.test(u)&&w[u]);});
+var t=o.join('\n');window.__IMG_URLS=o;
+function show(msg){
+  var d=document.createElement('div');
+  d.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif';
+  var bx=document.createElement('div');
+  bx.style.cssText='background:#fffdfa;color:#17120b;border-radius:16px;padding:18px;width:min(620px,92vw);max-height:84vh;display:flex;flex-direction:column;gap:10px;box-shadow:0 20px 60px rgba(0,0,0,.3)';
+  var t1=document.createElement('div');t1.innerHTML='<b style="font-size:16px">共 '+o.length+' 张图片</b>';
+  var t2=document.createElement('div');t2.style.cssText='color:#5b554c;font-size:12.5px';t2.textContent=msg;
+  var ta=document.createElement('textarea');
+  ta.style.cssText='flex:1;min-height:280px;width:100%;font:12px/1.6 Consolas,monospace;padding:10px;border:1px solid #ded5c8;border-radius:10px;background:#fbf8f3;color:#17120b';
+  ta.value=t;
+  var barx=document.createElement('div');barx.style.cssText='display:flex;gap:8px;justify-content:flex-end';
+  var cb=document.createElement('button');
+  cb.textContent='复制并关闭';
+  cb.style.cssText='min-height:38px;padding:0 18px;border:0;border-radius:10px;background:#4d3045;color:#fff;font:600 14px inherit;cursor:pointer';
+  cb.onclick=function(){try{ta.select();document.execCommand('copy');}catch(e){}d.remove();};
+  barx.appendChild(cb);
+  bx.appendChild(t1);bx.appendChild(t2);bx.appendChild(ta);bx.appendChild(barx);
+  d.appendChild(bx);document.body.appendChild(d);
+  ta.focus();ta.select();
+  d.addEventListener('click',function(e){if(e.target===d)d.remove();});
+}
+try{navigator.clipboard.writeText(t).then(function(){show('地址已复制到剪贴板 ✓ 回取图工具粘到第 2 步即可（下面是备份）');},function(){show('自动复制没成功，请在下框里 Ctrl+A 全选后 Ctrl+C');});}
+catch(e){show('自动复制没成功，请在下框里 Ctrl+A 全选后 Ctrl+C');}
+})();
+</script>
+
+<script>
+(function(){
+'use strict';
+var $ = function(id){ return document.getElementById(id); };
+
+/* ========== 工具函数：与 tools/fetch_images.py 的命名规则保持一致 ========== */
+function baseName(url){
+  var p;
+  try { p = decodeURIComponent(new URL(url).pathname); } catch(e){ p = String(url).split('?')[0]; }
+  var n = p.split('/').filter(Boolean).pop() || 'image';
+  return n;
+}
+function outName(url, resize){
+  var name = baseName(url);
+  if (resize && /_\d+x\d+\.jpe?g$/i.test(name)) name = name.replace(/_\d+x\d+\.jpe?g$/i, '');
+  if (/_webp$/i.test(name)){
+    name = name.slice(0, -5).replace(/\.(jpe?g|png)$/i, '') + '.webp';
+  }
+  name = name.replace(/[\\/:*?"<>|]+/g, '_').replace(/^[ .]+|[ .]+$/g, '');
+  return name || ('image-' + Date.now());
+}
+function sizedUrl(url, n){
+  var b = String(url).split('?')[0];
+  b = b.replace(/_\d+x\d+\.jpe?g$/i, '').replace(/_webp$/i, '');
+  return b + '_' + n + 'x' + n + '.jpg';
+}
+function pad4(n, width){ var s = String(n); while (s.length < width) s = '0' + s; return s; }
+
+/* ========== 1. 书签小工具 ========== */
+var BM = ($('bmsrc').textContent || '').trim();
+$('bmRaw').value = 'javascript:' + encodeURIComponent(BM);
+(function(){
+  var a = $('bmLink'), href = 'javascript:' + encodeURIComponent(BM);
+  a.setAttribute('href', href);
+  /* 往返自检：点书签时浏览器会 percent-decode，必须能原样还原源码，否则点了没反应 */
+  var back = null;
+  try { back = decodeURIComponent(href.slice('javascript:'.length)); } catch(e){}
+  var el = $('bmCheck');
+  if (back === BM){
+    el.innerHTML = '<span class="ok">✓ 书签已就绪，可以直接拖</span>';
+  } else {
+    el.innerHTML = '<span class="warn">✗ 书签编码自检没通过，请改用「复制书签代码」手动新建书签</span>';
+    a.style.opacity = .5;
+  }
+})();
+$('bmCopy').onclick = function(){
+  var code = 'javascript:' + encodeURIComponent(BM);
+  navigator.clipboard.writeText(code).then(function(){
+    $('bmCheck').innerHTML = '<span class="ok">✓ 书签代码已复制，去书签管理器粘贴</span>';
+    $('bmRawBox').style.display = 'block';
+  }, function(){
+    $('bmRawBox').style.display = 'block';
+    $('bmRaw').select();
+    $('bmCheck').innerHTML = '<span class="warn">自动复制失败，请从下面框里手动复制</span>';
+  });
+};
+$('bmToggleRaw').onclick = function(){
+  var b = $('bmRawBox');
+  b.style.display = (b.style.display === 'none') ? 'block' : 'none';
+};
+
+/* ========== 2. 解析地址 ========== */
+var list = [];
+function isImgUrl(u){
+  if (!/^https?:\/\//i.test(u)) return false;
+  if (/\.svgz?($|\?)/i.test(u)) return false;
+  if (/\.(js|css|json|woff2?|ttf|mp4)($|\?)/i.test(u)) return false;
+  return /\.(jpe?g|png|webp|gif|bmp|avif)(_[a-z0-9]+)?(\.(jpe?g|png|webp))?$/i.test(u.split('?')[0])
+      || /_(webp|\d+x\d+)(\.|$)/i.test(u);
+}
+function parseList(text){
+  var raw = String(text || '');
+  var urls = [], seen = {}, m;
+  var re = /(https?:)?\/\/[^\s"'<>()\\,;]+/gi;
+  while ((m = re.exec(raw))){
+    var u = m[0];
+    if (u.slice(0, 2) === '//') u = 'https:' + u;
+    u = u.replace(/&amp;/g, '&').split('#')[0];
+    if (!isImgUrl(u)) continue;
+    var key = u.split('?')[0];
+    if (seen[key]) continue;
+    seen[key] = 1;
+    urls.push(u);
+  }
+  /* 同一张图 .jpg 与 .jpg_webp 都出现时只留 WebP（体积更小、画质一样） */
+  var hasWebp = {};
+  urls.forEach(function(u){ if (/_webp$/i.test(u)) hasWebp[u.replace(/_webp$/i, '')] = 1; });
+  return urls.filter(function(u){ return !(!/_webp$/i.test(u) && hasWebp[u]); });
+}
+function refreshParse(){
+  var raw = $('urls').value;
+  list = parseList(raw);
+  var lines = raw.split('\n').filter(function(l){ return l.trim(); }).length;
+  $('parseStat').innerHTML = list.length
+    ? ('识别出 <b>' + list.length + '</b> 张图片' + (list.length !== lines ? '（原文 ' + lines + ' 行，已去重/过滤）' : ''))
+    : (raw.trim() ? '<span class="warn">没识别出图片地址</span>' : '');
+  return list;
+}
+$('parseBtn').onclick = function(){ refreshParse(); };
+$('urls').addEventListener('input', function(){ refreshParse(); });
+$('clearBtn').onclick = function(){ $('urls').value = ''; refreshParse(); $('parseStat').textContent = ''; };
+
+/* ========== 3. 保存设置 ========== */
+var dirHandle = null;
+function todayTag(){
+  var d = new Date();
+  return String(d.getFullYear()) + pad4(d.getMonth()+1,2) + pad4(d.getDate(),2);
+}
+$('subdir').value = '_inbox/alicdn-' + todayTag();
+
+/* 目录句柄记在 IndexedDB 里：下次打开自动恢复（权限还在的话就不用再选一次） */
+function idb(){
+  return new Promise(function(res, rej){
+    var r = indexedDB.open('lifedesk-imgtool', 1);
+    r.onupgradeneeded = function(){ r.result.createObjectStore('kv'); };
+    r.onsuccess = function(){ res(r.result); };
+    r.onerror = function(){ rej(r.error); };
+  });
+}
+function kvSet(k, v){
+  return idb().then(function(db){
+    return new Promise(function(res, rej){
+      var t = db.transaction('kv', 'readwrite');
+      t.objectStore('kv').put(v, k);
+      t.oncomplete = function(){ res(); }; t.onerror = function(){ rej(t.error); };
+    });
+  });
+}
+function kvGet(k){
+  return idb().then(function(db){
+    return new Promise(function(res, rej){
+      var t = db.transaction('kv', 'readonly');
+      var q = t.objectStore('kv').get(k);
+      q.onsuccess = function(){ res(q.result); }; q.onerror = function(){ rej(q.error); };
+    });
+  });
+}
+function showDir(){
+  if (!dirHandle){ $('dirBox').innerHTML = '还没选文件夹'; return; }
+  var sub = $('subdir').value.trim().replace(/^[\/\\]+/, '');
+  $('dirBox').innerHTML = '<b>' + dirHandle.name + '</b> ⟶ ' + dirHandle.name + '\\' + sub.replace(/\//g, '\\');
+}
+$('subdir').addEventListener('input', showDir);
+$('pickDir').onclick = function(){
+  if (!window.showDirectoryPicker){
+    $('errBox').textContent = '这个浏览器不支持直接写文件夹。请用 Chrome / Edge 打开本页；'
+      + '或者改用「下载到浏览器默认下载目录」的方式（把 Chrome 设置里的下载位置改到 data\\_inbox 也行）。';
+    return;
+  }
+  $('errBox').textContent = '';
+  window.showDirectoryPicker({ mode:'readwrite', id:'lifedesk-img' }).then(function(h){
+    dirHandle = h;
+    showDir();
+    kvSet('dir', h).catch(function(){});
+  }, function(e){
+    if (e && e.name !== 'AbortError') $('errBox').textContent = '选择文件夹失败：' + e.message;
+  });
+};
+/* 打开时尝试恢复上次的文件夹 */
+(async function(){
+  try{
+    var h = await kvGet('dir');
+    if (!h) { showDir(); return; }
+    var p = await h.queryPermission({ mode:'readwrite' });
+    if (p === 'granted') { dirHandle = h; showDir(); return; }
+    if (p === 'prompt'){
+      $('dirBox').innerHTML = '上次用过 <b>' + h.name + '</b> —— <button class="btn sm" id="resumeBtn">继续用它</button>';
+      $('resumeBtn').onclick = async function(){
+        var r = await h.requestPermission({ mode:'readwrite' });
+        if (r === 'granted'){ dirHandle = h; showDir(); }
+        else { $('errBox').textContent = '没拿到权限，请重新点「选择保存文件夹」。'; }
+      };
+    } else { showDir(); }
+  }catch(e){ showDir(); }
+})();
+
+/* ========== 下载 ========== */
+var results = [];      /* {url,name,status,bytes,blob,err,preview} */
+var running = false;
+
+async function fetchBytes(url, resize){
+  var tries = resize ? [sizedUrl(url, 800), url] : [url];
+  var lastErr = null;
+  for (var i = 0; i < tries.length; i++){
+    try{
+      var r = await fetch(tries[i], { mode:'cors', cache:'default' });
+      if (!r.ok){ lastErr = 'HTTP ' + r.status; continue; }
+      var b = await r.blob();
+      if (!b || !b.size){ lastErr = '空文件'; continue; }
+      return { blob: b, used: tries[i], thumb: (i === 0) };
+    }catch(e){ lastErr = (e && e.message) || String(e); }
+  }
+  throw new Error(lastErr || '取不到');
+}
+
+async function dirForWrite(){
+  if (!dirHandle) throw new Error('先选保存文件夹（第 3 步）');
+  var sub = $('subdir').value.trim().replace(/^[\/\\]+/, '');
+  var d = dirHandle;
+  if (sub){
+    var parts = sub.split(/[\/\\]+/).filter(Boolean);
+    for (var i = 0; i < parts.length; i++) d = await d.getDirectoryHandle(parts[i], { create:true });
+  }
+  return d;
+}
+async function existsNonEmpty(dir, name){
+  try{
+    var fh = await dir.getFileHandle(name);
+    var f = await fh.getFile();
+    return f.size > 0;
+  }catch(e){ return false; }
+}
+async function writeBlob(dir, name, blob){
+  var fh = await dir.getFileHandle(name, { create:true });
+  var w = await fh.createWritable();
+  await w.write(blob);
+  await w.close();
+}
+/* 浏览器不支持 FSA（或用户勾了「直接下载」）时的兜底：走普通下载，文件进浏览器下载目录 */
+function downloadBlob(blob, name){
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+
+function itemHTML(r, idx){
+  var badge = r.status === 'ok' ? '已存' : (r.status === 'skip' ? '跳过' : (r.status === 'fail' ? '失败' : '等待'));
+  var ph = r.preview ? '<img src="' + r.preview + '" alt="">' : '';
+  return '<div class="item ' + r.status + '" data-i="' + idx + '">' +
+    '<span class="badge">' + badge + '</span>' +
+    '<div class="ph">' + ph + '</div>' +
+    '<div class="nm">' + (r.name || ('#' + (idx+1))) + '</div></div>';
+}
+function paintGrid(){
+  $('grid').innerHTML = results.map(itemHTML).join('');
+}
+/* doneN / totalN 是「本次这一轮」的进度（重试时是子集），统计仍然按整批算 */
+function paintStat(doneN, totalN){
+  var ok = 0, skip = 0, fail = 0, bytes = 0;
+  results.forEach(function(r){
+    if (r.status === 'ok'){ ok++; bytes += r.bytes || 0; }
+    else if (r.status === 'skip') skip++;
+    else if (r.status === 'fail') fail++;
+  });
+  var head = (totalN != null) ? (doneN + ' / ' + totalN + ' 张（本轮）　|　') : '';
+  $('goStat').innerHTML = head + '已存 <span class="ok">' + ok + '</span>'
+    + (skip ? '　跳过 ' + skip : '')
+    + (fail ? '　<span class="warn">失败 ' + fail + '</span>' : '')
+    + (bytes ? '　共 ' + (bytes/1048576).toFixed(1) + ' MB' : '');
+  if (totalN != null) $('bar').style.width = ((doneN || 0) * 100 / totalN).toFixed(1) + '%';
+  $('retryBtn').style.display = fail ? '' : 'none';
+  $('copyList').style.display = (ok || skip) ? '' : 'none';
+}
+
+/* 下载一批（idxs 是要处理的 results 下标）。重试就是拿失败项的下标再跑一次，名字沿用。 */
+async function runDownload(idxs){
+  if (running || !idxs.length) return;
+  $('errBox').textContent = '';
+  var useDir = !!dirHandle && $('useDir').checked;
+  if ($('useDir').checked && !dirHandle){
+    $('errBox').textContent = '先在「保存到哪里」里选一个文件夹；或者取消勾选「写进指定文件夹」，'
+      + '图片会下到浏览器的下载目录。';
+    return;
+  }
+  var dir = null;
+  if (useDir){
+    if (!window.showDirectoryPicker){
+      $('errBox').textContent = '这个浏览器不支持直接写文件夹，请取消勾选「写进指定文件夹」。';
+      return;
+    }
+    try { dir = await dirForWrite(); }
+    catch(e){ $('errBox').textContent = '打不开保存目录：' + e.message; return; }
+  }
+  var resize = $('resize').checked;
+
+  running = true;
+  $('goBtn').disabled = true;
+  var cursor = 0, done = 0;
+  async function worker(){
+    while (cursor < idxs.length){
+      var i = idxs[cursor++];
+      var r = results[i];
+      r.err = '';
+      try{
+        if (dir && await existsNonEmpty(dir, r.name)){
+          r.status = 'skip';
+        } else {
+          var got = await fetchBytes(r.url, resize);
+          r.blob = got.blob; r.bytes = got.blob.size;
+          if (dir) await writeBlob(dir, r.name, got.blob);
+          else downloadBlob(got.blob, r.name);
+          r.status = 'ok';
+          if (r.preview) URL.revokeObjectURL(r.preview);
+          r.preview = URL.createObjectURL(got.blob);
+        }
+      }catch(e){
+        r.status = 'fail'; r.err = (e && e.message) || '失败';
+      }
+      done++;
+      paintStat(done, idxs.length);
+      var cell = $('grid').querySelector('[data-i="' + i + '"]');
+      if (cell) cell.outerHTML = itemHTML(r, i);
+    }
+  }
+  var workers = Math.min(12, Math.max(1, parseInt($('workers').value, 10) || 4));
+  var pool = [];
+  for (var k = 0; k < workers; k++) pool.push(worker());
+  await Promise.all(pool);
+  running = false;
+  $('goBtn').disabled = false;
+  paintStat(null);
+
+  /* 台账 _manifest.json —— 和命令行脚本的产物一致，方便以后把图和条目对号 */
+  if (dir && $('manifest').checked){
+    try{
+      var man = {
+        tool: '取图工具.html', at: new Date().toISOString(),
+        subdir: $('subdir').value.trim(),
+        resize: resize, numbered: $('numbered').checked,
+        startNo: parseInt($('startNo').value, 10) || 1,
+        rows: results.map(function(r){
+          return { url: r.url, file: r.name, bytes: r.bytes, status: r.status || 'pending', error: r.err || '' };
+        })
+      };
+      await writeBlob(dir, '_manifest.json', new Blob([JSON.stringify(man, null, 2)], { type:'application/json' }));
+    }catch(e){ console.warn('台账写失败：', e); }
+  }
+  var fail = results.filter(function(r){ return r.status === 'fail'; }).length;
+  if (!fail) $('goStat').innerHTML += '　<span class="ok">全部完成 ✓</span>';
+}
+
+$('goBtn').onclick = function(){
+  if (running) return;
+  $('errBox').textContent = '';
+  if (!list.length) refreshParse();
+  if (!list.length){ $('errBox').textContent = '先粘一些图片地址（第 2 步）'; return; }
+
+  var resize = $('resize').checked;
+  var numbered = $('numbered').checked;
+  var startNo = Math.max(1, parseInt($('startNo').value, 10) || 1);
+  var width = String(Math.max(1, startNo + list.length - 1)).length;
+  if (width < 4) width = 4;
+
+  results = list.map(function(u, i){
+    var nm = outName(u, resize);
+    if (numbered) nm = pad4(startNo + i, width) + '-' + nm;
+    return { url: u, name: nm, status: '', bytes: 0, blob: null, err: '', preview: '' };
+  });
+  paintGrid();
+  paintStat(0, results.length);
+  runDownload(results.map(function(_, i){ return i; }));
+};
+
+$('retryBtn').onclick = function(){
+  if (running) return;
+  var idxs = [];
+  results.forEach(function(r, i){ if (r.status === 'fail'){ r.status = ''; idxs.push(i); } });
+  if (!idxs.length) return;
+  $('goStat').innerHTML = '正在重试 ' + idxs.length + ' 项…';
+  paintGrid();
+  runDownload(idxs);
+};
+
+$('copyList').onclick = function(){
+  var t = results.filter(function(r){ return r.status === 'ok' || r.status === 'skip'; })
+    .map(function(r){ return r.name; }).join('\n');
+  navigator.clipboard.writeText(t).then(function(){
+    $('goStat').innerHTML += '　<span class="ok">清单已复制</span>';
+  }, function(){ $('errBox').textContent = '复制失败，请手动从缩略图下面抄文件名。'; });
+};
+
+showDir();
+})();
+</script>
+</body>
+</html>

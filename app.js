@@ -4903,6 +4903,10 @@ var USER_SUBS = {};   /* v75：页面管理里新增小类，结构同 SUBS（{ 
 var LOC_DIMS = ['房间','柜体墙面','所在层'];
 var LOC_OPTS = { '房间':[], '柜体墙面':[], '所在层':[] };
 var STATES_OWN  = ['在库','云游','想收','已预订'];   /* v75fix：藏品状态顺序调整，去掉「已出」 */
+/* v154：购入渠道的预设候选（用户点名的常去渠道），配合 `t:'pick'` 用。
+   ⚠️ 必须定义在 `MODS` **之前** —— MODS 那个对象字面量在文件执行到那儿时就求值了，
+      常量放后面会拿到 undefined，预设就静默失效（这种坑最难查：功能"没坏"，就是没选项）。 */
+var CHANNEL_PRESETS = ['淘宝','京东','小红书','抖音','古月鸟','千树模玩','闲鱼'];
 var STATES_VIEW = ['想看','在看','看完'];
 var STATES_ALL  = STATES_OWN.concat(STATES_VIEW);
 /* v75fix：影音厅大类定名「赏戏 / 留音」后补上图标（旧名保留） */
@@ -4958,7 +4962,7 @@ var MODS = {
       /* v76：持有数量 —— 同一件东西收了几件（数字） */
       {k:'持有',t:'number',min:0,ph:'如 1，这一件有几份',quarter:true},
       {k:'购入价格',t:'currency',ph:'0.00',quarter:true},
-      {k:'购入渠道',t:'text',ph:'淘宝 / 线下店 / 朋友送',quarter:true},
+      {k:'购入渠道',t:'pick',o:CHANNEL_PRESETS,ph:'选一个，或直接打字',quarter:true},
       /* v96q：状态（1/2 宽）放在 编号/持有/购入价格/购入渠道 之后 */
       {k:'状态',t:'checks',o:STATES_OWN,def:['在库'],statusRow:true},
       /* v96p：端盒 / 隐藏款 —— 单选取向（布尔）。端盒选中后同系列所有 item 自动置端盒，价格同步；隐藏款作为筛选条件 */
@@ -4974,6 +4978,12 @@ var MODS = {
          与「购入日期」的年/月/日同一套路；不再拆成三个独立字段 */
       {k:'存储地点',t:'loc3',lab:'存放位置',rowstart:true},
       {k:'购入日期',t:'year-date'},
+      /* v154：**「预定日期 / 预定出货日期」不在这里** ——
+         用户原话：「放在标准编辑页面非常占地方，应该是只有预定的物品才有的字段，
+         全部放到收货日历那边去管理」。
+         所以这两个字段只在**总览页「预定物管理」的卡片上就地编辑**（点日期标签就展开，
+         不弹窗）。字段定义去掉不影响数据：applyFieldVal 是以旧记录为底合并的，
+         表单里没有的字段一动不动，值原样留着、照样跟行一起同步。 */
       {k:'封面',t:'img',ph:'图片链接，或点右侧上传',full:1},
       {k:'短评',t:'textarea',ph:'一句话就够',full:1}
     ]},
@@ -5241,6 +5251,22 @@ function brandOptionsAll(){
   }
   getBrands().forEach(push);
   ((store.collection && store.collection.rows) || []).forEach(function(r){ push(r['品牌']); });
+  return out;
+}
+/* v154：购入渠道的候选清单 —— **预设 ∪ 数据里真正用过的**。
+   为什么不用 `<select>`：用户要「下拉快速选」**和**「直接打字」两种方式，
+   原生 `<input list>` + `<datalist>` 正好两样都支持（下拉里过滤、也能输入清单外的值），
+   自己写一套「下拉 + 自建选项」反而更别扭。
+   老记录里的写法（比如「同事代购」）也会补进候选，不会被丢掉。 */
+function channelOptionsAll(){
+  var out = [], seen = {};
+  function push(x){
+    var s = String(x == null ? '' : x).trim();
+    if (!s || seen[s]) return;
+    seen[s] = 1; out.push(s);
+  }
+  CHANNEL_PRESETS.forEach(push);                                  /* 预设排前面 */
+  ((store.collection && store.collection.rows) || []).forEach(function(r){ push(r['购入渠道']); });
   return out;
 }
 /* 六大模块的可读名称（用于页面管理标题） */
@@ -5554,9 +5580,9 @@ function activeFields(key, vals){
   /* v75fix：兜底修正 —— 早期因 .pm-type 选择器冲突，可能存下 t 为 null 的自定义字段，
      渲染时 fieldHTML 没有任何分支匹配 → body 为空 → 下拉框「消失」。
      这里把未知/缺失的 t 规范化：有预设值就退回 select（下拉框），否则退回 text。 */
-  var KNOWN_T = ['text','number','currency','date','isbn','year-date','img','textarea',
+  var KNOWN_T = ['text','number','currency','date','isbn','year-date','fuzzydate','pick','img','textarea',
                  'select','multi','booktag','booksub','stars','hearts','dyn','geopick','check','checks',
-                 'locopt','brand'];   /* v75fix：存储地点三段；v133：品牌下拉 */
+                 'locopt','brand'];   /* v75fix：存储地点三段；v133：品牌下拉；v152：fuzzydate；v154：pick 可选可输 */
   /* v75fix：自定义字段来源 —— 文渊斋的 书籍/杂志 表单其实是 collection 里的「大类=书籍/杂志」录入，
      但它们的自定义字段在「文渊斋 · 页面管理」里维护（存在 customFields.study），
      所以书籍/杂志表单要同时读 study + collection 两处，其它表单读各自模块。 */
@@ -5614,6 +5640,10 @@ function activeFields(key, vals){
       });
     }
   }
+  /* v154：`fuzzydate` 类型（模糊日期）现在只由**总览页预定物卡片的就地编辑**用；
+     编辑表单里已经没有「预定日期 / 预定出货日期」这两个字段了（用户嫌占地方）。
+     渲染分支、KNOWN_T、`data-fzy/fzg/fzd` 绑定都留着 —— 卡片那套走的是 data-poseg，
+     两边互不干扰；哪天想把字段加回表单，定义写回 MODS.collection.fields 就能直接用。 */
   return base;
 }
 /* v113：表单栅格用 4 栏还是 12 栏。
@@ -5993,6 +6023,96 @@ function tryMigrateFoodRecipe(){
    两端 _upd 相同却各留一份，于是**永远**显示「待上传 N 条」，而且永远同步不上（实测：手机 25 条）。 */
 var DATE_FIELDS = { '购入日期':1, '出行日期':1, '开始日期':1, '目标日期':1,
                     '打卡日期':1, '记录日期':1, '完成日期':1 };
+/* ============================================================
+ * v152：模糊日期 —— 「预定出货日期」专用
+ * ------------------------------------------------------------
+ * 预定出货常常**说不准哪天**：可能只知道某个月，也可能只知道某个季度。
+ * 所以允许四种粒度，统一存成**一个字符串**（跟着行走出、跟着云同步走，不需要额外结构）：
+ *     `2026-11-15`  日子定了
+ *     `2026-11`     只到月（日子还没定）
+ *     `2026-Q4`     只到季度
+ *     `2026`        只到年
+ * ⚠️ 解析只有一个入口 `fuzzyDateInfo` —— 排序、日历落格、倒计时全部从它派生，
+ *    避免「有的地方认季度、有的地方不认」这种老毛病（同一个日期两处解释不一致最难查）。
+ * ============================================================ */
+var FUZZY_Q_NAME = { 1:'一季度', 2:'二季度', 3:'三季度', 4:'四季度' };
+var FUZZY_Q_FIRST_MONTH = { 1:1, 2:4, 3:7, 4:10 };
+function fzPad2(n){ return (Number(n) < 10 ? '0' : '') + Number(n); }
+/* 返回 {kind:'day'|'month'|'quarter'|'year', y, m, d, q}；认不出来返回 null */
+function fuzzyDateInfo(v){
+  var s = String(v==null ? '' : v).trim();
+  if (!s) return null;
+  /* 季度：2026-Q4 / 2026Q4 / 2026年第四季度 */
+  var qm = /^(\d{4})\s*-?\s*[Qq]\s*([1-4])$/.exec(s);
+  if (qm) return { kind:'quarter', y:parseInt(qm[1],10), q:parseInt(qm[2],10) };
+  var qc = /^(\d{4})\s*年?\s*(?:第)?\s*([一二三四])\s*季度?$/.exec(s);
+  if (qc) return { kind:'quarter', y:parseInt(qc[1],10), q:'一二三四'.indexOf(qc[2]) + 1 };
+  /* 年-月-日 / 年-月 / 年（分隔符宽容：- . /） */
+  var dm = /^(\d{4})(?:[-.\/](\d{1,2}))?(?:[-.\/](\d{1,2}))?$/.exec(s);
+  if (dm){
+    var y = parseInt(dm[1],10);
+    if (dm[2] == null) return { kind:'year', y:y };
+    var mo = parseInt(dm[2],10);
+    if (!(mo >= 1 && mo <= 12)) return { kind:'year', y:y };
+    if (dm[3] == null) return { kind:'month', y:y, m:mo };
+    var d = parseInt(dm[3],10);
+    if (!(d >= 1 && d <= 31)) return { kind:'month', y:y, m:mo };
+    /* ⚠️ 还得挡住「2 月 30 日」这种不存在的日期：不挡的话日历落格时
+       `new Date(2026,1,30)` 会自动进位成 3 月 2 日，物品就落到别的月份格子里去了。
+       遇到这种就退化成「只到月」。 */
+    if (d > new Date(y, mo, 0).getDate()) return { kind:'month', y:y, m:mo };
+    return { kind:'day', y:y, m:mo, d:d };
+  }
+  return null;
+}
+/* 归一化成「这件事最早可能在的那一天」`YYYY-MM-DD` ——
+   **日历落格与排序**拿它比。季度→该季度第一个月的 1 号；只有月→该月 1 号。
+   ⚠️ 这只用于比较与落格，**不写回数据**（写回去就把「模糊」这个信息弄丢了）。 */
+function fuzzyDateKey(v){
+  var i = fuzzyDateInfo(v);
+  if (!i) return '';
+  var mo = (i.kind === 'quarter') ? (FUZZY_Q_FIRST_MONTH[i.q] || 1) : (i.m || 1);
+  var d  = (i.kind === 'day') ? i.d : 1;
+  return i.y + '-' + fzPad2(mo) + '-' + fzPad2(d);
+}
+/* 「这件事最晚可能在的那一天」—— **逾期判定与倒计时**用它。
+   ⚠️ 为什么不能也用最早的日期：`2026-11` 的意思是「11 月内出货」，
+      11 月 1 号一过就报「已逾期 5 天」是错的（11 月还没过完呢）。所以判定要用**月末**。
+   精确日期：就是它自己；只有月→该月最后一天；季度→该季度最后一天；只有年→12-31。 */
+function fuzzyDateEndKey(v){
+  var i = fuzzyDateInfo(v);
+  if (!i) return '';
+  if (i.kind === 'day') return i.y + '-' + fzPad2(i.m) + '-' + fzPad2(i.d);
+  var endM;
+  if (i.kind === 'quarter') endM = (FUZZY_Q_FIRST_MONTH[i.q] || 1) + 2;
+  else if (i.kind === 'month') endM = i.m;
+  else endM = 12;                                  /* 只知道年份 → 年底 */
+  var lastD = new Date(i.y, endM, 0).getDate();    /* 下个月的第 0 天 = 本月最后一天 */
+  return i.y + '-' + fzPad2(endM) + '-' + fzPad2(lastD);
+}
+/* 给人看的文案：精确的写成 2026·11·15，模糊的写成 2026 年 11 月 / 2026 年四季度 */
+function fuzzyDateText(v){
+  var i = fuzzyDateInfo(v);
+  if (!i) return String(v==null ? '' : v);
+  if (i.kind === 'day')     return i.y + '·' + fzPad2(i.m) + '·' + fzPad2(i.d);
+  if (i.kind === 'month')   return i.y + ' 年 ' + i.m + ' 月';
+  if (i.kind === 'quarter') return i.y + ' 年' + FUZZY_Q_NAME[i.q];
+  return i.y + ' 年';
+}
+/* 是不是「说不准具体哪天」（只有月 / 季度 / 年）—— 界面上要标出来，不能假装它很确定 */
+function fuzzyDateIsVague(v){
+  var i = fuzzyDateInfo(v);
+  return !!i && i.kind !== 'day';
+}
+/* 从今天到「最晚出货日」还有几天（负数＝已经过完了）。模糊日期按 fuzzyDateEndKey 算。 */
+function fuzzyDaysFromToday(v){
+  var k = fuzzyDateEndKey(v);
+  if (!k) return null;
+  var t = new Date(); t.setHours(0,0,0,0);
+  var p = k.split('-');
+  var dst = new Date(parseInt(p[0],10), parseInt(p[1],10) - 1, parseInt(p[2],10));
+  return Math.round((dst - t) / 86400000);
+}
 function normDateStr(v){
   if (v == null || v === '') return v;
   var s = String(v).trim();
@@ -6035,6 +6155,12 @@ function normalizeRows(rows){
 }
 var ui = {
   view:'overview',
+  /* v152：总览页「预定物管理」里日历当前看的是哪个月（`YYYY-MM`）。
+     纯界面状态 —— 只在内存里，不落盘、不进数据、不参与云同步（看哪个月不算数据）。 */
+  poCal:'',
+  /* v154：预定物卡片上「正在就地编辑哪个日期」—— {id, f} 或 null。
+     f 是字段名（'预定出货日期' / '预定日期'）。同样是纯界面状态。 */
+  poEdit:null,
   collection:{ mode:'cat', cat:'', sub:'', q:'', view:'wall', ipId:null, seriesId:null, inbox:false, classic:false, editing:false, numOrder:'asc', yearView:false, seriesWall:'', seriesStatus:'全部', seriesSort:'no', pageSize:0, page:1,
     /* v102：封面墙的分组方式 —— 'series'=按系列出卡（默认，点进系列详情）；
        'item'=直接把符合条件的物品平铺成卡片（找具体东西时用，如搜「渔夫帽」、看全部隐藏款）。 */
@@ -7264,16 +7390,35 @@ function hasStatus(r, v){ return stArr(r).indexOf(v) >= 0; }
    clearOwnedConflicts（清）、ownedExtraStatuses（提示文案）、toggleRowStatus（脏数据兜底）
    全部引用它，避免「两处名单不一致」这类老毛病。 */
 var OWNED_CONFLICT_STATUS = ['想收', '已预订', '云游'];
-function clearOwnedConflicts(arr){
-  if (!Array.isArray(arr)) return arr;
-  if (arr.indexOf('在库') >= 0){
-    OWNED_CONFLICT_STATUS.forEach(function(s){
-      var i = arr.indexOf(s);
-      if (i >= 0) arr.splice(i, 1);
-    });
-  }
-  return arr;
+/* ============================================================
+ * v155：收藏的状态模型（用户拍板的）
+ * ------------------------------------------------------------
+ *   · **基础状态「在库 / 云游」二选一，必须有一个亮着** —— 不存在"没有状态"的藏品；
+ *   · **「想收 / 已预订」是挂在「云游」上的附加态**（东西还没到手，但想要 / 已经订了）。
+ * 合法形态只有三种：
+ *     ['在库']                      到手了
+ *     ['云游']                      还没到手
+ *     ['云游','想收'(,'已预订')]     还没到手 + 附加
+ * ⚠️ 用户报的场景：误把某件标成在库 → 取消 → **状态变空** → 那条东西从
+ *    「在库 / 云游 / 想收」三个筛选里同时消失，看着就是"丢了"。
+ *    现在取消在库直接落成「云游」，界面上也会看到云游被点亮（见 rebuildStatus 的反写）。
+ * ⚠️ 这是**唯一的形态入口**：四处写状态的地方都要过它
+ *    （快速按钮 toggleRowStatus / 表单 change / doSave / 批量 applyBatchPatch），
+ *    别再各写一份互斥逻辑。**它返回新数组，不是原地改** —— 调用处写 `arr = normalizeOwnStatus(arr)`。
+ * ============================================================ */
+var OWN_STATUS_EXTRA = ['想收', '已预订'];
+function normalizeOwnStatus(arr){
+  var src = Array.isArray(arr)
+    ? arr.map(function(s){ return String(s).trim(); })
+    : String(arr == null ? '' : arr).split(',').map(function(s){ return String(s).trim(); });
+  if (src.indexOf('在库') >= 0) return ['在库'];   /* 到手了 → 云游与附加态一律清掉 */
+  var out = ['云游'];                              /* 没在库 → 基础态必然是云游 */
+  OWN_STATUS_EXTRA.forEach(function(s){ if (src.indexOf(s) >= 0) out.push(s); });
+  return out;
 }
+/* 兼容旧名（老代码到处在用）。⚠️ 语义变了：以前只"清"、返回原数组；
+   现在返回**新数组**且会补上「云游」—— 调用处必须接返回值，不能只调不改。 */
+function clearOwnedConflicts(arr){ return normalizeOwnStatus(arr); }
 /* 已「在库」却还挂着的多余状态（空数组 = 干净）。提示文案与脏数据判断共用。 */
 function ownedExtraStatuses(row){
   if (!row || !hasStatus(row, '在库')) return [];
@@ -7373,6 +7518,272 @@ function computeSpend(rows){
   Object.keys(box).forEach(function(s){ spend += (box[s]||0); });
   return spend;
 }
+/* ============================================================
+ * v152：预定物管理（总览页）—— 取代原来的「最近留下的」板块
+ * ------------------------------------------------------------
+ * 「预定物」的定义只有一个：**状态里含「已预订」**的藏品（书籍/杂志归文渊斋，照例排除）。
+ *   其它模块、其它状态一概不掺和 —— 这个板块只干「预定物管理」这一件事。
+ * 出货日历：
+ *   · 精确日期（`2026-11-15`）落在当天那一格；
+ *   · 模糊日期（`2026-11` / `2026-Q4`）落在「该月 1 号」那一格，条上带虚线圈 ——
+ *     一眼看出「这个月有东西要出，但具体哪天还没定」，不假装它很确定。
+ *   · 翻月只看 `ui.poCal`（内存里的界面状态，不落盘、不进数据）。
+ * 提醒：已过预计出货日的（红）、未来 7 天内的（黄）、没填出货日期的（灰）。
+ * ============================================================ */
+function poTodayKey(){
+  var t = new Date();
+  return t.getFullYear() + '-' + fzPad2(t.getMonth()+1) + '-' + fzPad2(t.getDate());
+}
+function poRows(){          /* 预定物：状态含「已预订」 */
+  return (store.collection.rows || []).filter(function(r){
+    return hasStatus(r, '已预订') && LEGACY_BOOK_CATS.indexOf(r['大类']) < 0;
+  });
+}
+/* 排序：填了出货日期的按日期升序排前面；没填的排后面（两组不混 —— 它们之间没有可比的日期） */
+function poSort(rows){
+  var withD = [], noD = [];
+  rows.forEach(function(r){ (fuzzyDateKey(r['预定出货日期']) ? withD : noD).push(r); });
+  var byName = function(a,b){ return String(a['名称']||'').localeCompare(String(b['名称']||''), 'zh'); };
+  withD.sort(function(a,b){
+    var d = fuzzyDateKey(a['预定出货日期']).localeCompare(fuzzyDateKey(b['预定出货日期']));
+    return d || byName(a,b);
+  });
+  noD.sort(function(a,b){
+    var d = String(a['预定日期']||'').localeCompare(String(b['预定日期']||''));
+    return d || byName(a,b);
+  });
+  return withD.concat(noD);
+}
+/* `2026-09-01` → `2026·09·01`（预定日期用的年月日三段，可能缺月/日） */
+function poWhenText(v, prefix){
+  var s = String(v==null ? '' : v).trim();
+  if (!s) return '';
+  var p = s.split('-');
+  return prefix + p[0] + (p[1] ? '·'+p[1] : '') + (p[2] ? '·'+p[2] : '');
+}
+function poDueChip(r){
+  var due = String(r['预定出货日期']||'').trim();
+  var cls = 'po-chip po-chip-btn', txt, title = '点一下就地改（不用弹窗）';
+  if (!due){
+    return '<em class="'+cls+' todo" data-act="poedit" data-id="'+esc(r._id)+'"'+
+      ' data-f="预定出货日期" title="'+esc(title)+'">＋ 填出货日期</em>';
+  }
+  var d = fuzzyDaysFromToday(due);      /* 按「最晚出货日」算，只有月份的不会月初就报逾期 */
+  var vague = fuzzyDateIsVague(due);
+  if (d == null) cls += ' todo';
+  else if (d < 0) cls += ' late';
+  else if (d <= 7) cls += ' soon';
+  var tail = '';
+  if (d != null){
+    if (d < 0) tail = '（已过 '+Math.abs(d)+' 天）';
+    else if (d === 0) tail = '（就是今天）';
+    else tail = (vague ? '（最晚还有 ' : '（还有 ') + d + ' 天）';
+  }
+  txt = '出货 ' + fuzzyDateText(due) + tail;
+  return '<em class="'+cls+'" data-act="poedit" data-id="'+esc(r._id)+'"'+
+    ' data-f="预定出货日期" title="'+esc(title)+'">'+esc(txt)+'</em>';
+}
+/* v154：预定日期的标签（没填时也是一颗可点的「＋ 填…」） */
+function poBookedChip(r){
+  var v = String(r['预定日期']||'').trim();
+  if (!v){
+    return '<em class="po-chip todo po-chip-btn" data-act="poedit" data-id="'+esc(r._id)+'"'+
+      ' data-f="预定日期" title="点一下就地填">＋ 填预定日期</em>';
+  }
+  return '<em class="po-chip po-chip-btn" data-act="poedit" data-id="'+esc(r._id)+'"'+
+    ' data-f="预定日期" title="点一下就地改">'+esc(poWhenText(v, '预订 '))+'</em>';
+}
+/* v154：卡片上的**就地编辑区** —— 两个日期各一套下拉：
+   · 预定出货日期：年 ／ 月或季度 ／ 日（支持模糊，跟表单里那套同一个口径）
+   · 预定日期：年 ／ 月 ／ 日
+   用 data-poseg 标记（不是表单里的 data-fzy，避免两套绑定互相抢）。 */
+function poInlineEditHTML(r, f){
+  var cur = String(r[f]||'').trim();
+  var info = fuzzyDateInfo(cur) || {};
+  var cy = new Date().getFullYear(), y, m, d, q;
+  /* ⚠️ 这个容器必须带一个 data-act：卡片外层是 `data-act="popen"`（点开详情），
+     事件委托用 `closest('[data-act]')` —— 里面的下拉本身没有 data-act，
+     不加这一层的话「点下拉」会被当成「点开详情」，编辑框刚点开就被详情页盖掉。 */
+  var h = '<div class="po-inlineedit" data-act="poeditnoop" data-id="'+esc(r._id)+'" data-f="'+esc(f)+'">';
+  var yo = '<option value="">年</option>';
+  for (y = cy + 3; y >= 2000; y--) yo += '<option value="'+y+'"'+(info.y===y?' selected':'')+'>'+y+'</option>';
+  h += '<select data-poseg="y" title="年份">'+yo+'</select>';
+  if (f === '预定出货日期'){
+    var go = '<option value="">月 / 季</option>';
+    for (m = 1; m <= 12; m++) go += '<option value="M'+m+'"'+((info.kind==='month'||info.kind==='day') && info.m===m?' selected':'')+'>'+m+' 月</option>';
+    for (q = 1; q <= 4; q++) go += '<option value="Q'+q+'"'+(info.kind==='quarter' && info.q===q?' selected':'')+'>'+FUZZY_Q_NAME[q]+'</option>';
+    h += '<select data-poseg="g" title="月份或季度">'+go+'</select>';
+    var d1 = '<option value="">日</option>';
+    for (d = 1; d <= 31; d++) d1 += '<option value="'+d+'"'+(info.kind==='day' && info.d===d?' selected':'')+'>'+d+'</option>';
+    h += '<select data-poseg="d" title="日期">'+d1+'</select>';
+  } else {
+    var mo = '<option value="">月</option>';
+    for (m = 1; m <= 12; m++) mo += '<option value="'+m+'"'+(info.m===m?' selected':'')+'>'+m+' 月</option>';
+    h += '<select data-poseg="m" title="月份">'+mo+'</select>';
+    var d2 = '<option value="">日</option>';
+    for (d = 1; d <= 31; d++) d2 += '<option value="'+d+'"'+(info.d===d?' selected':'')+'>'+d+'</option>';
+    h += '<select data-poseg="d" title="日期">'+d2+'</select>';
+  }
+  h += '<button type="button" class="po-iedone" data-act="poeditdone" title="收起">✓</button>';
+  return h+'</div>';
+}
+/* 把就地编辑区里三个下拉合成一个日期字符串写回那一行。
+   ⚠️ 值没变就不写（patchRowFields 自己会挡），免得白刷 _upd、白报一条「待上传」。 */
+function poInlineCommit(box){
+  if (!box || !box.getAttribute) return;
+  var id = box.getAttribute('data-id'), f = box.getAttribute('data-f');
+  function seg(n){
+    var el = box.querySelector('[data-poseg="'+n+'"]');
+    return el ? String(el.value||'') : '';
+  }
+  var yv = parseInt(seg('y'),10) || 0;
+  var val = '';
+  if (yv){
+    if (f === '预定出货日期'){
+      var g = seg('g'), dv = seg('d');
+      if (g.charAt(0) === 'Q')      val = yv + '-Q' + g.slice(1);
+      else if (g.charAt(0) === 'M') val = yv + '-' + fzPad2(parseInt(g.slice(1),10)) + (dv ? '-' + fzPad2(parseInt(dv,10)) : '');
+      else                          val = String(yv);
+    } else {
+      var mv = seg('m'), dv2 = seg('d');
+      val = mv ? (yv + '-' + fzPad2(parseInt(mv,10)) + (dv2 ? '-' + fzPad2(parseInt(dv2,10)) : '')) : String(yv);
+    }
+  }
+  var patch = {};
+  patch[f] = val || null;
+  if (patchRowFields('collection', id, patch)) toast(f + (val ? ' 已记下' : ' 已清空'));
+  render();          /* 重绘：日历 / 提醒条 / 倒计时都跟着变；编辑态由 ui.poEdit 保留 */
+}
+function poCardHTML(r){
+  var nm = r['名称'] || '未命名';
+  var sub = [r['IP'], r['大类']].filter(Boolean).join(' · ');
+  var ed = ui.poEdit || {};
+  var same = (String(ed.id || '') === String(r._id));
+  var editingDue  = same && ed.f === '预定出货日期';
+  var editingBook = same && ed.f === '预定日期';
+  return '<div class="pocard'+(same?' poediting':'')+'" data-act="popen" data-id="'+esc(r._id)+'">'+
+    '<div class="pocov" style="'+coverStyle(r, nm)+'">'+(hasCover(r)?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
+    '<div class="pobody">'+
+      '<strong>'+esc(nm)+'</strong>'+
+      (sub?'<span>'+esc(sub)+'</span>':'')+
+      '<div class="pochips">'+
+        (editingBook ? poInlineEditHTML(r, '预定日期') : poBookedChip(r))+
+        (editingDue  ? poInlineEditHTML(r, '预定出货日期') : poDueChip(r))+
+      '</div>'+
+    '</div>'+
+    '<div class="poacts">'+
+      '<button type="button" class="po-recv" data-act="porecv" data-id="'+esc(r._id)+'" title="到货了：状态改成「在库」，持有补成 1">到货了</button>'+
+    '</div>'+
+  '</div>';
+}
+/* 单个月份的日历（标题 + 表头 + 格子），不含导航 —— 并排三个月时各画各的 */
+function poMonthCalHTML(rows, y, mo){
+  var startIdx = (new Date(y, mo-1, 1).getDay() + 6) % 7;   /* 周一当第一列 */
+  var dnum = new Date(y, mo, 0).getDate();
+  /* 落格：模糊日期 → fuzzyDateKey 那天（只有月 / 季度的都会落到 1 号） */
+  var byDay = {};
+  rows.forEach(function(r){
+    var k = fuzzyDateKey(r['预定出货日期']); if (!k) return;
+    if (parseInt(k.slice(0,4),10)!==y || parseInt(k.slice(5,7),10)!==mo) return;
+    var d = parseInt(k.slice(8,10),10);
+    (byDay[d] = byDay[d] || []).push(r);
+  });
+  var todayK = poTodayKey(), cells = '';
+  for (var b=0; b<startIdx; b++) cells += '<div class="po-cell blank"></div>';
+  for (var d=1; d<=dnum; d++){
+    var key = y + '-' + fzPad2(mo) + '-' + fzPad2(d);
+    var list = byDay[d] || [];
+    var tip = list.map(function(r){ return (r['名称']||'未命名') + '（' + (fuzzyDateText(r['预定出货日期'])||'—') + '）'; }).join('\n');
+    cells += '<div class="po-cell'+(key===todayK?' today':'')+(list.length?' has':'')+'"'+
+      (tip ? ' title="'+esc(tip)+'"' : '')+'>'+
+      '<u>'+d+'</u>'+
+      list.slice(0,2).map(function(r){
+        return '<i class="po-ev'+(fuzzyDateIsVague(r['预定出货日期'])?' vague':'')+'"'+
+          ' data-act="popen" data-id="'+esc(r._id)+'" title="'+esc(r['名称']||'')+'">'+
+          esc(String(r['名称']||'未命名').slice(0,4))+'</i>';
+      }).join('')+
+      (list.length>2 ? '<i class="po-ev more">+'+(list.length-2)+'</i>' : '')+
+    '</div>';
+  }
+  var total = startIdx + dnum, tail = (7 - total % 7) % 7;
+  for (var b2=0; b2<tail; b2++) cells += '<div class="po-cell blank"></div>';
+  return '<div class="po-cal po-monthcal">'+
+    '<div class="po-caltitle">'+y+' 年 '+mo+' 月</div>'+
+    '<div class="po-dow">'+['一','二','三','四','五','六','日'].map(function(w){ return '<span>'+w+'</span>'; }).join('')+'</div>'+
+    '<div class="po-cells">'+cells+'</div>'+
+  '</div>';
+}
+/* v154：一排**三个月**的出货日历（用户嫌一个月拉得太宽，没必要）。
+   窗口 = [基准月-1, 基准月, 基准月+1]，默认基准月是本月，所以「本月」正好在中间。
+   翻月按钮整体左右滑一个月 —— 滑一下，原本靠右的就变成中间那个，
+   手机端（只显示中间一格）也照样能看上下月，不用另外一套逻辑。
+   ⚠️ 手机端只显示中间那个月份：靠 CSS 隐藏首尾两块（见 .po-monthcal 的媒体查询），
+      JS 这边不做分支，免得两处判断不一致。 */
+function poCalHTML(rows){
+  var base = String(ui.poCal||'');
+  if (!/^\d{4}-\d{2}$/.test(base)){
+    var t0 = new Date(); base = t0.getFullYear() + '-' + fzPad2(t0.getMonth()+1);
+  }
+  var by = parseInt(base.slice(0,4),10), bm = parseInt(base.slice(5,7),10);
+  var months = [];
+  for (var off=-1; off<=1; off++){
+    var y2 = by, m2 = bm + off;
+    while (m2 < 1){ m2 += 12; y2--; }
+    while (m2 > 12){ m2 -= 12; y2++; }
+    months.push({ y:y2, m:m2 });
+  }
+  return '<div class="po-calbar">'+
+      '<div class="po-caltitle">出货日历</div>'+
+      '<div class="po-calnav">'+
+        '<button type="button" data-act="pocal" data-d="-1" title="往前一个月">‹</button>'+
+        '<button type="button" data-act="pocal" data-d="1" title="往后一个月">›</button>'+
+        '<button type="button" class="po-backdue" data-act="pocal" data-d="0">回到本月</button>'+
+      '</div>'+
+    '</div>'+
+    '<div class="po-calgrid">'+
+      months.map(function(m){ return poMonthCalHTML(rows, m.y, m.m); }).join('')+
+    '</div>';
+}
+function preorderPanel(){
+  var rows = poRows();
+  var sorted = poSort(rows);
+  var late = [], soon = [], noDue = [];
+  rows.forEach(function(r){
+    var due = String(r['预定出货日期']||'').trim();
+    if (!due){ noDue.push(r); return; }
+    var d = fuzzyDaysFromToday(due);
+    if (d == null){ noDue.push(r); return; }
+    if (d < 0) late.push(r);
+    else if (d <= 7) soon.push(r);
+  });
+  var nmList = function(arr){
+    var s = arr.slice(0,3).map(function(r){ return String(r['名称']||'未命名'); }).join('、');
+    return esc(s) + (arr.length>3 ? ' 等' : '');
+  };
+  var h = '<section class="panel po">'+
+    '<div class="panel-head"><div><h2>预定物管理</h2>'+
+    '<div class="hint">'+(rows.length ? (rows.length+' 件在预定中'+(noDue.length ? ' · 其中 '+noDue.length+' 件还没填出货日期' : ''))
+                                      : '把想要的东西标成「已预订」，它就会出现在这里')+'</div></div></div>';
+
+  if (!rows.length){
+    h += emptyHTML('还没有预定中的东西','在藏品编辑的「状态」里勾上「已预订」，这里就会开始替你盯着出货。')+
+      '<div style="margin-top:10px"><button class="btn ghost sm" type="button" data-act="go" data-key="collection">去藏品馆</button></div>'+
+      '</section>';
+    return h;
+  }
+
+  /* 提醒条 */
+  var alerts = '';
+  if (late.length) alerts += '<div class="po-alert late"><b>'+late.length+' 件</b>已过预计出货日 · '+nmList(late)+'</div>';
+  if (soon.length) alerts += '<div class="po-alert soon"><b>'+soon.length+' 件</b>未来 7 天内出货 · '+nmList(soon)+'</div>';
+  if (noDue.length) alerts += '<div class="po-alert todo"><b>'+noDue.length+' 件</b>还没填「预定出货日期」，日历上不会出现</div>';
+  if (alerts) h += '<div class="po-alerts">'+alerts+'</div>';
+
+  h += poCalHTML(rows);
+
+  h += '<div class="po-list">'+ sorted.map(poCardHTML).join('') +'</div>';
+  return h+'</section>';
+}
 function renderOverview(){
   var h='';
   var cards = [
@@ -7409,7 +7820,8 @@ function renderOverview(){
   var isAll = !year;
   var bought = isAll ? csRows : csRows.filter(function(r){ return yr(r['购入日期'])===year; });
   var spend = computeSpend(bought);
-  var allCost = computeSpend(csRows);
+  /* v156：原来这里还算了一份 allCost（累计投入）单独显示 —— 用户说和「充电量」是同一个数，
+     已去掉那个显示，计算也一并删掉（免得留个没人用的变量）。 */
   /* v58：有价格但没填购入日期的藏品不会计入「年投入」，给出明确提示避免误解 */
   var noDateCost = csRows.filter(function(r){ return !yr(r['购入日期']) && num(r['购入价格'])>0; });
   /* 分类分布也只计在库实物件数（与上方「在库」一致；非在库大类不显示） */
@@ -7441,8 +7853,10 @@ function renderOverview(){
     '</div>'+
     '<div class="charge-pop'+(ui.showCharge?' open':'')+'">'+
       '<div class="statgrid charge-grid">'+
+        /* v156：这里原来还有一格「累计投入」—— 用户指出它和「充电量」是同一个数
+           （年份选「全部」时两者恒等），没必要重复显示，去掉。
+           藏品馆那边的 collStats 早就只留一格了，两处口径现在一致。 */
         '<div class="stat"><u>'+spendLabel+'</u><b>¥'+Math.round(spend)+'</b></div>'+
-        '<div class="stat"><u>累计投入</u><b>¥'+Math.round(allCost)+'</b></div>'+
       '</div>'+
     '</div>';
   if (!csRows.length){
@@ -7450,35 +7864,11 @@ function renderOverview(){
   }
   h += '</section>';
 
-  /* 最近留下的 */
-  var feed=[];
-  function push(key, rows, dateF, titleF, subF){
-    rows.forEach(function(r){
-      var d=dstr(dateF(r)); if(!d) return;
-      feed.push({d:d, key:key, title:titleF(r), sub:subF(r)});
-    });
-  }
-  push('collection', store.collection.rows, function(r){return r['购入日期'];},
-    function(r){return r['名称'];}, function(r){return '入手 · '+esc(r['大类']||'');});
-  push('travel', store.travel.rows.filter(function(r){return r['状态']==='去过';}),
-    function(r){return r['出行日期'];}, function(r){return r['地区']||r['地点']||'';}, function(r){return '去过 · '+(r['国家']||r['国家地区']||'');});
-  push('food', store.food.rows, function(r){return r['打卡日期'];},
-    function(r){return r['名称'];}, function(r){return (r['类型']||'')+' · '+stars(r['星级']);});
-  push('idea', store.idea.rows, function(r){return r['记录日期'];},
-    function(r){return String(r['内容']||'').slice(0,40);}, function(r){return '灵感 · '+(r['分类']||'');});
-  feed.sort(function(a,b){ return b.d.localeCompare(a.d); });
-  feed = feed.slice(0,12);
-  h += '<section class="panel"><div class="panel-head"><div><h2>最近留下的</h2>'+
-    '<div class="hint">跨模块按时倒序</div></div></div>';
-  if (feed.length){
-    h += '<div class="timeline">'+feed.map(function(f){
-      return '<div class="tl"><time>'+esc(mdText(f.d))+'</time><div><b>'+esc(f.title)+'</b>'+
-        '<span>'+f.sub+' · '+esc(MODS[f.key].name)+'</span></div></div>';
-    }).join('')+'</div>';
-  } else {
-    h += emptyHTML('还没有动态','加几条记录，这里会长成一条时间线。');
-  }
-  h += '</section>';
+  /* v152：这里原来是「最近留下的」（跨模块按时倒序的时间线）——
+     按用户要求**整块换成「预定物管理」**，时间线那套代码一并删掉：
+     它的四个数据源（藏品 / 旅行 / 馔馔坊 / 灵感）在各自模块里本来就看得见，
+     总览页再摊一遍价值不大，反而把真正需要盯着的那几个出货日期淹掉了。 */
+  h += preorderPanel();
   return h;
 }
 
@@ -7729,7 +8119,7 @@ function renderCatMode(){
   }
 
   /* v75：封面墙视图下，只要 wall 模式就按系列分组（全部 / 大类 / 小类不限 / 小类 都生效），
-     系列卡片可点击进入系列详情；未归类 items 单独一组并分页
+     系列卡片可点击进入系列详情；没有系列归属的 items 按「大类 · 小类」分组（v153）
      v102：分组方式可切换 —— wallGroup==='item' 时不再归类，直接把当前筛选出来的物品
            平铺成卡片（找具体东西：搜「渔夫帽」看 4 顶、看全部隐藏款等）。 */
   if (f.view==='wall' && (f.wallGroup||'series')==='item'){
@@ -7761,9 +8151,10 @@ function renderCatMode(){
       h += '</div></div>';
     }
 
-    /* 未归类 items（分页；没有任何系列属性时整组即全部 items） */
+    /* v153：没有系列归属的物品 —— 按「大类 · 小类」分组展示（不再叫「未归类」）；
+       一整个类目下全都没有系列时（sOrder 为空），保持原来「整组即全部」的样子。 */
     if (unclass.length){
-      h += renderPagedWall(unclass, sOrder.length ? '未归类' : (f.sub || f.cat || '全部'));
+      h += catSubBlocks(unclass);
     } else if (!sOrder.length){
       h += renderPagedWall(rows, f.sub || f.cat || '全部');
     }
@@ -7775,6 +8166,46 @@ function renderCatMode(){
   return h+'</section>';
 }
 
+/* ============================================================
+ * v153：没有系列归属的物品 —— 按「大类 · 小类」展示
+ * ------------------------------------------------------------
+ * 以前它们被一律塞进一个叫「未归类」的筐里。两个问题：
+ *   ① **没人情味**：这些东西不是孤儿，它们本来就有自己的归类 ——「手办 · 景品」就是它的名字；
+ *   ② 把「手办·景品」「周边·冰箱贴」这些**本来就成立**的归类打散了堆在一起。
+ * 现在：名字直接取「大类 · 小类」（没有小类就只用大类），一组一块、各归各位。
+ * ⚠️ 分组后每组通常只有几条，所以**不接分页**（分页用的 page/pageSize 是全局状态，
+ *    几个组共用一个页码会互相串）；只有某组真的超过 200 条，才交回 renderPagedWall 分页。
+ * ============================================================ */
+function catSubLabel(r){
+  var cat = String((r && r['大类']) || '').trim();
+  /* 兼容书籍用的「小分类」字段名 */
+  var sub = String((r && (r['小类'] || r['小分类'])) || '').trim();
+  if (cat && sub) return cat + ' · ' + sub;
+  return cat || sub || '藏品';
+}
+function groupByCatSub(rows){
+  var map = {}, order = [];
+  (rows || []).forEach(function(r){
+    var k = catSubLabel(r);
+    if (!map[k]){ map[k] = []; order.push(k); }
+    map[k].push(r);
+  });
+  /* 固定顺序（按名字排）—— 免得每次渲染的分组次序不一样，看着像在乱跳 */
+  order.sort(function(a,b){ return String(a).localeCompare(String(b), 'zh'); });
+  return order.map(function(k){ return { label:k, rows:map[k] }; });
+}
+/* 一组一块（含标题与件数）。over 200 条的组才交给 renderPagedWall 去分页。 */
+function catSubBlocks(rows, opts){
+  opts = opts || {};
+  var f = ui.collection;
+  return groupByCatSub(rows).map(function(g){
+    if (g.rows.length > 200) return renderPagedWall(g.rows, g.label);
+    var cnt = opts.owned ? ownedCount(g.rows) : g.rows.length;
+    return '<div class="grp"'+(opts.mt?' style="margin-top:24px"':'')+'>'+
+      '<h4>'+esc(g.label)+' <i>'+cnt+(opts.owned?' 件':'')+'</i></h4>'+
+      (f.view==='list' ? collectionList(g.rows) : collectionWall(g.rows))+'</div>';
+  }).join('');
+}
 /* v70：分页墙渲染 —— 超过阈值时自动分页，用户可选每页数目 */
 function renderPagedWall(rows, label){
   var f = ui.collection;
@@ -7937,10 +8368,12 @@ function renderIpMode(){
     '<div class="ph">＋</div><div class="bd"><strong>新增 IP</strong><span>先建 IP，再往里挂东西</span></div></div>'+
   '</div>';
   var ipNames={}; s.rows.forEach(function(r){ var n=r['IP名称']; if(n) ipNames[n]=1; });
-  /* v58：书籍/杂志归文渊斋，不进 IP 库的未绑定列表 */
+  /* v58：书籍/杂志归文渊斋，不进 IP 库的这个列表 */
   var loose=c.rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0 && (!r['IP'] || !ipNames[r['IP']]); });
+  /* v153：还没挂到 IP 上的，也按「大类 · 小类」归置（原来叫「未绑定 IP」——
+     跟「未归类」一个毛病，冷冰冰的；这些东西本来就有自己的类别）。 */
   if (loose.length){
-    h += '<div class="grp" style="margin-top:24px"><h4>未绑定 IP <i>'+ownedCount(loose)+' 件</i></h4>'+collectionWall(loose)+'</div>';
+    h += catSubBlocks(loose, { mt:true, owned:true });
   }
   return h+'</section>';
 }
@@ -7997,7 +8430,7 @@ function renderIpDetail(){
     return h+'</section>';
   }
 
-  /* v70：IP 详情按系列分组展示 —— 系列在前，未归类 items 在后 */
+  /* v70：IP 详情按系列分组展示 —— 系列在前，没有系列归属的 items 在后（v153 起按「大类 · 小类」分组） */
   var seriesMap={}, order=[];
   var unclassified=[];
   items.forEach(function(r){
@@ -8025,13 +8458,10 @@ function renderIpDetail(){
     h += '</div></div>';
   }
 
-  /* 未归类的 items：按 大类 分组 */
+  /* v153：没有系列归属的 items —— 按「大类 · 小类」分组
+     （以前写的是「手办（未归类）」，既没人情味也丢掉了「景品」这一层）。 */
   if (unclassified.length){
-    var groups={}, gorder=[];
-    unclassified.forEach(function(r){ var k=r['大类']||'其他'; if(!groups[k]){ groups[k]=[]; gorder.push(k); } groups[k].push(r); });
-    h += gorder.map(function(k){
-      return '<div class="grp"><h4>'+esc(k)+'（未归类） <em>'+groups[k].length+'</em></h4>'+collectionWall(groups[k])+'</div>';
-    }).join('');
+    h += catSubBlocks(unclassified);
   }
 
   return h+'</section>';
@@ -10633,6 +11063,51 @@ document.addEventListener('click', function(ev){
   }
   if (act==='view'){ ui[ui.view].view=node.getAttribute('data-v'); render(); return; }
   if (act==='cmode'){ ui.collection.mode=node.getAttribute('data-v'); ui.collection.ipId=null; ui.collection.seriesId=null; render(); return; }
+  /* v152：预定物管理（总览页）—— 日历翻月 / 打开物品 / 「到货了」 */
+  if (act==='pocal'){
+    var _pd = String(node.getAttribute('data-d')||'1');
+    if (_pd === '0'){
+      ui.poCal = '';                       /* 回到本月（空 = 走今天） */
+    } else {
+      var _cur = String(ui.poCal||'');
+      if (!/^\d{4}-\d{2}$/.test(_cur)){
+        var _t0 = new Date(); _cur = _t0.getFullYear() + '-' + fzPad2(_t0.getMonth()+1);
+      }
+      var _yy = parseInt(_cur.slice(0,4),10), _mm = parseInt(_cur.slice(5,7),10) + (parseInt(_pd,10)||0);
+      while (_mm < 1){ _mm += 12; _yy--; }
+      while (_mm > 12){ _mm -= 12; _yy++; }
+      ui.poCal = _yy + '-' + fzPad2(_mm);
+    }
+    render(); return;
+  }
+  if (act==='popen'){
+    var _pid = node.getAttribute('data-id');
+    if (_pid) openItemDetail('collection', _pid);
+    return;
+  }
+  if (act==='porecv'){
+    var _rid = node.getAttribute('data-id');
+    if (_rid){
+      var _rr = (store.collection.rows||[]).filter(function(r){ return String(r._id)===String(_rid); })[0] || {};
+      /* 「到货了」= 把状态从「已预订」换成「在库」。直接走现成的状态切换：
+         它会顺带清掉冲突状态（想收/云游）、并把还没记的持有补成 1 —— 与别处口径完全一致。 */
+      toggleRowStatus('collection', _rid, '在库');
+      toast('「'+(_rr['名称']||'这件')+'」已记到在库');
+      render();
+    }
+    return;
+  }
+  /* v154：预定物卡片上的「就地编辑日期」——
+     点日期标签展开三个下拉（不弹窗，用户要的），点「✓」收起；再点同一个标签也收起。 */
+  if (act==='poedit'){
+    var _eid = node.getAttribute('data-id'), _ef = node.getAttribute('data-f');
+    var _ecur = ui.poEdit || {};
+    ui.poEdit = (String(_ecur.id||'')===String(_eid) && _ecur.f===_ef) ? null : { id:_eid, f:_ef };
+    render(); return;
+  }
+  if (act==='poeditdone'){ ui.poEdit = null; render(); return; }
+  /* 就地编辑区容器：点下拉 / 点空白时把事件吃掉 —— 否则会冒到卡片的 `popen`（点开详情）上 */
+  if (act==='poeditnoop'){ return; }
   /* v149：IP 卡的折叠开关 —— 只切界面（localStorage），不动数据。
      ⚠️ 按钮在 `[data-act="ipopen"]` 的卡片**内部**，靠 `closest` 取到最近的
         `[data-act]`（也就是这个按钮）才不会误开 IP 详情页。 */
@@ -10738,7 +11213,7 @@ document.addEventListener('click', function(ev){
     var sid=node.getAttribute('data-id');
     var sn=(store.series.rows.filter(function(x){ return String(x._id)===String(sid); })[0]||{})['系列名称']||'';
     var sused=seriesItems(sn).length;
-    askConfirm('删除系列「'+sn+'」？'+(sused?'它下面有 '+sused+' 件东西，那些东西会变成「未归入系列」。':'')+' 删掉就找不回来了。', function(){
+    askConfirm('删除系列「'+sn+'」？'+(sused?'它下面有 '+sused+' 件东西，那些东西会回到按「大类 · 小类」归置（东西不会丢）。':'')+' 删掉就找不回来了。', function(){
       deleteRow('series', sid, sn);
       if (ui.collection.seriesId===sid){ ui.collection.seriesId=null; }
     });
@@ -10969,7 +11444,7 @@ document.addEventListener('click', function(ev){
     /* v148：删父级 IP 时要说清子 IP 的下场（它们会变成顶级 IP，不会被一起删掉） */
     var kids=(ipTree().children[ipn]||[]);
     var kidMsg = kids.length ? ('它旗下还有 '+kids.length+' 个子 IP（'+kids.join('、')+'），删掉后那些子 IP 会变成**顶级 IP**（东西不会丢）。') : '';
-    askConfirm('删除 IP「'+ipn+'」？'+(used?'它下面还挂着 '+used+' 件东西，那些东西会变成「未绑定 IP」。':'')+kidMsg+' 删掉就找不回来了。', function(){
+    askConfirm('删除 IP「'+ipn+'」？'+(used?'它下面还挂着 '+used+' 件东西，那些东西会回到按「大类 · 小类」归置（东西不会丢）。':'')+kidMsg+' 删掉就找不回来了。', function(){
       deleteRow('ip', id, ipn);
       if (ui.collection.ipId===id){ ui.collection.ipId=null; }
     });
@@ -11615,6 +12090,48 @@ function wireFormControls(host, saveDraft){
       fillDays(); commit();
     });
   });
+  /* v152：模糊日期三段（年 / 月或季度 / 日）→ 合成一个字符串写进 hidden[data-f]，
+     与上面「购入日期」同一套路。合成规则见 fuzzyDateInfo 头注释。
+     ⚠️ 用 data-fzy/fzg/fzd 而不是 fy/fm/fd —— 后者已被「年月日」占用，
+        同名会被上面那段的绑定抢走（那边找不到 [data-fm] 就直接 return，字段会静默失效）。 */
+  host.querySelectorAll('[data-fzy]').forEach(function(zsel){
+    var k = zsel.getAttribute('data-fzy');
+    var gsel = host.querySelector('[data-fzg="'+k+'"]');
+    var dsel = host.querySelector('[data-fzd="'+k+'"]');
+    var real = host.querySelector('[data-f="'+k+'"]');
+    if (!gsel || !dsel || !real) return;
+    function zy(){ var t=String(zsel.value||'').trim(); return /^\d{4}$/.test(t) ? parseInt(t,10) : 0; }
+    function zg(){
+      var t=String(gsel.value||'').trim();
+      if (!t) return null;
+      if (t.charAt(0)==='M') return { kind:'month', m:parseInt(t.slice(1),10) };
+      if (t.charAt(0)==='Q') return { kind:'quarter', q:parseInt(t.slice(1),10) };
+      return null;
+    }
+    function zd(){ var n=parseInt(String(dsel.value||''),10); return (n>=1&&n<=31)?n:0; }
+    /* 选了季度（或什么都没选）时「日」没有意义 → 灰掉并清空，
+       免得用户以为选了个日子会生效，结果存进去还是季度。 */
+    function syncDay(){
+      var g = zg(), off = (!g || g.kind !== 'month');
+      dsel.disabled = off;
+      if (off && dsel.value) dsel.value = '';
+    }
+    function commit(){
+      var y = zy(), g = zg(), d = zd(), val = '';
+      if (y){
+        if (g && g.kind === 'quarter')      val = y + '-Q' + g.q;
+        else if (g && g.kind === 'month')   val = y + '-' + fzPad2(g.m) + (d ? '-' + fzPad2(d) : '');
+        else                                val = String(y);
+      }
+      real.value = val;
+      editing.vals[k] = val;
+      if (saveDraft) saveDraft();
+    }
+    syncDay();
+    zsel.addEventListener('change', function(){ syncDay(); commit(); });
+    gsel.addEventListener('change', function(){ syncDay(); commit(); });
+    dsel.addEventListener('change', commit);
+  });
   /* v75fix：存放位置三段式（房间 / 柜墙 / 层）——三段下拉合成一个「 · 」分隔的值，
      写进 hidden[data-f]，与「购入日期」的年/月/日同一套路 */
   host.querySelectorAll('[data-lr]').forEach(function(rsel){
@@ -12089,35 +12606,40 @@ function pkTypeIconsHTML(r){
 function toggleRowStatus(key, id, status){
   var row = ((store[key] && store[key].rows) || []).filter(function(r){ return String(r._id)===String(id); })[0];
   if (!row || !status) return false;
-  var arr = stArr(row);
+  /* v155：起点先归一 —— 保证一定落在「在库」或「云游(+附加)」上，不会从空状态开始算。
+     （旧数据里可能有空状态：误取消在库留下的，见 normalizeOwnStatus 的注释。） */
+  var arr = normalizeOwnStatus(stArr(row));
   var on;
-  /* v128/v130：脏数据兜底 —— 已经是在库、却还挂着想收/已预订/云游（旧版本没清）：
-     点一下只清掉这些多余的、保留在库，而不是把在库一起取消掉。
-     否则会出现「点『在库』反而把它取消了、多余的还留着」这种反直觉结果。
-     判断名单与 clearOwnedConflicts 共用 OWNED_CONFLICT_STATUS。
-     ⚠️ v151：**「持有还没记」也要算进「需要修一下」**。
-     旧数据里状态是在库、持有却是空的（v150 之前的版本不补持有），
-     用户点这一下本来就想把它补成 1 —— 按老逻辑却会走「再点一次 = 取消在库」，
-     于是「点了在库，持有数还是没变 1」，正是用户报的那条。 */
-  if (status==='在库' && arr.indexOf('在库')>=0){
-    var extras = OWNED_CONFLICT_STATUS.filter(function(s){ return arr.indexOf(s)>=0; });
-    var needHold = holdPatchForStatus(['在库'], row['持有'])['持有'] != null;
-    if (extras.length || needHold){
-      clearOwnedConflicts(arr);      /* 保留在库，清掉多余的 */
-      on = true;
+  if (status === '在库'){
+    if (arr.indexOf('在库') >= 0){
+      /* 已经是在库了 —— 这一下到底是「取消」还是「补齐」？
+         ⚠️ v151：**持有还没记 / 还挂着多余状态** 都算「需要修一下」，
+            这一下是补齐（清多余 + 补持有），不是取消。
+            旧数据里状态是在库、持有却空着，用户点这一下本来就想补成 1 ——
+            按老逻辑会走成「再点一次 = 取消在库」，于是「点了在库，持有还是没变 1」。 */
+      var needHold = holdPatchForStatus(['在库'], row['持有'])['持有'] != null;
+      var extras = OWNED_CONFLICT_STATUS.filter(function(s){ return arr.indexOf(s) >= 0; });
+      if (needHold || extras.length){
+        arr = normalizeOwnStatus(arr);
+        on = true;
+      } else {
+        /* v155：干净的在库（持有已 ≥1）→ 再点一次 = 取消在库 →
+           **落回「云游」而不是变空**。用户报的就是这个：取消后状态空了、东西"丢了"。 */
+        arr = normalizeOwnStatus(['云游']);
+        on = false;
+      }
     } else {
-      arr.splice(arr.indexOf('在库'),1); on = false;   /* 干净的在库（持有已 ≥1）→ 再点一次取消 */
+      arr = ['在库'];                    /* 加在库 → 云游与附加态一律清掉 */
+      on = true;
     }
   } else {
+    /* 附加态（想收 / 已预订）：开关自己。
+       若当前是「在库」，说明东西退回去了 → 基础态落回「云游」，附加态保留。 */
     var ix = arr.indexOf(status);
-    if (ix >= 0){ arr.splice(ix,1); on = false; }
-    else { arr.push(status); on = true; }
-    /* v147：在库 与「云游 / 想收 / 已预订」互斥，**双向**都清 ——
-       只在「加上」时清（取消某个状态时不去动别的，免得用户只是想取消「想收」却把「在库」也弄没了）。 */
-    if (on){
-      if (status==='在库') clearOwnedConflicts(arr);                      /* 加在库 → 清掉那三个 */
-      else if (arr.indexOf('在库')>=0) arr.splice(arr.indexOf('在库'),1);  /* 加那三个 → 去掉在库 */
-    }
+    if (ix >= 0){ arr = arr.filter(function(s){ return s !== status; }); on = false; }
+    else { arr = arr.concat([status]); on = true; }
+    if (on && arr.indexOf('在库') >= 0) arr = arr.filter(function(s){ return s !== '在库'; });
+    arr = normalizeOwnStatus(arr);
   }
   /* v150：点「在库」时顺手把持有补成 1 —— 卡片上的快速按钮就走这条路。
      不是「在库」、或本来就有 ≥1，补丁为空（不落盘、不白刷 _upd）。 */
@@ -12328,8 +12850,9 @@ function renderSeriesMode(){
   var names={}; s.rows.forEach(function(r){ var n=r['系列名称']; if(n) names[n]=1; });
   /* v58：书籍/杂志归文渊斋，不进系列的未归入列表 */
   var loose=c.rows.filter(function(r){ return LEGACY_BOOK_CATS.indexOf(r['大类'])<0 && (!r['系列'] || !names[r['系列']]); });
+  /* v153：没有系列归属的 —— 按「大类 · 小类」分组（以前叫「未归入系列」） */
   if (loose.length){
-    h += '<div class="grp" style="margin-top:24px"><h4>未归入系列 <i>'+ownedCount(loose)+' 件</i></h4>'+collectionWall(loose)+'</div>';
+    h += catSubBlocks(loose, { mt:true, owned:true });
   }
   return h+'</section>';
 }
@@ -12959,6 +13482,13 @@ function openForm(key, id, opts){
     });
   }
 
+  /* v155：打开编辑表单时先把「状态」归一到合法形态 ——
+     空状态的老数据（以前误取消「在库」留下的）会**显示成「云游」**，
+     而不是四个框全空、让人以为这条数据坏了。
+     ⚠️ 这里只改**表单里的值**，真正落盘要等点保存（不点保存不会动数据）。 */
+  if (key==='collection' && id){
+    editing.vals['状态'] = normalizeOwnStatus(editing.vals['状态']);
+  }
   /* 持有默认：新藏品默认状态是在库，没填过持有则默认 1（手里至少这一件）；
      v96d：云游（未入手）状态的新藏品默认持有 0，而不是留空。 */
   if (key==='collection' && !id && (editing.vals['持有']==null||editing.vals['持有']==='')){
@@ -13062,7 +13592,7 @@ function openForm(key, id, opts){
         var _sa = Array.isArray(editing.vals['状态'])
           ? editing.vals['状态'].slice()
           : String(editing.vals['状态']||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
-        editing.vals['状态'] = clearOwnedConflicts(_sa);
+        editing.vals['状态'] = normalizeOwnStatus(_sa);
         /* v150：在库 ⇒ 持有至少 1。上面的 openForm 已经补过一次，这里再兜一道 ——
            表单里可能先勾「云游」（持有置空/0）再改勾「在库」，
            或者编辑的是一条持有为空的老数据，保存时必须落成 1。 */
@@ -13178,8 +13708,12 @@ function openForm(key, id, opts){
     function rebuildStatus(){
       var arr=[];
       cbs.forEach(function(cb){ if (cb.checked) arr.push(cb.getAttribute('data-v')); });
-      clearOwnedConflicts(arr);          /* 兜底：数组里绝不留下「在库 + 其他」的组合 */
-      editing.vals['状态']=arr;
+      arr = normalizeOwnStatus(arr);     /* v155：保证「在库 / 云游」必有一个亮着（唯一形态入口） */
+      editing.vals['状态'] = arr;
+      /* v155：把归一结果**反写回勾选框** —— 否则界面与数据不一致：
+         用户取消「在库」之后，数据里已经是「云游」，但框还全是空的，看着就像"没状态"了。
+         ⚠️ 程序改 `.checked` 不会触发 change，所以这里不会递归。 */
+      cbs.forEach(function(cb){ cb.checked = arr.indexOf(cb.getAttribute('data-v')) >= 0; });
       if (saveDraft) saveDraft();
     }
     cbs.forEach(function(cb){
@@ -13196,6 +13730,11 @@ function openForm(key, id, opts){
             if (ownCb) ownCb.checked = false;                              /* 在库与它们互斥 */
             if (val === '云游' && holdInp){ holdInp.value = ''; editing.vals['持有'] = null; }
           }
+        } else if (val === '云游'){
+          /* v155：云游是**在库的反状态**。取消云游 = 东西到手了 → 落回「在库」。
+             不允许两个都不亮 —— 那样这条东西会同时从「在库 / 云游 / 想收」三个筛选里消失。
+             （反向是对称的：取消「在库」会由下面 rebuildStatus 自动点亮「云游」。） */
+          if (ownCb) ownCb.checked = true;
         }
         rebuildStatus();
       });
@@ -13299,6 +13838,28 @@ function fieldHTML(f, v){
       '<select data-fm="'+f.k+'" title="月份（可不选）">'+mopts+'</select>'+
       '<select data-fd="'+f.k+'" title="日期（可不选）">'+dopts+'</select>'+
       '<input type="hidden" data-f="'+f.k+'" value="'+esc(dv)+'">'+
+      '</div>';
+  } else if (f.t==='fuzzydate'){
+    /* v152：模糊日期（预定出货日期）。三段下拉：年 ／ （月 **或** 季度，共用一个下拉）／ 日。
+       「月」和「季度」故意合成同一个下拉 —— 想指季度就直接选「四季度」，
+       不用先切一个「粒度」开关再选值，少一步、也更不容易选错。
+       合成规则：年+月+日→`2026-11-15`；年+月→`2026-11`；年+季度→`2026-Q4`；只选年→`2026`。
+       解析只认 fuzzyDateInfo 一个入口（排序 / 日历落格 / 倒计时全从它派生）。 */
+    var fv = String(v||'');
+    var fi = fuzzyDateInfo(fv) || {};
+    var fcurY = new Date().getFullYear(), fyy, fmn, fqn, fdn;
+    var fyo = '<option value="">（年）</option>';
+    for (fyy = fcurY + 3; fyy >= 2000; fyy--) fyo += '<option value="'+fyy+'"'+(fi.y===fyy?' selected':'')+'>'+fyy+'</option>';
+    var fgo = '<option value="">（月 / 季度）</option>';
+    for (fmn = 1; fmn <= 12; fmn++) fgo += '<option value="M'+fmn+'"'+((fi.kind==='month'||fi.kind==='day') && fi.m===fmn?' selected':'')+'>'+fmn+' 月</option>';
+    for (fqn = 1; fqn <= 4; fqn++) fgo += '<option value="Q'+fqn+'"'+(fi.kind==='quarter' && fi.q===fqn?' selected':'')+'>'+FUZZY_Q_NAME[fqn]+'</option>';
+    var fdo = '<option value="">（日）</option>';
+    for (fdn = 1; fdn <= 31; fdn++) fdo += '<option value="'+fdn+'"'+(fi.kind==='day' && fi.d===fdn?' selected':'')+'>'+fdn+' 日</option>';
+    body = '<div class="year-date-wrap fuzzy-date-wrap">'+
+      '<select data-fzy="'+f.k+'" title="年份">'+fyo+'</select>'+
+      '<select data-fzg="'+f.k+'" title="月份或季度（可不选）">'+fgo+'</select>'+
+      '<select data-fzd="'+f.k+'" title="日期（只有选了具体月份才有意义）">'+fdo+'</select>'+
+      '<input type="hidden" data-f="'+f.k+'" value="'+esc(fv)+'">'+
       '</div>';
   } else if (f.t==='loc3'){
     /* v75fix：存放位置 = 一个字段、内部三段（房间 / 柜墙 / 层），
@@ -13452,6 +14013,20 @@ function fieldHTML(f, v){
       '<span class="imgnote">'+esc(isAmap?'输入店名 / 城市搜高德自动填坐标，或点地图手动选':'输入地点名搜高德自动填坐标，或在地球上手动选')+'</span>';
   } else if (f.t==='check'){
     body='<label class="checkrow"><input data-f="'+f.k+'" type="checkbox"'+(v?' checked':'')+'>'+esc(f.k)+'</label>';
+  } else if (f.t==='pick'){
+    /* v154：**可选可输** —— 原生 `<input list>` + `<datalist>`：
+       点一下就能从常用渠道里选，想填清单外的直接打字（datalist 会顺手做前缀过滤）。
+       候选 = 预设 ∪ 数据里用过的（见 channelOptionsAll）——老记录里的写法也选得到。
+       ⚠️ 用 `list` 属性关联 id，两边的字符串要一模一样；字段名是中文，HTML5 的 id 允许。 */
+    var _pkcur = String(v == null ? '' : v);
+    var _pkopts = (f.o && f.o.length) ? channelOptionsAll() : [];
+    if (_pkcur && _pkopts.indexOf(_pkcur) < 0) _pkopts = [_pkcur].concat(_pkopts);
+    var _dlid = 'dl_' + f.k;
+    body = '<input data-f="'+f.k+'" type="text" list="'+esc(_dlid)+'" value="'+esc(_pkcur)+'"'+
+        ' placeholder="'+esc(f.ph || '选一个，或直接打字')+'" autocomplete="off">'+
+      (_pkopts.length ? '<datalist id="'+esc(_dlid)+'">'+
+        _pkopts.map(function(x){ return '<option value="'+esc(x)+'"></option>'; }).join('')+
+      '</datalist>' : '');
   } else if (f.t==='brand'){
     /* v133：品牌 —— 下拉候选 = 登记过的品牌 ∪ 数据里用过的品牌（brandOptionsAll）；
        老记录里的品牌若还没登记过，也临时插进列表显示，不会被悄悄清空。
@@ -14455,7 +15030,14 @@ function doTitleSearch(tools){
 /* 「照片识别」的文件选择：委托到 document，表单每次重绘都不用重新绑定 */
 document.addEventListener('change', function(e){
   var t=e.target;
-  if (!t || !t.classList || !t.classList.contains('isbn-photo-input')) return;
+  if (!t || !t.classList) return;
+  /* v154：预定物卡片上的就地编辑 —— 三个下拉合成一个日期写回行里 */
+  if (t.hasAttribute && t.hasAttribute('data-poseg')){
+    var box = t.closest ? t.closest('.po-inlineedit') : null;
+    if (box) poInlineCommit(box);
+    return;
+  }
+  if (!t.classList.contains('isbn-photo-input')) return;
   var tools = t.closest('[data-isbn-tools]');
   var f = t.files && t.files[0];
   if (tools && f) decodeBookPhotoInline(tools, f);
@@ -14840,7 +15422,7 @@ function applyBatchEdit(){
   if (checked('状态')){
     var st=[]; sheet.querySelectorAll('input[data-bf-status]').forEach(function(c){ if(c.checked) st.push(c.getAttribute('data-bf-status')); });
     if (st.length){
-      st = clearOwnedConflicts(st.slice());   /* 在库 与「想收 / 云游」互斥（v128） */
+      st = normalizeOwnStatus(st);   /* v155：批量也一样，保证「在库/云游」必有一个亮着 */
       patch['状态']=st;
     }
   }
