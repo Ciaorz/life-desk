@@ -143,6 +143,43 @@ async function main() {
   ok(await ev(`document.activeElement && document.activeElement.getAttribute('data-f')==='备注名'`),
     '① 并且光标已经落在备注名输入框里');
 
+  /* v161：字段顺序 + 动态宽度 —— 名称 1/4 + 备注名 1/4（紧挨着）、系列 1/4 + 比例 1/4。
+     ⚠️ 取值要兼容两类：普通字段用 data-f；dyn 字段（IP/系列/小类）用 .dynwrap[data-k]。 */
+  const LAY = `(function(){
+    var cells = Array.prototype.slice.call(document.querySelectorAll('.fgrid .f'));
+    var o = { order: [], nameCls:'', altCls:'', seriesCls:'', scaleCls:'' };
+    cells.forEach(function(c){
+      var i = c.querySelector('[data-f]'), k = '';
+      if (i) k = i.getAttribute('data-f');
+      else { var w = c.querySelector('.dynwrap[data-k]'); if (w) k = w.getAttribute('data-k'); }
+      if (!k) return;
+      if (o.order.length < 8) o.order.push(k);
+      if (k==='名称') o.nameCls = c.className;
+      if (k==='备注名') o.altCls = c.className;
+      if (k==='系列') o.seriesCls = c.className;
+      if (k==='比例') o.scaleCls = c.className;
+    });
+    return JSON.stringify(o); })()`;
+  const L = JSON.parse(await ev(LAY) || '{}');
+  console.log('  字段顺序：' + L.order.join(' / '));
+  ok(L.order.slice(0,4).join(' ') === '名称 备注名 大类 小类',
+    '①★ 顺序：名称 → 备注名 → 大类 → 小类');
+  ok(L.order.indexOf('比例') === L.order.indexOf('系列') + 1, '①★ 「比例」紧跟在「系列」后面');
+  ok(/\bq\b/.test(L.seriesCls), '① 手办时「系列」占 1/4（' + L.seriesCls + '）');
+  ok(!/is-hidden/.test(L.altCls), '① 点了「＋ 备注」后备注名格子露出来了');
+  ok(/\bq\b/.test(L.nameCls), '①★ 备注名出现 → 「名称」缩成 1/4（' + L.nameCls + '）');
+
+  /* 换成非手办：比例藏起来、「系列」撑回 1/2 */
+  await ev(`(function(){var b=document.querySelector('[data-f="大类"]');
+    var opt=null; Array.prototype.slice.call(b.options).forEach(function(o){ if(o.value && o.value!=='手办') opt=o.value; });
+    b.value=opt; b.dispatchEvent(new Event('change',{bubbles:true})); return 1;})()`);
+  await sleep(250);
+  const L2 = JSON.parse(await ev(LAY) || '{}');
+  ok(!/\bq\b/.test(L2.seriesCls), '①★ 不是手办 → 「系列」撑回 1/2（' + L2.seriesCls + '）');
+  await ev(`(function(){var b=document.querySelector('[data-f="大类"]');
+    b.value='手办'; b.dispatchEvent(new Event('change',{bubbles:true})); return 1;})()`);
+  await sleep(200);
+
   /* 填名称 + 备注名，保存 */
   await ev(`(function(){
     var n=document.querySelector('[data-f="名称"]');

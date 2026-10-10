@@ -4960,10 +4960,17 @@ var MODS = {
     fields:[
       /* v75fix：4 列栅格 —— 名称 1/2 + 大类 1/4 + 小类 1/4 同一行 */
       {k:'名称',t:'text',req:1,ph:'这件东西叫什么',altAdd:1},
+      /* v159：备注名 —— 给名字太长的东西起个顺口的别名（名称框里的「＋ 备注」点了才出现）。
+         v161：位置挪到**名称正后面**（用户要求「备注名出现在名称后面，大类前面」）；
+               它一显示，名称就从 1/2 缩成 1/4，两个各占 1/4 —— 见 fieldSpanOf。 */
+      {k:'备注名',t:'text',ph:'别名 / 简称，例如「小凳子」',alt:1},
       {k:'大类',t:'select',o:CATS_FORM,def:'手办',quarter:true},
       {k:'小类',t:'dyn',src:'sub',quarter:true},
       {k:'IP',t:'dyn',src:'ip'},
-      {k:'系列',t:'dyn',src:'series'},
+      {k:'系列',t:'dyn',src:'series',quarter:true},
+      /* v161：手办「比例」紧跟在**系列后面**（用户要求「比例放在系列后面，系列、比例各占 25%」）。
+         大类不是手办时整格隐藏，同时「系列」自己撑回 1/2 —— 见 fieldSpanOf。 */
+      {k:'比例',t:'pick',o:SCALE_PRESETS,ph:'选一个，或直接打字',onlyCat:'手办',quarter:true},
       /* v111：子系列 —— 一个大系列下还能分小套（如 Road trip 系列下有 徽章 / 冰箱贴 / 行李牌） */
       {k:'子系列',t:'dyn',src:'child',quarter:true},
       {k:'编号',t:'text',ph:'如 025，系列子项用',quarter:true},
@@ -4993,18 +5000,9 @@ var MODS = {
          不弹窗）。字段定义去掉不影响数据：applyFieldVal 是以旧记录为底合并的，
          表单里没有的字段一动不动，值原样留着、照样跟行一起同步。 */
       {k:'封面',t:'img',ph:'图片链接，或点右侧上传',full:1},
-      {k:'短评',t:'textarea',ph:'一句话就够',full:1},
-      /* v159：备注名 —— 给名字太长的东西起个顺口的别名。
-         用户要的交互：**名称输入框里放一个「+ 备注」**，点了才冒出这个输入框（独立一行）。
-         所以它默认是收起的（`alt:1`），渲染时由 fieldHTML 决定收不放；
-         点 + 只是给它去掉一个 CSS 类，**不需要重绘表单**（表单字段列表是打开时就定死的，
-         重绘会让用户填了一半的东西跳走 —— 这个坑上次做「条件显示」时踩过）。 */
-      {k:'备注名',t:'text',ph:'别名 / 简称，例如「小凳子」',full:1,alt:1},
-      /* v160：手办「比例」—— **只有大类是「手办」时才出现**（`onlyCat`）。
-         用 pick（可选可输）：常见比例下拉里点，冷门的直接打字。
-         ⚠️ 显隐靠切 CSS 类 `.is-hidden`，切「大类」时由事件直接改，**不重绘表单**
-            （表单字段列表在打开时就定死了，重绘会把用户填了一半的东西冲掉）。 */
-      {k:'比例',t:'pick',o:SCALE_PRESETS,ph:'选一个，或直接打字',onlyCat:'手办',full:1}
+      {k:'短评',t:'textarea',ph:'一句话就够',full:1}
+      /* v161：「备注名」和「比例」都挪到前面去了（备注名紧跟名称、比例紧跟系列）——
+         用户要求它们各自跟"伙伴"并排成 25%+25%，放末尾就排不到一起了。 */
     ]},
   ip: { key:'ip', db:DB.ip, name:'IP 库', icon:'I', eyebrow:'IP',
     desc:'先有 IP，再有它下面那一堆东西。', addLabel:'新增 IP',
@@ -5381,10 +5379,34 @@ function curFieldLayout(){
 function fieldIsHidden(f, lay){ var c = lay && lay[f.k]; return !!(c && c.hide); }
 /* 字段占几格：1=25% 2=50% 3=75% 4=整行 */
 function fieldDefaultSpan(f){ return f.full ? 4 : ((f.quarter || f.w === 1) ? 1 : 2); }
+/* v161：两个「跟着旁边的伙伴变宽」的判断 ——
+   · 备注名一出现，「名称」就从 1/2 缩成 1/4（两个各占 1/4，用户要求）
+   · 手办时「比例」占 1/4、「系列」缩成 1/4；不是手办时比例整格隐藏、系列撑回 1/2 */
+function altNameOn(){
+  if (ui.altOpen && ui.altOpen['备注名']) return true;
+  var v = editing && editing.vals && editing.vals['备注名'];
+  return String(v == null ? '' : v).trim() !== '';
+}
+function catFieldOn(cat){
+  var cur = String((editing && editing.vals && editing.vals['大类']) || '');
+  return cur === cat;
+}
 function fieldSpanOf(f, lay){
   var c = lay && lay[f.k];
   if (c && c.w) return c.w;
+  if (f.k === '名称') return altNameOn() ? 1 : 2;
+  if (f.k === '系列') return catFieldOn('手办') ? 1 : 2;
   return fieldDefaultSpan(f);
+}
+/* v161：直接改一个格子占几栏（4 栏制：1=25% / 2=50% / 3=75% / 4=整行）。
+   为什么不在点「＋ 备注」后重绘表单：字段列表在 openForm 时就定死了，重绘会把
+   用户填到一半的内容冲掉 —— 这是踩过的坑，所以这里只改 class。 */
+function setCellSpan(cell, span){
+  if (!cell || !cell.classList) return;
+  cell.classList.remove('full','w3','q');
+  if (span === 4) cell.classList.add('full');
+  else if (span === 3) cell.classList.add('w3');
+  else if (span === 1) cell.classList.add('q');
 }
 function fieldTypeLabel(t){
   return ({ text:'文本', number:'数字', currency:'金额', date:'日期', isbn:'ISBN',
@@ -6180,6 +6202,9 @@ var ui = {
   /* v154：预定物卡片上「正在就地编辑哪个日期」—— {id, f} 或 null。
      f 是字段名（'预定出货日期' / '预定日期'）。同样是纯界面状态。 */
   poEdit:null,
+  /* v161：表单里「＋ 备注」点开过哪些字段（{字段名:true}）。
+     纯界面状态，只在内存里 —— 它决定「名称」该占 1/2 还是 1/4。 */
+  altOpen:{},
   collection:{ mode:'cat', cat:'', sub:'', q:'', view:'wall', ipId:null, seriesId:null, inbox:false, classic:false, editing:false, numOrder:'asc', yearView:false, seriesWall:'', seriesStatus:'全部', seriesSort:'no', pageSize:0, page:1,
     /* v102：封面墙的分组方式 —— 'series'=按系列出卡（默认，点进系列详情）；
        'item'=直接把符合条件的物品平铺成卡片（找具体东西时用，如搜「渔夫帽」、看全部隐藏款）。 */
@@ -11200,15 +11225,20 @@ document.addEventListener('click', function(ev){
   if (act==='altadd'){
     var _ak = node.getAttribute('data-k') || '备注名';
     var _grid = node.closest ? node.closest('.fgrid') : null;
-    var _fld = null;
+    var _fld = null, _nameCell = null;
     if (_grid){
       var _cells = _grid.querySelectorAll('.f');
       for (var _ci = 0; _ci < _cells.length; _ci++){
-        if (_cells[_ci].querySelector('[data-f="'+_ak+'"]')){ _fld = _cells[_ci]; break; }
+        if (_cells[_ci].querySelector('[data-f="'+_ak+'"]')) _fld = _cells[_ci];
+        if (_cells[_ci].querySelector('[data-f="名称"]')) _nameCell = _cells[_ci];
       }
     }
     if (_fld){
       _fld.classList.remove('is-hidden');
+      /* v161：备注名一露脸，「名称」就缩成 1/4 —— 两个并排各占 1/4（用户要求）。
+         同时记进 ui.altOpen，这样万一表单重绘（切草稿之类）宽度也不会跳回去。 */
+      if (ui.altOpen) ui.altOpen[_ak] = true;
+      setCellSpan(_nameCell, 1);
       var _inp = _fld.querySelector('[data-f="'+_ak+'"]');
       if (_inp && _inp.focus) _inp.focus();
     }
@@ -12274,6 +12304,12 @@ function wireFormControls(host, saveDraft){
         if (cell.getAttribute('data-onlycat') === cur) cell.classList.remove('is-hidden');
         else cell.classList.add('is-hidden');
       });
+      /* v161：手办时「系列」缩成 1/4 给「比例」腾位置；不是手办时它自己撑回 1/2 */
+      var seriesCell = null;
+      host.querySelectorAll('.f').forEach(function(cell){
+        if (cell.querySelector('[data-f="系列"]')) seriesCell = cell;
+      });
+      setCellSpan(seriesCell, cur === '手办' ? 1 : 2);
     }
     catSel.addEventListener('change', syncCatFields);
     syncCatFields();
@@ -13962,7 +13998,9 @@ function fieldHTML(f, v){
     /* v159：「备注名」这类附带字段默认收起（`alt:1`）—— 没值时藏起来，免得每个表单都多占一行。
        ⚠️ 只是加个 CSS 类（`.is-hidden`），**不重绘表单**：
           点「＋ 备注」时由事件把类去掉即可，用户填到一半的东西不会跳走。 */
-    +(f.alt ? ' altfield'+(String(v==null?'':v).trim()?'':' is-hidden') : '')
+    /* ⚠️ 用 altNameOn() 而不是只看字段值：点「＋ 备注」时只是切类名、不重绘表单，
+       如果这里只认值，会出现「名称已缩成 1/4、备注名那格却还藏着」的错位。 */
+    +(f.alt ? ' altfield'+(altNameOn() ? '' : ' is-hidden') : '')
     /* v160：`onlyCat` 字段（手办的「比例」）—— 大类不是它就不显示。
        ⚠️ 这里读的是**表单里当前的大类值**（editing.vals），只影响首帧；
           之后用户改大类由事件直接切类名，不重绘表单。 */
