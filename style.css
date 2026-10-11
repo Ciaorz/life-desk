@@ -728,9 +728,10 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .ipcard{padding:0;border-radius:18px;background:#fbf7f1;border:1px solid rgba(111,89,67,.08);
   overflow:hidden;cursor:pointer;transition:.2s;text-align:left}
 .ipcard:hover{transform:translateY(-2px);box-shadow:0 12px 26px rgba(63,48,36,.08)}
-.ipcard .ph{aspect-ratio:1/1;background-size:cover;background-position:center;display:flex;
+.ipcard .ph{aspect-ratio:1/1;background-color:#ece5da;background-size:cover;background-position:center;display:flex;
   align-items:center;justify-content:center}
-.ipcard .ph b{font:700 34px/1 "Songti SC",serif;color:rgba(255,255,255,.92)}
+/* v163：没有封面时（系列 / 弹都没配图）原来首字是**纯白字**，落在浅底上等于隐形，卡片就是一块空白 */
+.ipcard .ph b{font:700 34px/1 "Songti SC",serif;color:rgba(120,100,80,.5)}
 .ipcard .bd{padding:11px 13px 13px}
 .ipcard .bd strong{display:block;font-size:13.5px;font-weight:650;line-height:1.35}
 .ipcard .bd span{display:block;margin-top:5px;color:var(--muted);font-size:11px;line-height:1.6}
@@ -778,9 +779,11 @@ input.search:focus{border-color:var(--accent);background:#fff}
   font-size:10px;font-weight:700;letter-spacing:.05em}
 .plat.ok{background:var(--sage-soft);color:#3f5a48}
 .iphero{display:grid;grid-template-columns:96px 1fr;gap:16px;align-items:center;margin-bottom:18px}
-.iphero .ph{width:96px;height:96px;border-radius:18px;background-size:cover;background-position:center;
+.iphero .ph{width:96px;height:96px;border-radius:18px;background-color:#ece5da;
+  background-size:cover;background-position:center;
   display:flex;align-items:center;justify-content:center}
-.iphero .ph b{font:700 34px/1 "Songti SC",serif;color:rgba(255,255,255,.92)}
+/* v163：同 .ipcard —— 没封面时首字要看得见（原来是白字，浅底上等于隐形） */
+.iphero .ph b{font:700 34px/1 "Songti SC",serif;color:rgba(120,100,80,.5)}
 .iphero h3{font:700 20px/1.3 "Songti SC",serif}
 .iphero p{color:var(--muted);font-size:12.5px;margin-top:5px;line-height:1.7}
 .iphero .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
@@ -4143,3 +4146,113 @@ input.search{margin-bottom:12px}
 
 /* v160：手办「比例」字段（只有大类是手办才显示）—— 显隐由 .is-hidden 控制 */
 .catfield{transition:none}
+
+/* ============================================================
+   v162：附件（DLC / 特典 …）
+   ① 卡片**右下角**的类型标签（同类型只出一个），点了才在右边并出展示卡；
+   ② 展示卡紧跟在本体卡后面 —— 网格里就落在它右边。
+   ⚠️ 标签放的是「整个卡片的右下角」，不是封面里（封面右下角是星级 .score）。
+   ============================================================ */
+.poster{position:relative}
+.poster.hasdlc h4{padding-right:3.6em}      /* 给右下角的类型标签让位，别压住标题 */
+.dlctags{position:absolute;right:0;bottom:.05em;display:flex;gap:4px;
+  justify-content:flex-end;max-width:100%}
+/* v162.1：标签再小一号（用户要求「字体小一点」）—— .62em → .54em */
+.dlctag{display:inline-block;font-size:.54em;line-height:1;letter-spacing:.04em;
+  padding:.3em .5em;border-radius:.45em;background:rgba(41,37,31,.07);color:var(--muted);
+  white-space:nowrap;cursor:pointer;transition:background .15s}
+.dlctag:hover{background:rgba(41,37,31,.16);color:var(--ink)}
+.dlctag.on{background:var(--ink);color:#fff}
+/* 附件展示卡 —— 与普通卡同宽，内容紧凑 */
+.dlccard{position:relative;border:1px solid var(--line);border-radius:.857em;padding:.6em;
+  background:var(--card);display:flex;flex-direction:column;gap:.4em;align-self:start;
+  box-shadow:0 .357em .857em rgba(63,48,36,.08)}
+.dlccard .dlckind{position:absolute;left:.6em;top:.6em;z-index:1;font-size:.62em;font-weight:700;
+  letter-spacing:.06em;padding:.3em .5em;border-radius:.45em;background:rgba(41,37,31,.78);color:#fff}
+.dlccard .dlccov{aspect-ratio:3/4.2;border-radius:.6em;background-size:cover;
+  background-position:center;background-repeat:no-repeat;display:flex;align-items:center;
+  justify-content:center;overflow:hidden;background-color:#f1ebe3}
+.dlccard .dlccov.noimg b{font:700 2.2em/1 "Songti SC",serif;color:rgba(255,255,255,.9)}
+.dlccard strong{font-size:.86em;font-weight:650;line-height:1.35}
+.dlccard .dlcpr{font-size:.78em;color:var(--muted)}
+@media (max-width:560px){
+  .poster.hasdlc h4{padding-right:3.2em}
+  .dlctag{font-size:.56em}
+  .dlccard{padding:.5em;gap:.3em}
+}
+
+/* ============================================================
+   v162：附件编辑面板 —— 与本体表单**左右并排**（左=本体，右=附件）
+   手机上放不下两列 → 改成上下堆叠，各自 46vh 滚动。
+   ============================================================ */
+.backdrop.pair{gap:16px;align-items:flex-start;padding:4vh 16px}
+.backdrop.pair .sheet{width:min(430px,45vw);max-height:88vh}
+.attbtn{white-space:nowrap}
+.sheet-attach .attlist{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.attitem{display:flex;align-items:center;gap:8px;text-align:left;border:1px solid var(--line);
+  background:transparent;border-radius:12px;padding:8px 10px;cursor:pointer;font:inherit;
+  color:var(--ink);width:100%}
+.attitem:hover{background:rgba(111,89,67,.05)}
+.attitem.on{border-color:var(--accent);background:rgba(111,89,67,.07)}
+.attitem b{flex:0 0 auto;font-size:11px;font-weight:700;letter-spacing:.05em;
+  background:rgba(41,37,31,.78);color:#fff;padding:3px 6px;border-radius:6px}
+.attitem span{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attaddbtn{width:100%;margin-bottom:12px}
+.attempty{color:var(--muted);font-size:12.5px;line-height:1.6;margin:4px 0 12px}
+.attform{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:12px}
+.af{display:flex;align-items:center;gap:10px}
+.af > u{flex:0 0 44px;font-size:12px;color:var(--muted);text-decoration:none}
+.af input{flex:1;min-width:0}
+.afimg{flex-direction:column;align-items:stretch;gap:8px}
+.afimg > u{flex:none}
+.attcov{aspect-ratio:3/4.2;max-width:120px;border-radius:10px;background:#f1ebe3;
+  background-size:cover;background-position:center;background-repeat:no-repeat;display:flex;
+  align-items:center;justify-content:center;overflow:hidden}
+.attcov.noimg{border:1px dashed var(--line)}
+.attcov.noimg b{color:var(--muted);font-size:12px}
+.attdel{color:var(--red)}
+@media (max-width:560px){
+  .backdrop.pair{flex-direction:column;align-items:center;gap:12px;padding:2vh 10px}
+  .backdrop.pair .sheet{width:min(560px,100%);max-height:46vh}
+}
+
+/* ============================================================
+   v163：子系列也能带封面（re-ment 那种「系列只有名字、封面挂在每一弹上」）
+   ① 编辑行第二排：封面小预览 + 链接输入 + 上传；
+   ② 已有子系列药丸：点主体进入编辑（含封面缩略图）；
+   ③ 系列详情里「弹」的封面网格 .childwall。
+   ============================================================ */
+.childrow2{margin-top:8px}
+.childrow .childcov{flex:0 0 auto;width:46px;height:58px;border-radius:9px;
+  background-size:cover;background-position:center;background-color:#f1ebe3;
+  display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid var(--line)}
+.childrow .childcov.noimg b{font:700 13px/1 "Songti SC",serif;color:rgba(120,100,80,.55)}
+.childrow .childcovurl{flex:1 1 140px;min-width:0}
+.childpill .cpick{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;
+  font:inherit;color:inherit;cursor:pointer;padding:0;text-align:left}
+.childpill .cpillcov{display:inline-block;width:18px;height:22px;border-radius:5px;
+  background-size:cover;background-position:center;background-color:#eae2d7;flex:0 0 auto;
+  vertical-align:middle;font-style:normal}
+.childpill.on{outline:2px solid var(--accent);outline-offset:1px}
+
+/* 系列详情里的「弹」网格 —— 每张卡 = 一个子系列（截图上就是 re-ment 的第 N 弹） */
+.childwall{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:12px;
+  margin:2px 0 18px}
+.childcard{position:relative;border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  background:var(--card);cursor:pointer;transition:transform .16s,box-shadow .16s;text-align:left;
+  padding:0;font:inherit;color:inherit;display:block}
+.childcard:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(63,48,36,.12)}
+.childcard.on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.childcard .ccov{aspect-ratio:4/3;background-size:cover;background-position:center;
+  background-color:#f1ebe3;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.childcard .ccov b{font:700 1.6em/1 "Songti SC",serif;color:rgba(120,100,80,.5)}
+.childcard .cbd{padding:7px 9px 9px}
+.childcard .cbd strong{display:block;font-size:12px;font-weight:650;line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.childcard .cbd span{display:block;font-size:10.5px;color:var(--muted);margin-top:2px}
+.childcard .ccnt{position:absolute;right:6px;top:6px;padding:2px 7px;border-radius:999px;
+  background:rgba(41,37,31,.62);color:#fff;font-size:10px;letter-spacing:.02em}
+@media (max-width:560px){
+  .childwall{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px}
+  .childrow .childcov{width:40px;height:50px}
+}

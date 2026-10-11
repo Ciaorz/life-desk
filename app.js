@@ -5000,7 +5000,14 @@ var MODS = {
          不弹窗）。字段定义去掉不影响数据：applyFieldVal 是以旧记录为底合并的，
          表单里没有的字段一动不动，值原样留着、照样跟行一起同步。 */
       {k:'封面',t:'img',ph:'图片链接，或点右侧上传',full:1},
-      {k:'短评',t:'textarea',ph:'一句话就够',full:1}
+      {k:'短评',t:'textarea',ph:'一句话就够',full:1},
+      /* v162：附件（DLC / 特典 …）—— 一个手办可以挂多个。
+         ⚠️ `t:'attach'` 是**专门不渲染**的类型（fieldsToGridHTML 会跳过它）：
+         它挂在这里的唯一目的是让「附件」进 activeFields —— 这样
+         ① 草稿 / 云同步指纹 / localUpsert 全都自动带上它，不用另写一套写入逻辑；
+         ② 归位、保存、编辑时不需要任何特殊处理。
+         真正编辑附件走的是编辑页里那个「附件」按钮（左右并排的附件面板）。 */
+      {k:'附件',t:'attach'}
       /* v161：「备注名」和「比例」都挪到前面去了（备注名紧跟名称、比例紧跟系列）——
          用户要求它们各自跟"伙伴"并排成 25%+25%，放末尾就排不到一起了。 */
     ]},
@@ -6205,6 +6212,9 @@ var ui = {
   /* v161：表单里「＋ 备注」点开过哪些字段（{字段名:true}）。
      纯界面状态，只在内存里 —— 它决定「名称」该占 1/2 还是 1/4。 */
   altOpen:{},
+  /* v162：卡片右下角那些附件类型标签，哪些是「展开」状态 —— 键 = `<物品_id>|<类型>`。
+     纯界面状态（内存），不落盘、不进数据、不参与云同步。 */
+  dlcOpen:{},
   collection:{ mode:'cat', cat:'', sub:'', q:'', view:'wall', ipId:null, seriesId:null, inbox:false, classic:false, editing:false, numOrder:'asc', yearView:false, seriesWall:'', seriesStatus:'全部', seriesSort:'no', pageSize:0, page:1,
     /* v102：封面墙的分组方式 —— 'series'=按系列出卡（默认，点进系列详情）；
        'item'=直接把符合条件的物品平铺成卡片（找具体东西时用，如搜「渔夫帽」、看全部隐藏款）。 */
@@ -6698,6 +6708,11 @@ function localUpsert(key, id, vals){
     if (f.t==='childlist'){
       /* v113：子系列定义（[{名称,数量}]）—— 空数组一律存成 null，免得每行都挂个 [] */
       row[f.k] = (Array.isArray(v) && v.length) ? v : (Array.isArray(v) ? null : (v || null));
+      return;
+    }
+    if (f.t==='attach'){
+      /* v162：附件数组 —— 顺手把空项滤掉；一个都没有时存 null（不挂空 []，免得脏同步指纹） */
+      row[f.k] = (Array.isArray(v) && attachList({ 附件: v }).length) ? attachList({ 附件: v }) : null;
       return;
     }
     if (f.t==='img'){
@@ -8000,6 +8015,50 @@ function collStats(){
 }
 /* v96：cols=2 / 3 —— 手机端固定每行列数并整体等比缩小（目前只有宝可梦系列详情传入） */
 /* ============================================================
+ * v162：附件 —— 一个手办可以挂多个「附件」（DLC / 特典 …）。
+ * 数据直接存在藏品行自己的「附件」字段上，不动分片结构：
+ *     row['附件'] = [{ 名称, 类型, 价格, 封面, 定金?, 尾款? }, ...]
+ * · 卡片**右下角**（整个卡片的右下，不是封面里）按类型列小标签；
+ *   同类型只出一个标签，点一下在该卡右边并出这类附件的展示卡，再点收回，默认收起。
+ * · 编辑入口 = 编辑表单里「归位」旁边的「附件」按钮，左（手办）右（附件）并排。
+ * · 预定管理里附件也有各自的定金 / 尾款；预定日期 / 出货日期跟**本体共享**（读本体字段，不另存）。
+ * ============================================================ */
+var ATTACH_TYPES = ['DLC', '特典'];
+function attachList(row){
+  var a = row && row['附件'];
+  if (!a) return [];
+  if (!Array.isArray(a)) a = [a];        /* 兜底：被存成单个对象也认 */
+  return a.map(function(x){
+    if (!x || typeof x !== 'object') return null;
+    return {
+      名称: String(x['名称'] == null ? '' : x['名称']).trim(),
+      类型: String(x['类型'] == null ? '' : x['类型']).trim(),
+      价格: x['价格'],
+      封面: x['封面'] == null ? '' : x['封面'],
+      定金: x['定金'],
+      尾款: x['尾款']
+    };
+  }).filter(function(x){
+    return x && (x['名称'] || x['类型'] || x['封面'] || num(x['价格']) || num(x['定金']) || num(x['尾款']));
+  });
+}
+/* 去重后的类型清单（顺序按先出现）—— 卡片右下角就按它出标签 */
+function attachTypes(row){
+  var out = [];
+  attachList(row).forEach(function(a){
+    var t = a['类型'] || '附件';
+    if (out.indexOf(t) < 0) out.push(t);
+  });
+  return out;
+}
+/* 附件封面的取值：兼容「纯字符串」和「Notion 那种 [{imageUrl}]」两种形态 */
+function attachCoverUrl(a){
+  var c = a && a['封面'];
+  if (!c) return '';
+  if (Array.isArray(c)){ c = (c[0] && (c[0].imageUrl || c[0].url)) || ''; }
+  return resolveImgUrl(String(c || ''));
+}
+/* ============================================================
  * v159：物品名的展示 —— 「名称」黑色 + 「备注名」灰色小一号。
  * 用户要的：有些东西名字太长（「便携式折叠凳」），想挂个顺口的别名（「小凳子」），
  * 卡片上写成「便携式折叠凳 小凳子」—— 主名黑的正字、别名灰的小字，一眼分得出主次。
@@ -8010,25 +8069,66 @@ function nameHTML(row){
   var alt = String((row && row['备注名']) || '').trim();
   return esc(nm) + (alt ? '<span class="altname">'+esc(alt)+'</span>' : '');
 }
+/* v162：卡片右下角的附件类型标签（同类型只出一个）—— 点一下才在该卡右边并出附件展示卡 */
+function dlcTagsHTML(r){
+  var types = attachTypes(r);
+  if (!types.length) return '';
+  return '<div class="dlctags">'+types.map(function(t){
+    var on = !!(ui.dlcOpen && ui.dlcOpen[r._id + '|' + t]);
+    return '<span class="dlctag'+(on?' on':'')+'" data-act="dlctoggle" data-id="'+esc(r._id)+'"'+
+      ' data-t="'+esc(t)+'" title="点一下看这类附件的详情">'+esc(t)+'</span>';
+  }).join('')+'</div>';
+}
+/* 展开中的附件展示卡（紧跟在本体卡后面 —— 网格里就落在它右边） */
+function dlcCardHTML(a, i){
+  var nm = a['名称'] || a['类型'] || '附件';
+  var kind = a['类型'] || '附件';
+  var pr = num(a['价格']);
+  var cu = attachCoverUrl(a);
+  var bg = cu ? "background-image:url('"+cu.replace(/[\"'()\\]/g,'')+"');background-size:cover;background-position:center" : '';
+  return '<div class="dlccard" title="'+esc(nm)+'">'+
+    '<span class="dlckind">'+esc(kind)+'</span>'+
+    '<div class="dlccov'+(cu?'':' noimg')+'" style="'+bg+'">'+(cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
+    '<strong>'+esc(nm)+'</strong>'+
+    (pr>0?'<span class="dlcpr">¥'+Math.round(pr)+'</span>':'')+
+  '</div>';
+}
+function dlcCardsHTML(r){
+  if (!ui.dlcOpen) return '';
+  var out = '';
+  attachList(r).forEach(function(a, i){
+    var t = a['类型'] || '附件';
+    if (!ui.dlcOpen[r._id + '|' + t]) return;
+    out += dlcCardHTML(a, i);
+  });
+  return out;
+}
+/* 单张藏品卡（卡片墙用）—— 抽出来是为了能在它后面紧跟附件展示卡 */
+function collectionPosterHTML(r){
+  var t=r['名称']||'未命名';
+  var sub=(r['小类']||'')+(r['IP']?' · '+r['IP']:'');
+  var no=String(r['编号']||'');
+  var tags = dlcTagsHTML(r);
+  return '<div class="poster'+(tags?' hasdlc':'')+'" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
+    ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
+    '<div class="cover'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
+    (hasCover(r)?'':'<b>'+esc(String(t).slice(0,1))+'</b>')+
+    '<span class="tag">'+esc(pkCardTag(r))+'</span>'+
+    /* v132：只有「贴纸版」加角标 —— 冰箱贴版是默认版本，不加免得 1300 张卡都挂个牌子。
+       两份记录名字/封面一模一样，没这个角标在平铺列表里根本分不出谁是谁。
+       v134：角标去掉了 —— 30周年冰箱贴的左上角标签本身就直接写「冰箱贴 / 贴纸」。 */
+    (no?'<span class="no">'+esc(no)+'</span>':'')+
+    (num(r['星级'])?'<span class="score">'+stars(r['星级'])+'</span>':'')+
+    pkQuickBtnsHTML(r)+
+    pkTypeIconsHTML(r)+
+    '</div><h4>'+nameHTML(r)+'</h4><p>'+esc(sub||'—')+'</p>'+
+    tags +
+    '</div>';
+}
 function collectionWall(rows, cols){
   /* v96k：内联写 --cs，首帧就是用户上次的卡片大小，不等 JS 再赋值（避免闪一下） */
   return '<div class="wall'+(cols?' wall-c'+cols:'')+'" style="--cs:'+csGet()+'">'+rows.map(function(r){
-    var t=r['名称']||'未命名';
-    var sub=(r['小类']||'')+(r['IP']?' · '+r['IP']:'');
-    var no=String(r['编号']||'');
-    return '<div class="poster" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
-      ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-      '<div class="cover'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
-      (hasCover(r)?'':'<b>'+esc(String(t).slice(0,1))+'</b>')+
-      '<span class="tag">'+esc(pkCardTag(r))+'</span>'+
-      /* v132：只有「贴纸版」加角标 —— 冰箱贴版是默认版本，不加免得 1300 张卡都挂个牌子。
-         两份记录名字/封面一模一样，没这个角标在平铺列表里根本分不出谁是谁。
-         v134：角标去掉了 —— 30周年冰箱贴的左上角标签本身就直接写「冰箱贴 / 贴纸」。 */
-      (no?'<span class="no">'+esc(no)+'</span>':'')+
-      (num(r['星级'])?'<span class="score">'+stars(r['星级'])+'</span>':'')+
-      pkQuickBtnsHTML(r)+
-      pkTypeIconsHTML(r)+
-      '</div><h4>'+nameHTML(r)+'</h4><p>'+esc(sub||'—')+'</p></div>';
+    return collectionPosterHTML(r) + dlcCardsHTML(r);
   }).join('')+'</div>';
 }
 function collectionList(rows){
@@ -8237,7 +8337,7 @@ function renderCatMode(){
         var srows = seriesMap[sn];
         var se = store.series.rows.filter(function(r){ return r['系列名称']===sn; })[0];
         var sid = se ? se._id : '';
-        var cover = se && hasCover(se) ? coverStyle(se, sn) : (srows[0] && hasCover(srows[0]) ? coverStyle(srows[0], sn) : '');
+        var cover = seriesCoverOf(se, sn, srows);
         var subcats=ownedByCat(srows);
         var desc = Object.keys(subcats).map(function(k){ return k+' '+subcats[k]; }).join(' · ') || '0 件';
         h += '<div class="ipcard ipseries-card" data-act="seriesopen" data-id="'+esc(sid)+'"'+
@@ -8544,7 +8644,7 @@ function renderIpDetail(){
       var srows = seriesMap[sn];
       var se = store.series.rows.filter(function(r){ return r['系列名称']===sn; })[0];
       var sid = se ? se._id : '';
-      var cover = se && hasCover(se) ? coverStyle(se, sn) : (srows[0] && hasCover(srows[0]) ? coverStyle(srows[0], sn) : '');
+      var cover = seriesCoverOf(se, sn, srows);
       var subcats=ownedByCat(srows);
       var desc = Object.keys(subcats).map(function(k){ return k+' '+subcats[k]; }).join(' · ') || '0 件';
       h += '<div class="ipcard ipseries-card" data-act="seriesopen" data-id="'+esc(sid)+'"'+
@@ -10832,8 +10932,41 @@ document.addEventListener('click', function(ev){
   if (!node) return;
   var act = node.getAttribute('data-act');
   var key = node.getAttribute('data-key');
+  /* v162：附件编辑面板 —— 在编辑表单右边并出（左=本体，右=附件） */
+  if (act==='attopen'){ openAttachPanel(); return; }
+  if (act==='attclose'){ closeAttachPanel(); return; }
+  if (act==='attsel'){ ui.attSel = num(node.getAttribute('data-i')); rerenderAttachPanel(); return; }
+  if (act==='attadd'){
+    if (!editing || !Array.isArray(editing.vals['附件'])) return;
+    editing.vals['附件'].push({ 名称:'', 类型:'', 价格:null, 封面:'' });
+    ui.attSel = editing.vals['附件'].length - 1;
+    if (attachCtx && attachCtx.saveDraft) attachCtx.saveDraft();
+    rerenderAttachPanel();
+    return;
+  }
+  if (act==='attdel'){
+    var _ai = num(node.getAttribute('data-i'));
+    var _al = attCurList();
+    if (_ai >= 0 && _ai < _al.length){
+      _al.splice(_ai, 1);
+      ui.attSel = Math.max(0, Math.min(_ai, _al.length - 1));
+      if (attachCtx && attachCtx.saveDraft) attachCtx.saveDraft();
+      rerenderAttachPanel();
+    }
+    return;
+  }
   /* v139/v140：藏品「筛选」—— 按钮开关卡片、点条件只重画卡片、应用才生效 */
   if (act==='advtoggle'){ advToggleOpen(); render(); return; }
+  /* v162：卡片右下角的附件类型标签 —— 点一下在该卡右边并出这类附件的展示卡，再点收回 */
+  if (act==='dlctoggle'){
+    var _did = node.getAttribute('data-id');
+    var _dt  = node.getAttribute('data-t') || '附件';
+    var _dk  = _did + '|' + _dt;
+    if (!ui.dlcOpen) ui.dlcOpen = {};
+    if (ui.dlcOpen[_dk]) delete ui.dlcOpen[_dk]; else ui.dlcOpen[_dk] = true;
+    render();
+    return;
+  }
   if (act==='advpick'){ advPick(node.getAttribute('data-g'), node.getAttribute('data-v')); return; }
   if (act==='advclear'){ advClearDraft(); return; }
   if (act==='advapply'){ advApplyDraft(); render(); return; }
@@ -10947,15 +11080,29 @@ document.addEventListener('click', function(ev){
   /* ---------- v113：系列表单里的子系列操作 ---------- */
   if (act==='childadd'){
     if (!editing) return;
-    editing._childAdd = true;
+    editing._childAdd = true; editing._childEdit = null; editing._childDraft = null;
     rebuildFormGrid($('sheetHost'));
     var _cn = $('sheetHost').querySelector('.childname');
     if (_cn) _cn.focus();
     return;
   }
+  /* v163：点已有的子系列药丸 → 载入「名称 / 数量 / 封面」那一排来改（再点一次收起） */
+  if (act==='childedit'){
+    if (!editing) return;
+    var _eei = parseInt(node.getAttribute('data-i'), 10);
+    var _earr = Array.isArray(editing.vals['子系列']) ? editing.vals['子系列'] : [];
+    if (isNaN(_eei) || _eei<0 || _eei>=_earr.length) return;
+    if (editing._childEdit === _eei) editing._childEdit = null;
+    else { editing._childEdit = _eei; editing._childAdd = false; }
+    editing._childDraft = null;
+    rebuildFormGrid($('sheetHost'));
+    var _cn2 = $('sheetHost').querySelector('.childname');
+    if (_cn2 && editing._childEdit != null) _cn2.focus();
+    return;
+  }
   if (act==='childcancel'){
     if (!editing) return;
-    editing._childAdd = false; editing._childDraft = null;
+    editing._childAdd = false; editing._childEdit = null; editing._childDraft = null;
     rebuildFormGrid($('sheetHost'));
     return;
   }
@@ -10965,17 +11112,26 @@ document.addEventListener('click', function(ev){
     if (!editing) return;
     var _h = $('sheetHost');
     var _ni = _h.querySelector('.childname'), _ci = _h.querySelector('.childcnt');
+    var _cvi = _h.querySelector('.childcovurl');
     var _nm = _ni ? String(_ni.value||'').trim() : '';
     if (!_nm){ toast('先给子系列起个名字'); if (_ni) _ni.focus(); return; }
     var _cur = Array.isArray(editing.vals['子系列']) ? editing.vals['子系列'].slice() : [];
-    if (_cur.some(function(x){ return String((x && x['名称']) || x).trim() === _nm; })){
+    var _eidx = (editing._childEdit != null) ? num(editing._childEdit) : -1;
+    if (_eidx < 0 || _eidx >= _cur.length) _eidx = -1;
+    /* 重名检查：正在编辑的它自己不算冲突（否则改名不改字都过不去） */
+    if (_cur.some(function(x, i){
+      if (i === _eidx) return false;
+      return String((x && x['名称']) || x).trim() === _nm;
+    })){
       toast('已经有一个叫「'+_nm+'」的子系列了'); return;
     }
-    _cur.push({ 名称:_nm, 数量: _ci && _ci.value!=='' ? (num(_ci.value)||0) : 0 });
+    var _item = { 名称:_nm, 数量: _ci && _ci.value!=='' ? (num(_ci.value)||0) : 0,
+                  封面: _cvi ? String(_cvi.value||'').trim() : '' };
+    if (_eidx >= 0) _cur[_eidx] = _item; else _cur.push(_item);
     editing.vals['子系列'] = _cur;
-    editing._childAdd = false; editing._childDraft = null;
+    editing._childAdd = false; editing._childEdit = null; editing._childDraft = null;
     rebuildFormGrid(_h);
-    toast('已添加子系列「'+_nm+'」，记得点保存');
+    toast(_eidx>=0 ? ('已更新子系列「'+_nm+'」，记得点保存') : ('已添加子系列「'+_nm+'」，记得点保存'));
     return;
   }
   if (act==='childdel'){
@@ -10985,6 +11141,8 @@ document.addEventListener('click', function(ev){
     if (isNaN(_i) || _i<0 || _i>=_a.length) return;
     var _gone = _a.splice(_i,1)[0];
     editing.vals['子系列'] = _a;
+    if (editing._childEdit === _i) editing._childEdit = null;
+    else if (editing._childEdit > _i) editing._childEdit = editing._childEdit - 1;
     rebuildFormGrid($('sheetHost'));
     toast('已移除子系列「'+String((_gone && _gone['名称'])||_gone||'')+'」，记得点保存');
     return;
@@ -11268,6 +11426,18 @@ document.addEventListener('click', function(ev){
   }
   if (act==='seriesback'){ ui.collection.seriesId=null; ui.collection.seriesStatus='全部'; ui.collection.seriesSort='no'; ui.collection.pkIndex=false; ui.collection.seriesChild=''; render(); return; }
   if (act==='seriesfilt'){ ui.collection.seriesStatus=node.getAttribute('data-v')||'全部'; render(); return; }
+  /* v163：点「弹」封面网格里的一张 → 只看这一弹（空串 = 全部）。
+     点完滚到物品墙 —— 否则筛好了却还停在网格上，看不出变化。 */
+  if (act==='childopen'){
+    ui.collection.seriesChild = String(node.getAttribute('data-c')||'');
+    ui.collection.pkShown = 0;
+    render();
+    setTimeout(function(){
+      var w = document.querySelector('.wall');
+      if (w) w.scrollIntoView({ block:'start', behavior:'smooth' });
+    }, 40);
+    return;
+  }
   /* v132：冰箱贴系列切版本（冰箱贴版 / 贴纸版）。分页游标归零，避免上一版的「加载更多」页码残留。 */
   if (act==='seriesver'){
     ui.collection.seriesVer = (node.getAttribute('data-v')==='贴纸') ? '贴纸' : '冰箱贴';
@@ -11805,9 +11975,31 @@ function seriesChildDefs(seriesName){
   if (!Array.isArray(list)) list = [list];          /* 兜底：被存成单个对象也认 */
   return list.map(function(x){
     if (x == null) return null;
-    if (typeof x === 'string') return { 名称:x, 数量:0 };
-    return { 名称:String(x['名称']||'').trim(), 数量:num(x['数量'])||0 };
+    if (typeof x === 'string') return { 名称:x, 数量:0, 封面:'' };
+    /* v163：子系列也可以带**自己的封面** —— re-ment 那种「系列只有名字、封面在每一弹上」的组织方式。
+       封面就是个图片链接 / dataURL 字符串，跟系列自己的封面同一个口径。 */
+    return { 名称:String(x['名称']||'').trim(), 数量:num(x['数量'])||0,
+             封面: String(x['封面']==null?'':x['封面']) };
   }).filter(function(x){ return x && x['名称']; });
+}
+/* v163：某个系列里，第一条**带封面**的子系列封面 —— 系列自己没有封面时拿它当兜底
+   （re-ment 的封面都挂在「弹」上，系列本身是空的）。没有就返回空串。 */
+function firstChildCover(seriesName){
+  var d = seriesChildDefs(seriesName);
+  for (var i=0;i<d.length;i++){ if (d[i]['封面']) return d[i]['封面']; }
+  return '';
+}
+/* v163：系列卡片的封面 —— 三级兜底：
+   ① 系列自己的封面；② 第一「弹」（子系列）的封面；③ 第一件有封面的物品。
+   re-ment 那类系列自己没封面、封面都挂在弹上，不兜底的话卡片就是一块空白。 */
+function seriesCoverOf(se, name, items){
+  if (se && hasCover(se)) return coverStyle(se, name);
+  var cc = firstChildCover(name);
+  if (cc) return "background-image:url('"+esc(String(cc).replace(/["'()\\]/g,''))+"');background-size:cover;background-position:center";
+  if (items && items.length){
+    for (var i=0;i<items.length;i++){ if (hasCover(items[i])) return coverStyle(items[i], name); }
+  }
+  return '';
 }
 function childNamesOf(seriesName){
   return seriesChildDefs(seriesName).map(function(x){ return x['名称']; });
@@ -12496,6 +12688,25 @@ function wireFormControls(host, saveDraft){
       });
     };
   });
+  /* v163：子系列封面上传 —— 压成 dataURL 直接塞进那一排的输入框（和附件面板同一个做法）。
+     ⚠️ 只改输入框和预览，**不 rebuildFormGrid** —— 重绘会把用户还没确认的名称/数量冲掉。 */
+  var _chUp = host.querySelector('#childUp');
+  if (_chUp) _chUp.onchange = function(){
+    var _cf = _chUp.files && _chUp.files[0]; if (!_cf) return;
+    compressImage(_cf, 800, function(dataUrl){
+      if (!dataUrl){ toast('这张图读不出来，换个文件试试'); return; }
+      var _ui = host.querySelector('.childcovurl');
+      if (_ui) _ui.value = dataUrl;
+      var _pv = host.querySelector('[data-child-prev]');
+      if (_pv){
+        _pv.classList.remove('noimg');
+        _pv.style.backgroundImage = "url('"+dataUrl+"')";
+        _pv.style.backgroundSize = 'cover';
+        _pv.style.backgroundPosition = 'center';
+        _pv.innerHTML = '';
+      }
+    });
+  };
   var catSel=host.querySelector('[data-f="大类"]');
   if (catSel){
     refillStateOptions(host);
@@ -13025,9 +13236,11 @@ function renderSeriesMode(){
     if (pkIsVerSeries(se)) items=items.filter(function(r){ return pkVerOf(r)===pkCurVer(); });
     var owned=ownedCount(items);
     var pct= target? Math.min(100, Math.round(owned/target*100)) : 0;
+    /* v163：系列自己没封面时用第一「弹」的封面（re-ment），再没有才退回名字首字 */
+    var _scv = seriesCoverOf(se, name, items);
     return '<div class="ipcard" data-act="seriesopen" data-id="'+esc(se._id)+'"'+
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-      '<div class="ph" style="'+coverStyle(se,name)+'">'+(hasCover(se)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
+      '<div class="ph" style="'+_scv+'">'+(_scv?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
       '<div class="bd"><strong>'+esc(name)+'</strong>'+
         '<span>'+esc(se['所属IP']||'未绑 IP')+'</span>'+
         (target
@@ -13286,11 +13499,14 @@ function renderSeriesDetail(){
   if (isPk){
     miss = target ? missingNos(pkSlots.map(function(e){ return { '编号': String(e.no) }; }), target) : [];
   }
+  /* v163：系列页头那张封面也走三级兜底（系列 → 第一弹 → 第一件物品），
+     否则 re-ment 这类「封面挂在弹上」的系列页头是一块空白。用全量 items（不受筛选影响）。 */
+  var _heroCov = seriesCoverOf(se, name, seriesItems(name));
   var h='<section class="panel" data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="panel-head"><div><h2>'+esc(name)+'</h2>'+
     '<div class="hint">'+(target? '系列总数量 '+target+' 件 · 在库 '+cntAll+' 件' : '在库 '+cntAll+' 件')+'</div></div>'+modeSeg()+'</div>'+
     '<div class="iphero">'+
-      '<div class="ph" style="'+coverStyle(se,name)+'">'+(hasCover(se)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
+      '<div class="ph" style="'+_heroCov+'">'+(_heroCov?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
       '<div><h3>'+esc(name)+'</h3>'+
       (se['所属IP']?'<p>IP · '+esc(se['所属IP'])+'</p>':'')+
       (se['说明']?'<p>'+esc(se['说明'])+'</p>':'')+
@@ -13391,6 +13607,37 @@ function renderSeriesDetail(){
     segBtn('云游', wandering.length)+segBtn('想收', wishedAll.length)+hiddenSeg()+'</div>'+
     subSel+childSel+
     '<button class="btn link sm sback" type="button" data-act="seriesback">← 返回系列列表</button></div>';
+  /* ============================================================
+     v163：「弹」的封面网格 —— 只要这个系列里有**带封面**的子系列就出现。
+     对应 re-ment 那种组织方式：系列自己没有封面、只有名字，
+     封面全挂在每一弹上，于是这排卡就是它唯一的主导航。
+     点一张 = 只看这一弹（复用现成的 seriesChild 筛选，不新开视图）；
+     「全部」那张回到整系列（子系列没封面的系列不会看到这一排，保持原样）。
+     ⚠️ 件数按 `seriesItems(name)` 另算 —— 此刻的 itemsAll 已经被子系列筛过了，数它会漏。
+     ============================================================ */
+  var _cd = seriesChildDefs(name);
+  if (_cd.length && _cd.some(function(x){ return x['封面']; })){
+    var _pool = seriesItems(name);
+    if (isVer) _pool = _pool.filter(function(r){ return pkVerOf(r)===ui.collection.seriesVer; });
+    var _cnt = {};
+    _pool.forEach(function(r){ var c=String(r['子系列']||'').trim(); if (c) _cnt[c]=(_cnt[c]||0)+1; });
+    h += '<div class="childwall">'+
+      '<button type="button" class="childcard'+(fcs.seriesChild?'':' on')+'" data-act="childopen" data-c="">'+
+        '<div class="ccov"><b>全</b></div>'+
+        '<div class="cbd"><strong>全部</strong><span>'+_pool.length+' 件</span></div>'+
+      '</button>'+
+      _cd.map(function(x){
+        var c=x['名称'], cov=String(x['封面']||'');
+        var bg = cov ? ("background-image:url('"+esc(cov.replace(/["'()\\]/g,''))+"');background-size:cover;background-position:center") : '';
+        var n = _cnt[c]||0, tgt = num(x['数量']);
+        return '<button type="button" class="childcard'+(fcs.seriesChild===c?' on':'')+'" data-act="childopen" data-c="'+esc(c)+'">'+
+          '<div class="ccov" style="'+bg+'">'+(cov?'':'<b>'+esc(String(c).slice(0,1))+'</b>')+'</div>'+
+          '<div class="ccnt">'+n+'</div>'+
+          '<div class="cbd"><strong>'+esc(c)+'</strong><span>'+(tgt?('目标 '+tgt+' 件'):'')+'</span></div>'+
+        '</button>';
+      }).join('')+
+    '</div>';
+  }
   /* v112：空系列到这里才早退 —— 上面的工具行（含「← 返回系列列表」）必须先渲染出来 */
   if (!itemsAll.length){
     h += emptyHTML('这个系列还没有子项','点系列名旁的「+」添一件，或用「批量添加子项」把一整串名字一次贴进去。');
@@ -13600,6 +13847,139 @@ function parseImportText(text){
   });
   return {items:items, links:links};
 }
+/* ============================================================
+ * v162：附件编辑面板 —— 点编辑表单里的「附件」按钮，在**右边**并出一块面板，
+ * 左边保持本体表单（左=本体，右=附件）。
+ * · 面板改的是 `editing.vals['附件']`（实时写入），落盘由主表单的「保存」统一负责。
+ * · 选中哪个附件记在 `ui.attSel`（纯界面状态）。
+ * ⚠️ 输入名称 / 类型时**只改列表上的文字**，绝不整体重绘 —— 重绘会把光标顶掉。
+ * ============================================================ */
+var attachCtx = null;                     /* { host, saveDraft } —— openForm 里赋值，closeSheet 清空 */
+function attCurList(){
+  return (editing && editing.vals && Array.isArray(editing.vals['附件'])) ? editing.vals['附件'] : [];
+}
+function attachPanelHTML(){
+  var list = attCurList();
+  var sel = num(ui.attSel);
+  if (sel < 0 || sel >= list.length) sel = list.length ? 0 : -1;
+  var h = '<div class="sheet-head"><div><p>Attachments</p><h2>附件</h2></div>'+
+    '<button class="x" type="button" data-act="attclose" aria-label="收起附件">×</button></div>';
+  if (list.length){
+    h += '<div class="attlist">'+list.map(function(a, i){
+      return '<button type="button" class="attitem'+(i===sel?' on':'')+'" data-act="attsel" data-i="'+i+'">'+
+        '<b>'+esc(a['类型'] || '附件')+'</b><span>'+esc(a['名称'] || '（未命名）')+'</span></button>';
+    }).join('')+'</div>';
+  } else {
+    h += '<p class="attempty">还没有附件。点下面的「＋ 添加附件」，给这件东西挂个 DLC / 特典。</p>';
+  }
+  h += '<button type="button" class="btn ghost sm attaddbtn" data-act="attadd">＋ 添加附件</button>';
+  if (sel >= 0){
+    var a = list[sel];
+    var cu = String(a['封面'] || '');
+    h += '<div class="attform">'+
+      '<label class="af"><u>名称</u><input data-att-f="名称" type="text" value="'+esc(a['名称'] || '')+'" placeholder="如 特典亚克力立牌" autocomplete="off"></label>'+
+      '<label class="af"><u>类型</u><input data-att-f="类型" type="text" list="attTypeList" value="'+esc(a['类型'] || '')+'" placeholder="DLC / 特典…" autocomplete="off"></label>'+
+      '<datalist id="attTypeList">'+ATTACH_TYPES.map(function(t){ return '<option value="'+esc(t)+'"></option>'; }).join('')+'</datalist>'+
+      '<label class="af"><u>价格</u><input data-att-f="价格" type="number" value="'+(a['价格']==null?'':esc(String(a['价格'])))+'" placeholder="0" inputmode="decimal"></label>'+
+      '<div class="af afimg"><u>封面</u>'+
+        '<div class="attcov'+(cu?'':' noimg')+'" data-att-prev="1" style="'+(cu?"background-image:url('"+cu.replace(/[\"'()\\]/g,'')+"');background-size:cover;background-position:center":'')+'">'+(cu?'':'<b>封面</b>')+'</div>'+
+        '<div class="imgrow"><input data-att-f="封面" type="text" value="'+esc(cu)+'" placeholder="图片链接 / 点右侧上传" autocomplete="off">'+
+        '<label class="btn ghost sm upl" for="attUp">上传<input id="attUp" type="file" accept="image/*" hidden></label></div>'+
+      '</div>'+
+      '<button type="button" class="btn ghost sm attdel" data-act="attdel" data-i="'+sel+'">删除这个附件</button>'+
+    '</div>';
+  }
+  return h;
+}
+/* 只更新左侧列表里的文字与选中态（输入名称/类型时用，避免重绘丢焦点） */
+function attachSyncList(panel){
+  var list = attCurList();
+  var sel = num(ui.attSel);
+  panel.querySelectorAll('.attitem').forEach(function(btn, i){
+    var a = list[i]; if (!a) return;
+    var b = btn.querySelector('b'), s = btn.querySelector('span');
+    if (b) b.textContent = a['类型'] || '附件';
+    if (s) s.textContent = a['名称'] || '（未命名）';
+    btn.classList.toggle('on', i === sel);
+  });
+}
+function wireAttachPanel(panel, saveDraft){
+  function cur(){
+    var l = attCurList(); var i = num(ui.attSel);
+    return (i >= 0 && i < l.length) ? l[i] : null;
+  }
+  function bump(){ if (saveDraft) saveDraft(); }
+  panel.querySelectorAll('[data-att-f]').forEach(function(inp){
+    var f = inp.getAttribute('data-att-f');
+    function commit(){
+      var a = cur(); if (!a) return;
+      var v = inp.value;
+      a[f] = (f === '价格') ? (v === '' ? null : num(v)) : v;
+      bump();
+      if (f === '类型' || f === '名称') attachSyncList(panel);
+      if (f === '封面'){
+        var prev = panel.querySelector('[data-att-prev]');
+        if (prev){
+          var u = String(v || '');
+          prev.classList.toggle('noimg', !u);
+          prev.style.backgroundImage = u ? "url('"+u.replace(/[\"'()\\]/g,'')+"')" : '';
+          prev.style.backgroundSize = u ? 'cover' : '';
+          prev.style.backgroundPosition = u ? 'center' : '';
+          prev.innerHTML = u ? '' : '<b>封面</b>';
+        }
+      }
+    }
+    inp.addEventListener('input', commit);
+    inp.addEventListener('change', commit);
+  });
+  var up = panel.querySelector('#attUp');
+  if (up){
+    up.onchange = function(){
+      var file = up.files && up.files[0]; if (!file) return;
+      compressImage(file, 800, function(dataUrl){
+        if (!dataUrl){ toast('这张图读不出来，换个文件试试'); return; }
+        var a = cur(); if (!a) return;
+        a['封面'] = dataUrl;
+        bump();
+        var inp = panel.querySelector('[data-att-f="封面"]');
+        if (inp) inp.value = dataUrl;
+        var prev = panel.querySelector('[data-att-prev]');
+        if (prev){
+          prev.classList.remove('noimg');
+          prev.style.backgroundImage = "url('"+dataUrl+"')";
+          prev.style.backgroundSize = 'cover';
+          prev.style.backgroundPosition = 'center';
+          prev.innerHTML = '';
+        }
+      });
+    };
+  }
+}
+function rerenderAttachPanel(){
+  var host = attachCtx && attachCtx.host; if (!host) return;
+  var panel = host.querySelector('.sheet-attach'); if (!panel) return;
+  panel.innerHTML = attachPanelHTML();
+  wireAttachPanel(panel, attachCtx.saveDraft);
+}
+function openAttachPanel(){
+  if (!attachCtx || !editing || editing.key !== 'collection') return;
+  var host = attachCtx.host;
+  host.classList.add('pair');
+  var old = host.querySelector('.sheet-attach');
+  if (old) old.remove();
+  var panel = document.createElement('div');
+  panel.className = 'sheet sheet-attach';
+  panel.innerHTML = attachPanelHTML();
+  host.appendChild(panel);
+  wireAttachPanel(panel, attachCtx.saveDraft);
+}
+function closeAttachPanel(){
+  if (!attachCtx || !attachCtx.host) return;
+  var host = attachCtx.host;
+  var panel = host.querySelector('.sheet-attach');
+  if (panel) panel.remove();
+  host.classList.remove('pair');
+}
 function openForm(key, id, opts){
   var m=MODS[key];
   var row=null;
@@ -13695,6 +14075,9 @@ function openForm(key, id, opts){
   if (key==='collection'){
     var _hp0 = holdPatchForStatus(editing.vals['状态'], editing.vals['持有']);
     if (_hp0['持有'] != null) editing.vals['持有'] = _hp0['持有'];
+    /* v162：附件 —— 归一到数组形态（编辑已有记录时把行上的附件带进来，新建时是空数组）。
+       它不进表单栅格，编辑走头部那个「附件」按钮（左右并排的附件面板）。 */
+    editing.vals['附件'] = attachList(row);
   }
 
   var host=$('sheetHost');
@@ -13710,6 +14093,8 @@ function openForm(key, id, opts){
     '<p>'+esc(eyebrowName)+'</p><h2>'+(id?'编辑':'添加')+' · '+esc(titleName)+'</h2></div>'+
     '<div class="sheet-head-acts">'+
       '<button class="guiwei" type="button" data-act="guiwei" title="清空所有已填信息，归位到默认">归位</button>'+
+      /* v162：附件按钮 —— 就在「归位」后面。点开在右边并出附件编辑面板（左=本体，右=附件）。 */
+      (key==='collection' ? '<button class="guiwei attbtn" type="button" data-act="attopen" title="给这件东西挂附件（DLC / 特典…）">附件</button>' : '')+
       '<button class="x" type="button" data-x="1" aria-label="关闭">×</button>'+
     '</div></div>'+
     '<div class="fgrid'+formGridClass(key, editing.vals)+'">'+fieldsToGridHTML(activeFields(key, editing.vals), editing.vals, formGridClass(key, editing.vals))+'</div>'+
@@ -13718,6 +14103,9 @@ function openForm(key, id, opts){
     '<button class="btn ghost" type="button" data-x="1">取消</button>'+
     '<button class="btn primary" type="button" id="saveBtn">保存</button></div></div>';
   host.innerHTML=h; host.hidden=false;
+  /* v162：附件面板的上下文（点「附件」按钮时用）—— 只对藏品有意义 */
+  attachCtx = (key==='collection') ? { host: host, saveDraft: saveDraft } : null;
+  ui.attSel = 0;
   host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick=closeSheet; });
   bindSheetBackdrop(host);
   /* v96d：归位按钮 —— 点击后清空所有已填信息：新建时归位到空白默认，编辑时还原为原始记录 */
@@ -13727,6 +14115,8 @@ function openForm(key, id, opts){
       editing.vals = {};
       var base = (!id && !row) ? {} : (row || {});
       activeFields(key, base).forEach(function(f){ editing.vals[f.k] = fieldVal(base, f); });
+      /* v162：归位也要把附件带回来（它不在栅格里，靠 activeFields 拿不到） */
+      if (key==='collection') editing.vals['附件'] = attachList(base);
       /* 大类不在电影/留声机/书籍/杂志专用表单里渲染，但分片与筛选全靠它，必须带回 vals */
       if ((key==='av' || key==='collection') && base['大类']!=null && editing.vals['大类']==null){
         editing.vals['大类']=base['大类'];
@@ -13982,7 +14372,9 @@ function fieldsToGridHTML(fields, vals, gridCls){
         grp.map(function(g){ return fieldHTML(g, vals ? vals[g.k] : undefined); }).join('')+
       '</div>';
     } else {
-      out += fieldHTML(f, vals ? vals[f.k] : undefined);
+      /* v162：`t:'attach'`（附件）是「只存不渲染」的字段 —— 跳过，不进表单栅格。
+         它挂在 fields 里的唯一目的是让「附件」进 activeFields（草稿 / 云同步 / localUpsert 就都带上了）。 */
+      if (!f || f.t !== 'attach') out += fieldHTML(f, vals ? vals[f.k] : undefined);
       i++;
     }
   }
@@ -14279,29 +14671,53 @@ function fieldHTML(f, v){
     /* v113：「添加子系列」按钮 —— 紧跟「系列总数量」右边，同一排 */
     body='<button type="button" class="btn ghost sm childaddbtn" data-act="childadd">＋ 添加子系列</button>';
   } else if (f.t==='childlist'){
-    /* v113：子系列编辑器 —— 点「添加子系列」后才出现「名称 + 数量 + 确认」那一排；
-       已经建过的子系列以药丸形式列在下面（可单个删掉）。
-       两个都没内容时整块不渲染，第二排下面不会多出一条空行。 */
+    /* v113：子系列编辑器；v163 加「封面」—— re-ment 那种「系列只有名字、封面在每一弹上」的组织方式。
+       添加：点「添加子系列」→ 名称 + 数量 + 封面（链接或上传）；
+       改：点已有的子系列药丸 → 载入同一排改（含封面），按钮变成「保存」。 */
     var _arr = Array.isArray(v) ? v : (v ? [v] : []);
-    var _adding = !!(editing && editing._childAdd);
+    var _ei = (editing && editing._childEdit != null) ? num(editing._childEdit) : -1;
+    if (_ei < 0 || _ei >= _arr.length) _ei = -1;
+    var _adding = !!(editing && editing._childAdd) || _ei >= 0;
     if (!_arr.length && !_adding) return '';
     var _dft = (editing && editing._childDraft) || {};
+    if (_ei >= 0){
+      var _src = _arr[_ei] || {};
+      _dft = { 名称: (typeof _src==='string') ? _src : String(_src['名称']||''),
+               数量: (typeof _src==='string') ? '' : _src['数量'],
+               封面: (typeof _src==='string') ? '' : String(_src['封面']||'') };
+    }
     body='';
     if (_adding){
+      var _cv = String(_dft['封面']||'');
+      var _cvSafe = esc(_cv.replace(/["'()\\]/g, ''));
       body += '<div class="childrow">'+
-        '<input class="childname" type="text" autocomplete="off" placeholder="子系列名称，如 徽章" value="'+esc(_dft['名称']||'')+'">'+
-        '<input class="childcnt" type="number" min="0" autocomplete="off" placeholder="数量（可留空）" value="'+esc(_dft['数量']==null?'':_dft['数量'])+'">'+
-        '<button class="btn primary sm" type="button" data-act="childok">确认</button>'+
+        '<input class="childname" type="text" autocomplete="off" placeholder="子系列名称，如 第 1 弹" value="'+esc(_dft['名称']||'')+'">'+
+        '<input class="childcnt" type="number" min="0" autocomplete="off" placeholder="数量（可留空）" value="'+esc(_dft['数量']==null||_dft['数量']===''?'':_dft['数量'])+'">'+
+        '<button class="btn primary sm" type="button" data-act="childok">'+(_ei>=0?'保存':'确认')+'</button>'+
         '<button class="btn ghost sm" type="button" data-act="childcancel">取消</button>'+
       '</div>'+
-      '<span class="imgnote">子系列的数据（连同封面）都记在这个系列里，不会另建文件。</span>';
+      '<div class="childrow childrow2">'+
+        '<span class="childcov'+(_cv?'':' noimg')+'" data-child-prev'+
+          (_cv?' style="background-image:url(\''+_cvSafe+'\');background-size:cover;background-position:center"':'')+'>'+
+          (_cv?'':'<b>封面</b>')+'</span>'+
+        '<input class="childcovurl" type="text" autocomplete="off" placeholder="封面图片链接 / 或点右侧上传" value="'+esc(_cv)+'">'+
+        '<label class="btn ghost sm upl" for="childUp">上传<input id="childUp" type="file" accept="image/*" hidden></label>'+
+      '</div>'+
+      '<span class="imgnote">子系列和它的封面都记在这个系列里，不会另建文件。</span>';
     }
     if (_arr.length){
       body += '<div class="childpills">'+ _arr.map(function(x,i){
         var _nm = (typeof x==='string') ? x : String((x && x['名称']) || '');
         var _ct = (typeof x==='string') ? 0 : (num(x && x['数量']) || 0);
-        return '<span class="childpill">'+esc(_nm)+( _ct ? '<i>'+_ct+' 件</i>' : '')+
-          '<button class="cx" type="button" data-act="childdel" data-i="'+i+'" title="删掉这个子系列">×</button></span>';
+        var _cc = (typeof x==='string') ? '' : String((x && x['封面']) || '');
+        var _ccSafe = esc(_cc.replace(/["'()\\]/g, ''));
+        return '<span class="childpill'+(_cc?' hascov':'')+(i===_ei?' on':'')+'">'+
+          '<button class="cpick" type="button" data-act="childedit" data-i="'+i+'" title="点一下改名称 / 数量 / 封面">'+
+            (_cc?'<i class="cpillcov" style="background-image:url(\''+_ccSafe+'\');background-size:cover;background-position:center"></i>':'')+
+            esc(_nm)+(_ct?'<i class="cpillct">'+_ct+' 件</i>':'')+
+          '</button>'+
+          '<button class="cx" type="button" data-act="childdel" data-i="'+i+'" title="删掉这个子系列">×</button>'+
+        '</span>';
       }).join('')+'</div>';
     }
   }
@@ -14322,7 +14738,7 @@ function bindSheetBackdrop(host){
   host.addEventListener('mousedown', function(e){ host._downOnBackdrop=(e.target===host); });
   host.onclick=function(e){ if(e.target===host && host._downOnBackdrop){ host._downOnBackdrop=false; closeSheet(); } };
 }
-function closeSheet(){ $('sheetHost').hidden=true; $('sheetHost').innerHTML=''; editing=null; formAfter=null; }
+function closeSheet(){ var _sh=$('sheetHost'); _sh.hidden=true; _sh.innerHTML=''; _sh.classList.remove('pair'); attachCtx=null; editing=null; formAfter=null; }
 
 /* ============ v49：手机扫码录入书籍（ISBN 条码 / 二维码）→ 查书自动填表 ============ */
 function normIsbn(s){
