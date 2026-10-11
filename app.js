@@ -7652,15 +7652,45 @@ function poBookedChip(r){
   return '<em class="po-chip po-chip-btn" data-act="poedit" data-id="'+esc(r._id)+'"'+
     ' data-f="预定日期" title="点一下就地改">'+esc(poWhenText(v, '预订 '))+'</em>';
 }
+/* ============================================================
+ * v163：预定物卡片上的「就地编辑」支持**字段路径**。
+ *   普通字段：'定金' / '尾款' / '预定日期' / '预定出货日期'
+ *   附件字段：'附件:<序号>:<字段>' —— 用户要求「有附件的物品，附件也有各自的定金/尾款，
+ *            但预定时间跟本体共享」。所以附件只存金额，日期一律读本体。
+ * ============================================================ */
+function poFieldOf(r, f){
+  var m = /^附件:(\d+):(.+)$/.exec(String(f||''));
+  if (!m) return { obj: r, key: String(f||'') };
+  var arr = (r && r['附件']) || [];
+  return { obj: arr[parseInt(m[1],10)] || null, key: m[2] };
+}
+/* 把就地编辑的结果写回那一行（附件要整组换新数组，patchRowFields 会比对，值没变就不写） */
+function poSetField(id, f, value){
+  var row = (store.collection.rows||[]).filter(function(r){ return String(r._id)===String(id); })[0];
+  if (!row) return false;
+  var m = /^附件:(\d+):(.+)$/.exec(String(f||''));
+  if (!m){
+    var p = {}; p[f] = value;
+    return patchRowFields('collection', id, p);
+  }
+  var arr = (row['附件']||[]).map(function(a){ return Object.assign({}, a); });
+  var i = parseInt(m[1],10);
+  if (!arr[i]) return false;
+  arr[i][m[2]] = value;
+  return patchRowFields('collection', id, { 附件: arr });
+}
 /* v160：定金 / 尾款 —— 和日期一样是**可点的标签**，点了就地填数字。
-   金额没填时显示「＋ 定金」，填了显示「定金 ¥100」。 */
-function poMoneyChip(r, k){
-  var raw = r[k];
+   金额没填时显示「＋ 定金」，填了显示「定金 ¥100」。
+   v163：第三个参数是**字段路径**（附件会传 '附件:0:定金'），默认就是字段名本身。 */
+function poMoneyChip(r, k, f){
+  f = f || k;
+  var t = poFieldOf(r, f);
+  var raw = t.obj ? t.obj[t.key] : null;
   var has = (raw != null && String(raw).trim() !== '' && !isNaN(parseFloat(raw)));
   var cls = 'po-chip po-chip-btn' + (has ? '' : ' todo');
   var txt = has ? (k + ' ¥' + Math.round(num(raw))) : ('＋ ' + k);
-  return '<em class="'+cls+'" data-act="poedit" data-id="'+esc(r._id)+'" data-f="'+esc(k)+'"'+
-    ' title="点一下就地填（到货时两项相加会填进「购入价格」）">'+esc(txt)+'</em>';
+  return '<em class="'+cls+'" data-act="poedit" data-id="'+esc(r._id)+'" data-f="'+esc(f)+'"'+
+    ' title="点一下就地填（到货时各项相加会填进「购入价格」）">'+esc(txt)+'</em>';
 }
 /* 两个里填了任意一个就显示「合计」—— 让人提前看到到货后购入价格会是多少 */
 function poTotalChip(r){
@@ -7677,13 +7707,14 @@ function poTotalChip(r){
    v160：定金 / 尾款是**一个数字输入框**，走同一个 `data-poseg` 约定。
    用 data-poseg 标记（不是表单里的 data-fzy，避免两套绑定互相抢）。 */
 function poInlineEditHTML(r, f){
-  var cur = String(r[f]||'').trim();
+  var _t = poFieldOf(r, f), key = _t.key;
+  var cur = String((_t.obj ? _t.obj[key] : '') || '').trim();
   /* ⚠️ 这个容器必须带一个 data-act：卡片外层是 `data-act="popen"`（点开详情），
      事件委托用 `closest('[data-act]')` —— 里面的下拉本身没有 data-act，
      不加这一层的话「点下拉」会被当成「点开详情」，编辑框刚点开就被详情页盖掉。 */
   var h = '<div class="po-inlineedit" data-act="poeditnoop" data-id="'+esc(r._id)+'" data-f="'+esc(f)+'">';
   var done = '<button type="button" class="po-iedone" data-act="poeditdone" title="收起">✓</button>';
-  if (f === '定金' || f === '尾款'){
+  if (key === '定金' || key === '尾款'){
     var shown = (cur === '' || cur == null) ? '' : String(num(cur));
     h += '<input type="number" class="po-num" data-poseg="num" value="'+esc(shown)+'"'+
       ' min="0" step="0.01" placeholder="¥ 金额" inputmode="decimal">';
@@ -7695,7 +7726,7 @@ function poInlineEditHTML(r, f){
   var yo = '<option value="">年</option>';
   for (y = cy + 3; y >= 2000; y--) yo += '<option value="'+y+'"'+(info.y===y?' selected':'')+'>'+y+'</option>';
   h += '<select data-poseg="y" title="年份">'+yo+'</select>';
-  if (f === '预定出货日期'){
+  if (key === '预定出货日期'){
     var go = '<option value="">月 / 季</option>';
     for (m = 1; m <= 12; m++) go += '<option value="M'+m+'"'+((info.kind==='month'||info.kind==='day') && info.m===m?' selected':'')+'>'+m+' 月</option>';
     for (q = 1; q <= 4; q++) go += '<option value="Q'+q+'"'+(info.kind==='quarter' && info.q===q?' selected':'')+'>'+FUZZY_Q_NAME[q]+'</option>';
@@ -7719,23 +7750,25 @@ function poInlineEditHTML(r, f){
 function poInlineCommit(box){
   if (!box || !box.getAttribute) return;
   var id = box.getAttribute('data-id'), f = box.getAttribute('data-f');
+  /* v163：f 可能是附件路径 '附件:0:定金' —— 取尾部那段当「字段名」用 */
+  var key = (/^附件:\d+:(.+)$/.exec(String(f||'')) || [])[1] || String(f||'');
   function seg(n){
     var el = box.querySelector('[data-poseg="'+n+'"]');
     return el ? String(el.value||'') : '';
   }
   /* v160：金额字段（定金 / 尾款）—— 一个数字输入框，直接存数字，空就是 null */
-  if (f === '定金' || f === '尾款'){
+  if (key === '定金' || key === '尾款'){
     var raw = String(seg('num')).trim();
-    var patchN = {};
-    patchN[f] = (raw === '') ? null : num(raw);
-    if (patchRowFields('collection', id, patchN)) toast(f + (raw === '' ? ' 已清空' : ' 已记下 ¥' + Math.round(num(raw))));
+    if (poSetField(id, f, (raw === '') ? null : num(raw))){
+      toast(key + (raw === '' ? ' 已清空' : ' 已记下 ¥' + Math.round(num(raw))));
+    }
     render();
     return;
   }
   var yv = parseInt(seg('y'),10) || 0;
   var val = '';
   if (yv){
-    if (f === '预定出货日期'){
+    if (key === '预定出货日期'){
       var g = seg('g'), dv = seg('d');
       if (g.charAt(0) === 'Q')      val = yv + '-Q' + g.slice(1);
       else if (g.charAt(0) === 'M') val = yv + '-' + fzPad2(parseInt(g.slice(1),10)) + (dv ? '-' + fzPad2(parseInt(dv,10)) : '');
@@ -7745,10 +7778,28 @@ function poInlineCommit(box){
       val = mv ? (yv + '-' + fzPad2(parseInt(mv,10)) + (dv2 ? '-' + fzPad2(parseInt(dv2,10)) : '')) : String(yv);
     }
   }
-  var patch = {};
-  patch[f] = val || null;
-  if (patchRowFields('collection', id, patch)) toast(f + (val ? ' 已记下' : ' 已清空'));
+  if (poSetField(id, f, val || null)) toast(key + (val ? ' 已记下' : ' 已清空'));
   render();          /* 重绘：日历 / 提醒条 / 倒计时都跟着变；编辑态由 ui.poEdit 保留 */
+}
+/* v163：预定物卡片上的**附件行** —— 用户要的：「有附件的物品，附件也有各自的定金 / 尾款，
+   但预定时间跟本体共享」。所以这里只出金额两个标签（日期一律读本体那两个字段）。
+   一个手办可以挂多个附件，每个附件各占一行。 */
+function poAttachChips(r){
+  var list = attachList(r);
+  if (!list.length) return '';
+  var ed = ui.poEdit || {}, same = (String(ed.id||'') === String(r._id));
+  return '<div class="po-atts">'+ list.map(function(a, i){
+    var nm = a['名称'] || a['类型'] || '附件';
+    var kind = a['类型'] || '附件';
+    function chip(k){
+      var f = '附件:' + i + ':' + k;
+      return (same && ed.f === f) ? poInlineEditHTML(r, f) : poMoneyChip(r, k, f);
+    }
+    return '<div class="po-attrow">'+
+      '<span class="po-attname"><i>'+esc(kind)+'</i>'+esc(nm)+'</span>'+
+      '<span class="po-attchips">'+chip('定金')+chip('尾款')+'</span>'+
+    '</div>';
+  }).join('') + '</div>';
 }
 function poCardHTML(r){
   var nm = r['名称'] || '未命名';
@@ -7771,9 +7822,10 @@ function poCardHTML(r){
         (editingBal  ? poInlineEditHTML(r, '尾款') : poMoneyChip(r, '尾款'))+
         poTotalChip(r)+
       '</div>'+
+      poAttachChips(r)+
     '</div>'+
     '<div class="poacts">'+
-      '<button type="button" class="po-recv" data-act="porecv" data-id="'+esc(r._id)+'" title="到货了：状态改成「在库」，持有补成 1，购入价格按 定金+尾款 自动填">到货了</button>'+
+      '<button type="button" class="po-recv" data-act="porecv" data-id="'+esc(r._id)+'" title="到货了：状态改成「在库」，持有补成 1，购入价格按 定金+尾款（含附件）自动填">到货了</button>'+
     '</div>'+
   '</div>';
 }
@@ -11348,16 +11400,24 @@ document.addEventListener('click', function(ev){
          它会顺带清掉冲突状态（想收/云游）、并把还没记的持有补成 1 —— 与别处口径完全一致。 */
       toggleRowStatus('collection', _rid, '在库');
       /* v160：到货时把「购入价格」自动填成 **定金 + 尾款**（用户要的）。
-         两个都没填就不动价格（没数据可算）。如果原来已经记过一个不同的价格，
+         v163：**附件的定金 / 尾款也算进去**（附件自己也有这两项，预定日期读本体）。
+         一项都没填就不动价格（没数据可算）。如果原来已经记过一个不同的价格，
          提示里把旧值也报出来 —— 免得用户以为价格被悄悄改了还没处查。 */
+      var _sum = 0, _any = false, _attSum = 0;
       var _nd = parseFloat(_rr['定金']), _nw = parseFloat(_rr['尾款']);
-      var _hasD = !isNaN(_nd), _hasW = !isNaN(_nw);
+      if (!isNaN(_nd)){ _sum += _nd; _any = true; }
+      if (!isNaN(_nw)){ _sum += _nw; _any = true; }
+      attachList(_rr).forEach(function(a){
+        var d = parseFloat(a['定金']), w = parseFloat(a['尾款']);
+        if (!isNaN(d)){ _sum += d; _attSum += d; _any = true; }
+        if (!isNaN(w)){ _sum += w; _attSum += w; _any = true; }
+      });
       var _msg = '「'+(_rr['名称']||'这件')+'」已记到在库';
-      if (_hasD || _hasW){
-        var _sum = (_hasD ? _nd : 0) + (_hasW ? _nw : 0);
+      if (_any){
         var _old = num(_rr['购入价格']);
         if (patchRowFields('collection', _rid, { 购入价格: _sum })){
           _msg += '，购入价格填为 ¥' + Math.round(_sum);
+          if (_attSum) _msg += '（含附件 ¥' + Math.round(_attSum) + '）';
           if (_old > 0 && Math.round(_old) !== Math.round(_sum)){
             _msg += '（原来记的是 ¥' + Math.round(_old) + '）';
           }

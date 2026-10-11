@@ -65,6 +65,7 @@ const FUZZY_FNS = ['fzPad2', 'fuzzyDateInfo', 'fuzzyDateKey', 'fuzzyDateEndKey',
   'fuzzyDateText', 'fuzzyDateIsVague', 'fuzzyDaysFromToday'];
 const PO_FNS = ['poTodayKey', 'poRows', 'poSort', 'poWhenText', 'poDueChip', 'poBookedChip',
   'poMoneyChip', 'poTotalChip', 'nameHTML',
+  'poFieldOf', 'poSetField', 'poAttachChips', 'attachList', 'attachTypes',
   'poInlineEditHTML', 'poInlineCommit', 'poCardHTML', 'poMonthCalHTML', 'poCalHTML', 'preorderPanel'];
 const code = [
   extractVar('var FUZZY_Q_NAME'),
@@ -101,7 +102,10 @@ function makeEnv(rows, poCal) {
       var changed = false;
       Object.keys(patch).forEach(function(k){
         var nv = (patch[k]===''||patch[k]==null) ? null : patch[k];
-        if (String(row[k]==null?'':row[k]) !== String(nv==null?'':nv)){ row[k]=nv; changed=true; }
+        var cur = (row[k]===''||row[k]==null) ? null : row[k];
+        /* ⚠️ 用 JSON 比对，不能只 String() —— 数组/对象一律变成 '[object Object]'，
+           附件（数组）明明改了也会被判成「没变」而写不进去。 */
+        if (JSON.stringify(cur) !== JSON.stringify(nv)){ row[k]=nv; changed=true; }
       });
       if (changed) log.patches.push({ id:id, patch:patch });
       return changed;
@@ -115,7 +119,8 @@ function makeEnv(rows, poCal) {
              poMonthCalHTML:poMonthCalHTML, poCardHTML:poCardHTML, poInlineEditHTML:poInlineEditHTML,
              poInlineCommit:poInlineCommit, channelOptionsAll:channelOptionsAll,
              poDueChip:poDueChip, poWhenText:poWhenText, poMoneyChip:poMoneyChip,
-             poTotalChip:poTotalChip, store:store, ui:ui, log:log };`);
+             poTotalChip:poTotalChip, poAttachChips:poAttachChips, poFieldOf:poFieldOf,
+             store:store, ui:ui, log:log };`);
   return factory(store, ui, log);
 }
 
@@ -488,6 +493,60 @@ console.log('[M] 定金 / 尾款');
   const card = E.poCardHTML(row);
   ok(/data-f="定金"/.test(card) && /data-f="尾款"/.test(card), 'M17 卡片上有定金和尾款的标签');
   ok(card.indexOf('合计 ¥500') >= 0, 'M18 卡片上显示合计（提前看到到货会填多少）');
+}
+
+/* ---------- N. 附件的定金 / 尾款（v163） ---------- */
+console.log('[N] 附件的定金 / 尾款');
+{
+  const E = makeEnv([mkRow({ _id: 'n1', 名称: '带附件的预定物',
+    附件: [{ 名称: 'DLC 立牌', 类型: 'DLC', 定金: 50, 尾款: 70 },
+           { 名称: '特典挂件', 类型: '特典' }] })]);
+  const row = E.store.collection.rows[0];
+
+  /* 附件行渲染 */
+  const h = E.poAttachChips(row);
+  ok(h.indexOf('po-atts') >= 0, 'N1 有附件 → 渲染出附件块');
+  ok(h.indexOf('DLC') >= 0 && h.indexOf('特典') >= 0, 'N2 两个附件的类型都出来了');
+  ok(h.indexOf('DLC 立牌') >= 0 && h.indexOf('特典挂件') >= 0, 'N3 附件名字也在');
+  ok(h.indexOf('data-f="附件:0:定金"') >= 0, 'N4 第一个附件的定金标签带**字段路径**');
+  ok(h.indexOf('定金 ¥50') >= 0, 'N5 已填的定金显示成「定金 ¥50」');
+  ok(h.indexOf('＋ 定金') >= 0, 'N6 没填的显示「＋ 定金」');
+  /* 附件行里不该出现日期（用户要求：预定时间和本体共享） */
+  ok(h.indexOf('预定日期') < 0 && h.indexOf('出货') < 0, 'N7 ★ 附件行里没有日期（日期跟本体共享）');
+  eq(E.poAttachChips({ 附件: [] }), '', 'N8 没附件 → 不渲染附件块');
+  eq(E.poAttachChips({}), '', 'N9 连字段都没有 → 不渲染');
+
+  /* 字段路径解析 */
+  const t = E.poFieldOf(row, '附件:0:尾款');
+  ok(t.obj === row['附件'][0] && t.key === '尾款', 'N10 poFieldOf 能按路径定位到附件的字段');
+  const t2 = E.poFieldOf(row, '定金');
+  ok(t2.obj === row && t2.key === '定金', 'N11 普通字段原样返回（obj 就是本体行）');
+
+  /* 写回：填附件的定金 → 只改附件，不动本体 */
+  function nbox(id, f, vals) {
+    return {
+      getAttribute: function (n) { return n === 'data-id' ? id : (n === 'data-f' ? f : null); },
+      querySelector: function (sel) {
+        const m = /data-poseg="([a-z]+)"/.exec(sel);
+        if (!m) return null;
+        const v = vals[m[1]];
+        return (v == null) ? null : { value: String(v) };
+      },
+    };
+  }
+  E.ui.poEdit = { id: 'n1', f: '附件:0:定金' };
+  E.poInlineCommit(nbox('n1', '附件:0:定金', { num: '188' }));
+  eq(row['附件'][0]['定金'], 188, 'N12 附件的定金写回成 188');
+  eq(row['定金'], undefined, 'N13 ★ 本体没被误改');
+  ok(typeof row['附件'][0]['定金'] === 'number', 'N14 存的是数字');
+
+  /* 卡片上能看到附件块 */
+  const card = E.poCardHTML(row);
+  ok(card.indexOf('po-atts') >= 0, 'N15 卡片上有附件块');
+  ok(card.indexOf('data-f="附件:0:尾款"') >= 0, 'N16 卡片上附件尾款标签在');
+  /* 没有附件的卡片不该多出附件块 */
+  ok(E.poCardHTML(mkRow({ _id: 'n2', 名称: '没附件的' })).indexOf('po-atts') < 0,
+    'N17 没附件的卡片不出现附件块');
 }
 
 /* ---------- 结果 ---------- */

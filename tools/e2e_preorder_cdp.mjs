@@ -125,7 +125,11 @@ async function main() {
         { _id:'po2', 名称:'季度出货的玩偶', 大类:'毛绒', IP:'三丽鸥', 状态:['已预订'], 持有:0,
           预定日期: off(-20), 预定出货日期: new Date().getFullYear()+'-Q4', _upd:1, _rev:1 },
         { _id:'po3', 名称:'没填日期的', 大类:'周边', 状态:['已预订'], 持有:null, _upd:1, _rev:1 },
-        { _id:'po4', 名称:'在库的不该出现', 大类:'周边', 状态:['在库'], 持有:2, _upd:1, _rev:1 }
+        { _id:'po4', 名称:'在库的不该出现', 大类:'周边', 状态:['在库'], 持有:2, _upd:1, _rev:1 },
+        /* v163：带附件的预定物 —— 附件有各自的定金/尾款，预定日期跟本体共享 */
+        { _id:'po5', 名称:'带附件的预定品', 大类:'手办', IP:'宝可梦', 状态:['已预订'], 持有:null,
+          预定日期: off(-5), 预定出货日期: off(3), 定金:100, 尾款:200,
+          附件:[{名称:'DLC 立牌', 类型:'DLC', 定金:50, 尾款:30}], _upd:1, _rev:1 }
       ];
       window.__render();
     }
@@ -140,7 +144,7 @@ async function main() {
     out.noOldTimeline = h1.indexOf('最近留下的') < 0;
     out.hasCal        = h1.indexOf('po-monthcal') >= 0 && h1.indexOf('po-calgrid') >= 0;
     out.hasToday      = h1.indexOf('po-cell today') >= 0;
-    out.count3        = h1.indexOf('3 件在预定中') >= 0;
+    out.count3        = h1.indexOf('4 件在预定中') >= 0;   /* v163：多了 po5（带附件那条） */
     out.noInLibRow    = h1.indexOf('在库的不该出现') < 0;
     /* v156：总览页的金额面板不再重复显示「累计投入」（用户说它和「充电量」是同一个数） */
     out.hasCharge      = h1.indexOf('充电量') >= 0;
@@ -268,6 +272,30 @@ async function main() {
       }
     }
 
+    /* ⑨ v163：附件的定金 / 尾款 —— 附件自己有这两项，到货算价把附件也算进去 */
+    inject();
+    out.attBlock = !!document.querySelector('.pocard[data-id="po5"] .po-atts');
+    var attChip = document.querySelector('[data-act="poedit"][data-id="po5"][data-f="附件:0:定金"]');
+    out.attChip = !!attChip;
+    if (attChip){
+      attChip.click();
+      var edA = document.querySelector('.po-inlineedit[data-id="po5"] [data-poseg="num"]');
+      out.attNumInput = !!edA;
+      if (edA){
+        edA.value = '80';
+        edA.dispatchEvent(new Event('change', {bubbles:true}));
+        var r5b = S.collection.rows.filter(function(x){ return x._id==='po5'; })[0] || {};
+        out.attDepSaved = ((r5b['附件']||[])[0]||{})['定金'];
+        out.bodyDepUnchanged = r5b['定金'];
+      }
+      var recvA = document.querySelector('[data-act="porecv"][data-id="po5"]');
+      if (recvA){
+        recvA.click();
+        var r6 = S.collection.rows.filter(function(x){ return x._id==='po5'; })[0] || {};
+        out.priceWithAtt = r6['购入价格'];
+      }
+    }
+
     out.errs = (window.__errs||[]).slice(0,5);
     return out;
   })()`;
@@ -294,7 +322,11 @@ async function main() {
         S.collection.rows=[
           {_id:'s1',名称:'30周年冰箱贴 · 梦幻',大类:'周边',小类:'冰箱贴',IP:'宝可梦',系列:'30周年冰箱贴',
            状态:['已预订'],持有:null,预定日期:off(-6),预定出货日期:off(2),
-           定金:300,尾款:1200,_upd:1,_rev:1},
+           定金:300,尾款:1200,
+           /* v163：附件也有各自的定金/尾款（预定日期跟本体共享） */
+           附件:[{名称:'特典亚克力立牌',类型:'DLC',定金:120,尾款:280},
+                 {名称:'限定挂件',类型:'特典',尾款:80}],
+           _upd:1,_rev:1},
           {_id:'s2',名称:'星际宝贝 毛绒挂件',大类:'毛绒',IP:'星际宝贝',状态:['已预订'],持有:null,
            预定日期:off(-24),预定出货日期:ym(-1),定金:200,_upd:1,_rev:1},
           {_id:'s3',名称:'三丽鸥 库洛米 手办',大类:'手办',IP:'三丽鸥',状态:['已预订'],持有:0,
@@ -323,7 +355,7 @@ async function main() {
   ok(o.noOldTimeline, '① 原来「最近留下的」已经不在页面上');
   ok(o.hasCal, '② 出货日历画出来了');
   ok(o.hasToday, '② 今天的格子上有 today 标记');
-  ok(o.count3, '② 顶部提示「3 件在预定中」（只算已预订的）');
+  ok(o.count3, '② 顶部提示「4 件在预定中」（只算已预订的）');
   ok(o.noInLibRow, '② 「在库」的东西没有混进预定物面板');
   ok(o.hasCharge, '② 总览页的「充电量」还在');
   ok(o.noDoubleCharge, '② ★ 不再重复显示「累计投入」（和充电量是同一个数）');
@@ -347,6 +379,12 @@ async function main() {
   ok(o.inlineSaved === '2027-Q4', '⑦ 选「2027 + 四季度」→ 立刻写进数据（得到 ' + o.inlineSaved + '）');
   ok(o.stillEditing, '⑦ 写完之后编辑区还在（可以接着改下一段）');
   ok(o.inlineClosed, '⑦ 点 ✓ 能收起');
+  ok(o.attBlock, '⑨ 有附件的预定物卡片上有附件块');
+  ok(o.attChip, '⑨ ★ 附件也有「定金」标签（可点、不弹窗）');
+  ok(o.attNumInput, '⑨ 点它就出现数字输入框');
+  ok(o.attDepSaved === 80, '⑨ ★ 附件定金存成 80（得到 ' + o.attDepSaved + '）');
+  ok(o.bodyDepUnchanged === 100, '⑨ ★ 改附件没动本体的定金（还是 100）');
+  ok(o.priceWithAtt === 410, '⑨ ★ 到货算价含附件：本体 100+200 ＋ 附件 80+30 = ¥' + o.priceWithAtt);
   ok(o.depChip, '⑧ 卡片上有「定金」标签');
   ok(o.hasNumInput, '⑧ ★ 点一下就地出现金额输入框');
   ok(o.depSaved === 300 && o.balSaved === 200, '⑧ ★ 定金 300 / 尾款 200 都存进去了（得到 ' + o.depSaved + ' / ' + o.balSaved + '）');

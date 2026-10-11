@@ -4256,3 +4256,14 @@ input.search{margin-bottom:12px}
   .childwall{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px}
   .childrow .childcov{width:40px;height:50px}
 }
+
+/* v163：预定物卡片上的**附件行** —— 每个附件一行（类型 + 名字 + 定金/尾款两个可点标签）。
+   用户要的：附件也有各自的定金/尾款，但预定时间跟本体共享（所以这行里不出现日期）。 */
+.po-atts{margin-top:7px;display:flex;flex-direction:column;gap:5px;
+  border-top:1px dashed rgba(111,89,67,.18);padding-top:7px}
+.po-attrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.po-attname{font-size:11.5px;color:var(--ink);display:inline-flex;align-items:center;gap:5px;
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.po-attname i{font-style:normal;font-size:10px;font-weight:700;letter-spacing:.04em;
+  padding:2px 5px;border-radius:5px;background:rgba(41,37,31,.72);color:#fff;flex:0 0 auto}
+.po-attchips{display:inline-flex;gap:5px;flex-wrap:wrap;margin-left:auto}
