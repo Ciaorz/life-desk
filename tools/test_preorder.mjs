@@ -64,8 +64,9 @@ function extractVar(decl) {
 const FUZZY_FNS = ['fzPad2', 'fuzzyDateInfo', 'fuzzyDateKey', 'fuzzyDateEndKey',
   'fuzzyDateText', 'fuzzyDateIsVague', 'fuzzyDaysFromToday'];
 const PO_FNS = ['poTodayKey', 'poRows', 'poSort', 'poWhenText', 'poDueChip', 'poBookedChip',
-  'poMoneyChip', 'poTotalChip', 'nameHTML',
-  'poFieldOf', 'poSetField', 'poAttachChips', 'attachList', 'attachTypes',
+  'poMoneyChip', 'nameHTML',
+  'poFieldOf', 'poSetField', 'poMoneyBlock', 'poTotalOf', 'poGrandTotalOf',
+  'attachList', 'attachTypes',
   'poInlineEditHTML', 'poInlineCommit', 'poCardHTML', 'poMonthCalHTML', 'poCalHTML', 'preorderPanel'];
 const code = [
   extractVar('var FUZZY_Q_NAME'),
@@ -119,7 +120,8 @@ function makeEnv(rows, poCal) {
              poMonthCalHTML:poMonthCalHTML, poCardHTML:poCardHTML, poInlineEditHTML:poInlineEditHTML,
              poInlineCommit:poInlineCommit, channelOptionsAll:channelOptionsAll,
              poDueChip:poDueChip, poWhenText:poWhenText, poMoneyChip:poMoneyChip,
-             poTotalChip:poTotalChip, poAttachChips:poAttachChips, poFieldOf:poFieldOf,
+             poMoneyBlock:poMoneyBlock, poTotalOf:poTotalOf,
+             poGrandTotalOf:poGrandTotalOf, poFieldOf:poFieldOf,
              store:store, ui:ui, log:log };`);
   return factory(store, ui, log);
 }
@@ -455,11 +457,12 @@ console.log('[M] 定金 / 尾款');
   ok(/todo/.test(c2), 'M4 没填时带 todo 样式（虚线框，一眼看出能点）');
 
   /* 合计：两个都空就不显示；填了任意一个就显示 */
-  eq(E.poTotalChip({}), '', 'M5 两个都没填 → 不显示合计');
-  ok(E.poTotalChip({ 定金: 100, 尾款: 400 }).indexOf('合计 ¥500') >= 0, 'M6 定金+尾款 → 合计 ¥500');
-  ok(E.poTotalChip({ 定金: 100 }).indexOf('合计 ¥100') >= 0, 'M7 只填定金也算合计');
-  ok(E.poTotalChip({ 尾款: 0 }).indexOf('合计 ¥0') >= 0, 'M8 尾款是 0 也算（0 是有效金额）');
-  eq(E.poTotalChip({ 定金: '', 尾款: '' }), '', 'M9 空串当没填');
+  /* v166：合计算的是「金额」本身，poTotalOf 是唯一入口（本体 / 附件 / 整单三方共用） */
+  eq(E.poTotalOf({}), null, 'M5 两个都没填 → null（不是 0，否则卡片会冒出一排 ¥0）');
+  eq(E.poTotalOf({ 定金: 100, 尾款: 400 }), 500, 'M6 定金+尾款 → 500');
+  eq(E.poTotalOf({ 定金: 100 }), 100, 'M7 只填定金也算合计');
+  eq(E.poTotalOf({ 尾款: 0 }), 0, 'M8 尾款是 0 也算（0 是有效金额）');
+  eq(E.poTotalOf({ 定金: '', 尾款: '' }), null, 'M9 空串当没填');
 
   /* 就地编辑：数字输入框 */
   const box = E.poInlineEditHTML(Object.assign({ _id: 'm1' }, { 定金: 88 }), '定金');
@@ -492,37 +495,46 @@ console.log('[M] 定金 / 尾款');
   row['定金'] = 100; row['尾款'] = 400;
   const card = E.poCardHTML(row);
   ok(/data-f="定金"/.test(card) && /data-f="尾款"/.test(card), 'M17 卡片上有定金和尾款的标签');
-  ok(card.indexOf('合计 ¥500') >= 0, 'M18 卡片上显示合计（提前看到到货会填多少）');
+  ok(card.indexOf('¥500') >= 0, 'M18 卡片上显示合计（v166 起是金额块里那一行的行内合计）');
 }
 
-/* ---------- N. 附件的定金 / 尾款（v163） ---------- */
-console.log('[N] 附件的定金 / 尾款');
+/* ---------- N. 金额块：本体 + 附件 + 总合计（v163 起，v166 合并成一块） ---------- */
+console.log('[N] 金额块（本体 + 附件 + 总合计）');
 {
-  const E = makeEnv([mkRow({ _id: 'n1', 名称: '带附件的预定物',
-    附件: [{ 名称: 'DLC 立牌', 类型: 'DLC', 定金: 50, 尾款: 70 },
+  const E = makeEnv([mkRow({ _id: 'n1', 名称: '带附件的预定物', 定金: 100, 尾款: 200,
+    附件: [{ 名称: 'DLC 立牌', 类型: 'DLC', 定金: 50, 尾款: 60 },
            { 名称: '特典挂件', 类型: '特典' }] })]);
   const row = E.store.collection.rows[0];
 
-  /* 附件行渲染 */
-  const h = E.poAttachChips(row);
-  ok(h.indexOf('po-atts') >= 0, 'N1 有附件 → 渲染出附件块');
-  ok(h.indexOf('DLC') >= 0 && h.indexOf('特典') >= 0, 'N2 两个附件的类型都出来了');
-  ok(h.indexOf('DLC 立牌') >= 0 && h.indexOf('特典挂件') >= 0, 'N3 附件名字也在');
-  ok(h.indexOf('data-f="附件:0:定金"') >= 0, 'N4 第一个附件的定金标签带**字段路径**');
-  ok(h.indexOf('定金 ¥50') >= 0, 'N5 已填的定金显示成「定金 ¥50」');
-  ok(h.indexOf('＋ 定金') >= 0, 'N6 没填的显示「＋ 定金」');
-  /* 附件行里不该出现日期（用户要求：预定时间和本体共享） */
-  ok(h.indexOf('预定日期') < 0 && h.indexOf('出货') < 0, 'N7 ★ 附件行里没有日期（日期跟本体共享）');
-  eq(E.poAttachChips({ 附件: [] }), '', 'N8 没附件 → 不渲染附件块');
-  eq(E.poAttachChips({}), '', 'N9 连字段都没有 → 不渲染');
+  const h = E.poMoneyBlock(row);
+  ok(h.indexOf('po-money') >= 0, 'N1 有金额块');
+  ok(h.indexOf('本体') >= 0, 'N2 第一行是「本体」');
+  ok(h.indexOf('DLC') >= 0 && h.indexOf('特典') >= 0, 'N3 附件的类型标签都在');
+  ok(h.indexOf('DLC 立牌') >= 0 && h.indexOf('特典挂件') >= 0, 'N4 附件名字都在');
+  ok(h.indexOf('data-f="定金"') >= 0, 'N5 本体定金标签带字段名');
+  ok(h.indexOf('data-f="附件:0:定金"') >= 0, 'N6 ★ 附件定金带**字段路径**（和本体在同一个块里）');
+  ok(h.indexOf('定金 ¥50') >= 0, 'N7 已填的显示金额');
+  ok(h.indexOf('＋ 定金') >= 0, 'N8 没填的显示「＋ 定金」');
 
-  /* 字段路径解析 */
+  ok(h.indexOf('¥300') >= 0, 'N9 ★ 本体行自带合计 ¥300（100+200）');
+  ok(h.indexOf('¥110') >= 0, 'N10 ★ 附件行也有合计 ¥110（50+60）');
+  ok(h.indexOf('总合计') >= 0, 'N11 ★ 有「总合计」一行');
+  ok(h.indexOf('¥410') >= 0, 'N12 ★ 总合计 ¥410（本体 300 + 附件 110）');
+  ok(h.indexOf('po-mtotal none') >= 0, 'N13 ★ 一项都没填的行显示「—」，不冒充 ¥0');
+  ok(h.indexOf('预定日期') < 0 && h.indexOf('出货') < 0, 'N14 金额块里没有日期（日期跟本体共享）');
+
+  /* 只有本体、没有附件：仍有本体行，但没有附件行、也不出「总合计」（会和本体行重复） */
+  const h2 = E.poMoneyBlock(mkRow({ _id: 'n2', 名称: '没附件', 定金: 10 }));
+  ok(h2.indexOf('po-money') >= 0, 'N15 没附件的卡片也有金额块（本体行）');
+  ok(h2.indexOf('po-mname"><i>') < 0, 'N16 没附件 → 没有附件行');
+  ok(h2.indexOf('总合计') < 0, 'N17 ★ 只有本体时不出「总合计」（和本体行完全重复）');
+
+  /* 字段路径解析 / 写回 */
   const t = E.poFieldOf(row, '附件:0:尾款');
-  ok(t.obj === row['附件'][0] && t.key === '尾款', 'N10 poFieldOf 能按路径定位到附件的字段');
+  ok(t.obj === row['附件'][0] && t.key === '尾款', 'N18 poFieldOf 按路径定位附件字段');
   const t2 = E.poFieldOf(row, '定金');
-  ok(t2.obj === row && t2.key === '定金', 'N11 普通字段原样返回（obj 就是本体行）');
+  ok(t2.obj === row && t2.key === '定金', 'N19 普通字段原样返回');
 
-  /* 写回：填附件的定金 → 只改附件，不动本体 */
   function nbox(id, f, vals) {
     return {
       getAttribute: function (n) { return n === 'data-id' ? id : (n === 'data-f' ? f : null); },
@@ -536,18 +548,17 @@ console.log('[N] 附件的定金 / 尾款');
   }
   E.ui.poEdit = { id: 'n1', f: '附件:0:定金' };
   E.poInlineCommit(nbox('n1', '附件:0:定金', { num: '188' }));
-  eq(row['附件'][0]['定金'], 188, 'N12 附件的定金写回成 188');
-  eq(row['定金'], undefined, 'N13 ★ 本体没被误改');
-  ok(typeof row['附件'][0]['定金'] === 'number', 'N14 存的是数字');
+  eq(row['附件'][0]['定金'], 188, 'N20 附件定金写回 188');
+  eq(row['定金'], 100, 'N21 ★ 本体定金没被误改');
+  ok(typeof row['附件'][0]['定金'] === 'number', 'N22 存的是数字');
 
-  /* 卡片上能看到附件块 */
+  /* 卡片上能看到金额块 */
   const card = E.poCardHTML(row);
-  ok(card.indexOf('po-atts') >= 0, 'N15 卡片上有附件块');
-  ok(card.indexOf('data-f="附件:0:尾款"') >= 0, 'N16 卡片上附件尾款标签在');
-  /* 没有附件的卡片不该多出附件块 */
-  ok(E.poCardHTML(mkRow({ _id: 'n2', 名称: '没附件的' })).indexOf('po-atts') < 0,
-    'N17 没附件的卡片不出现附件块');
+  ok(card.indexOf('po-money') >= 0, 'N23 卡片上有金额块');
+  ok(card.indexOf('data-f="附件:0:尾款"') >= 0, 'N24 卡片上附件尾款标签在');
+  ok(card.indexOf('总合计') >= 0, 'N25 卡片上也有总合计');
 }
+
 
 /* ---------- 结果 ---------- */
 console.log('\n----------------------------------------');

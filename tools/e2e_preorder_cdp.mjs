@@ -260,7 +260,8 @@ async function main() {
         if (edN2){ edN2.value = '200'; edN2.dispatchEvent(new Event('change', {bubbles:true})); }
         var r4 = S.collection.rows.filter(function(x){ return x._id==='po1'; })[0] || {};
         out.balSaved = r4['尾款'];
-        out.totalChip = (stage().indexOf('合计 ¥500') >= 0);
+        var _mt = document.querySelector('.pocard[data-id="po1"] .po-mrow-body .po-mtotal');
+        out.totalChip = (!!_mt && _mt.textContent === '¥500');
       }
       var recv = document.querySelector('[data-act="porecv"][data-id="po1"]');
       out.recvBtn2 = !!recv;
@@ -274,7 +275,8 @@ async function main() {
 
     /* ⑨ v163：附件的定金 / 尾款 —— 附件自己有这两项，到货算价把附件也算进去 */
     inject();
-    out.attBlock = !!document.querySelector('.pocard[data-id="po5"] .po-atts');
+    /* v166：金额块 —— 本体和附件的定金/尾款挤在同一块里，各带合计，末尾总合计 */
+    out.attBlock = !!document.querySelector('.pocard[data-id="po5"] .po-money');
     var attChip = document.querySelector('[data-act="poedit"][data-id="po5"][data-f="附件:0:定金"]');
     out.attChip = !!attChip;
     if (attChip){
@@ -287,6 +289,10 @@ async function main() {
         var r5b = S.collection.rows.filter(function(x){ return x._id==='po5'; })[0] || {};
         out.attDepSaved = ((r5b['附件']||[])[0]||{})['定金'];
         out.bodyDepUnchanged = r5b['定金'];
+        var _bt = document.querySelector('.pocard[data-id="po5"] .po-mrow-body .po-mtotal');
+        out.bodyRowTotal = _bt ? _bt.textContent : '';
+        var _gt = document.querySelector('.pocard[data-id="po5"] .po-grand .po-mtotal');
+        out.grandRowTotal = _gt ? _gt.textContent : '';
       }
       var recvA = document.querySelector('[data-act="porecv"][data-id="po5"]');
       if (recvA){
@@ -384,11 +390,13 @@ async function main() {
   ok(o.attNumInput, '⑨ 点它就出现数字输入框');
   ok(o.attDepSaved === 80, '⑨ ★ 附件定金存成 80（得到 ' + o.attDepSaved + '）');
   ok(o.bodyDepUnchanged === 100, '⑨ ★ 改附件没动本体的定金（还是 100）');
+  ok(o.bodyRowTotal === '¥300', '⑨ ★ 本体那一行自带合计 ¥300（得到 ' + o.bodyRowTotal + '）');
+  ok(o.grandRowTotal === '¥410', '⑨ ★ 总合计把附件算进来：本体 300 + 附件 110 = ' + o.grandRowTotal);
   ok(o.priceWithAtt === 410, '⑨ ★ 到货算价含附件：本体 100+200 ＋ 附件 80+30 = ¥' + o.priceWithAtt);
   ok(o.depChip, '⑧ 卡片上有「定金」标签');
   ok(o.hasNumInput, '⑧ ★ 点一下就地出现金额输入框');
   ok(o.depSaved === 300 && o.balSaved === 200, '⑧ ★ 定金 300 / 尾款 200 都存进去了（得到 ' + o.depSaved + ' / ' + o.balSaved + '）');
-  ok(o.totalChip, '⑧ 卡片上出现「合计 ¥500」');
+  ok(o.totalChip, '⑧ 卡片上本体那一行出现合计 ¥500（v166 起是行内合计，不再单独一颗 chip）');
   ok(o.recvBtn2, '⑧ 有「到货了」按钮');
   ok(o.priceAfter === 500, '⑧ ★ 点「到货了」→ 购入价格自动填成 ¥' + o.priceAfter + '（= 定金+尾款）');
   ok(!o.errs || o.errs.length === 0, '⑧ 页面没有 JS 报错' + (o.errs && o.errs.length ? '：' + JSON.stringify(o.errs) : ''));

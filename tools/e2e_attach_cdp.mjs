@@ -303,6 +303,17 @@ async function main() {
   await clickAt('[data-att-zoom="0.15"]');
   await sleep(200);
 
+  /* 面板截图：保存按钮 + 附件封面的缩放条 */
+  try {
+    await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 950, deviceScaleFactor: 2, mobile: false });
+    await sleep(300);
+    const shotA = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+    const dirA = join(ROOT, '下载图', '_预览');
+    mkdirSync(dirA, { recursive: true });
+    writeFileSync(join(dirA, 'v165-附件面板.png'), Buffer.from(shotA.data, 'base64'));
+    console.log('\n截图存档：附件面板');
+  } catch (e) { /* ignore */ }
+
   await clickAt('#saveBtn');
   await sleep(900);
   const saved = JSON.parse(await ev(`(function(){

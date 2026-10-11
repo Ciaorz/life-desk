@@ -7692,14 +7692,23 @@ function poMoneyChip(r, k, f){
   return '<em class="'+cls+'" data-act="poedit" data-id="'+esc(r._id)+'" data-f="'+esc(f)+'"'+
     ' title="点一下就地填（到货时各项相加会填进「购入价格」）">'+esc(txt)+'</em>';
 }
-/* 两个里填了任意一个就显示「合计」—— 让人提前看到到货后购入价格会是多少 */
-function poTotalChip(r){
-  var d = parseFloat(r['定金']), w = parseFloat(r['尾款']);
-  var hasD = !isNaN(d), hasW = !isNaN(w);
-  if (!hasD && !hasW) return '';
-  var sum = (hasD ? d : 0) + (hasW ? w : 0);
-  return '<em class="po-chip po-sum" title="到货时「购入价格」会自动填成这个数">合计 ¥'+
-    Math.round(sum)+'</em>';
+/* v166：合计的通用算法 —— 本体、单个附件、整单三方共用（两个都没填 → null，不是 0）。
+   ⚠️ 是 null 不是 0：「一件都没填」和「填了 0 元」必须分得开，否则卡片上会冒出一排 ¥0。 */
+function poTotalOf(o){
+  if (!o) return null;
+  var d = parseFloat(o['定金']), w = parseFloat(o['尾款']);
+  var hd = !isNaN(d), hw = !isNaN(w);
+  if (!hd && !hw) return null;
+  return (hd ? d : 0) + (hw ? w : 0);
+}
+/* 整单合计 = 本体 + 所有附件 */
+function poGrandTotalOf(r){
+  var t = poTotalOf(r), any = (t != null), sum = t || 0;
+  attachList(r).forEach(function(a){
+    var x = poTotalOf(a);
+    if (x != null){ sum += x; any = true; }
+  });
+  return any ? sum : null;
 }
 /* v154：卡片上的**就地编辑区** —— 两个日期各一套下拉：
    · 预定出货日期：年 ／ 月或季度 ／ 日（支持模糊，跟表单里那套同一个口径）
@@ -7784,22 +7793,46 @@ function poInlineCommit(box){
 /* v163：预定物卡片上的**附件行** —— 用户要的：「有附件的物品，附件也有各自的定金 / 尾款，
    但预定时间跟本体共享」。所以这里只出金额两个标签（日期一律读本体那两个字段）。
    一个手办可以挂多个附件，每个附件各占一行。 */
-function poAttachChips(r){
-  var list = attachList(r);
-  if (!list.length) return '';
-  var ed = ui.poEdit || {}, same = (String(ed.id||'') === String(r._id));
-  return '<div class="po-atts">'+ list.map(function(a, i){
+/* ============================================================
+ * v166：**金额统一一块**。
+ * 用户原话：「附件的定金尾款和物品的定金尾款距离太远了，放在同一个位置，
+ *           并且附件没有合计信息。然后主物品和附件的所有金额需要一个总的合计。」
+ * 于是：一行一个主体（本体 / 每个附件），每行 = 名称 ·[定金][尾款]· 该行合计，
+ *       最底下一行「总合计」= 本体 + 所有附件。日期仍然单独一行（只有本体有）。
+ * ============================================================ */
+function poMoneyBlock(r){
+  var ed = ui.poEdit || {}, same = (String(ed.id || '') === String(r._id));
+  function chip(k, f){
+    return (same && ed.f === f) ? poInlineEditHTML(r, f) : poMoneyChip(r, k, f);
+  }
+  function total(v){
+    return (v == null) ? '<span class="po-mtotal none">—</span>'
+                       : '<span class="po-mtotal">¥' + Math.round(v) + '</span>';
+  }
+  var rows = '<div class="po-mrow po-mrow-body">' +
+      '<span class="po-mname">本体</span>' +
+      '<span class="po-mchips">' + chip('定金', '定金') + chip('尾款', '尾款') + '</span>' +
+      total(poTotalOf(r)) +
+    '</div>';
+  attachList(r).forEach(function(a, i){
     var nm = a['名称'] || a['类型'] || '附件';
     var kind = a['类型'] || '附件';
-    function chip(k){
-      var f = '附件:' + i + ':' + k;
-      return (same && ed.f === f) ? poInlineEditHTML(r, f) : poMoneyChip(r, k, f);
-    }
-    return '<div class="po-attrow">'+
-      '<span class="po-attname"><i>'+esc(kind)+'</i>'+esc(nm)+'</span>'+
-      '<span class="po-attchips">'+chip('定金')+chip('尾款')+'</span>'+
+    rows += '<div class="po-mrow">' +
+      '<span class="po-mname"><i>' + esc(kind) + '</i>' + esc(nm) + '</span>' +
+      '<span class="po-mchips">' + chip('定金', '附件:' + i + ':定金') + chip('尾款', '附件:' + i + ':尾款') + '</span>' +
+      total(poTotalOf(a)) +
     '</div>';
-  }).join('') + '</div>';
+  });
+  var g = poGrandTotalOf(r);
+  /* 只有**确实有附件**时才出「总合计」—— 没附件时它和本体行完全重复，白占一行 */
+  if (g != null && attachList(r).length > 0){
+    rows += '<div class="po-mrow po-grand">' +
+      '<span class="po-mname">总合计</span>' +
+      '<span class="po-mchips"></span>' +
+      '<span class="po-mtotal">¥' + Math.round(g) + '</span>' +
+    '</div>';
+  }
+  return '<div class="po-money"><div class="po-mhead">金额</div>' + rows + '</div>';
 }
 function poCardHTML(r){
   var nm = r['名称'] || '未命名';
@@ -7808,21 +7841,19 @@ function poCardHTML(r){
   var same = (String(ed.id || '') === String(r._id));
   var editingDue  = same && ed.f === '预定出货日期';
   var editingBook = same && ed.f === '预定日期';
-  var editingDep  = same && ed.f === '定金';
-  var editingBal  = same && ed.f === '尾款';
+  /* v166：定金的就地编辑判定挪进了 poMoneyBlock（它要同时管本体和每个附件） */
   return '<div class="pocard'+(same?' poediting':'')+'" data-act="popen" data-id="'+esc(r._id)+'">'+
     '<div class="pocov" style="'+coverStyle(r, nm)+'">'+(hasCover(r)?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
     '<div class="pobody">'+
       '<strong>'+nameHTML(r)+'</strong>'+
       (sub?'<span>'+esc(sub)+'</span>':'')+
+      /* 日期行只有本体有（附件与本体共享预定 / 出货日期） */
       '<div class="pochips">'+
         (editingBook ? poInlineEditHTML(r, '预定日期') : poBookedChip(r))+
         (editingDue  ? poInlineEditHTML(r, '预定出货日期') : poDueChip(r))+
-        (editingDep  ? poInlineEditHTML(r, '定金') : poMoneyChip(r, '定金'))+
-        (editingBal  ? poInlineEditHTML(r, '尾款') : poMoneyChip(r, '尾款'))+
-        poTotalChip(r)+
       '</div>'+
-      poAttachChips(r)+
+      /* v166：本体 + 所有附件的金额挤在同一块里（一行一个主体，各自带合计，末尾总合计） */
+      poMoneyBlock(r)+
     '</div>'+
     '<div class="poacts">'+
       '<button type="button" class="po-recv" data-act="porecv" data-id="'+esc(r._id)+'" title="到货了：状态改成「在库」，持有补成 1，购入价格按 定金+尾款（含附件）自动填">到货了</button>'+
