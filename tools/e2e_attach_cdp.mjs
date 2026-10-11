@@ -175,6 +175,12 @@ async function main() {
     return (pb.right - tb.right) < 14 && (pb.bottom - tb.bottom) < 16; })()`),
     '★ 标签确实贴着卡片的右下角');
   ok(await ev(`(function(){
+    var t=document.querySelector('.poster .dlctag'); if(!t) return false;
+    var b=t.getBoundingClientRect();
+    return b.height >= 20 && b.width >= 26; })()`),
+    '★ 标签的点击热区够大（用户报「容易点不到」）—— 实测 '
+      + await ev(`(function(){var b=document.querySelector('.poster .dlctag').getBoundingClientRect(); return Math.round(b.width)+'×'+Math.round(b.height);})()`));
+  ok(await ev(`(function(){
     var p=document.querySelector('.poster[data-id="a2"]');
     return !!p && !p.querySelector('.dlctag'); })()`),
     '没附件的卡片上不出现标签');
@@ -218,6 +224,10 @@ async function main() {
 
   await clickAt('[data-act="attopen"]');
   ok(await ev(`!!document.querySelector('.sheet-attach')`), '★ 点「附件」→ 右边并出附件面板');
+  ok(await ev(`!!document.querySelector('.sheet-attach [data-act="attsave"]')`),
+    '★ 附件面板自带「保存」按钮（用户不用再去左边找）');
+  ok(await ev(`!!document.querySelector('.sheet-attach .att-tip')`),
+    '并有一句「改完要点保存」的提示');
   ok(await ev(`document.getElementById('sheetHost').classList.contains('pair')`),
     '弹出层切成了并排布局');
   ok(await ev(`(function(){
@@ -258,6 +268,41 @@ async function main() {
     return !!b && b.querySelector('b').textContent === 'DLC'; })()`),
     '类型改成 DLC，列表标签跟着变');
 
+  /* ---------- ②b v165：附件封面的「粘贴 + 缩放 / 位移」 ---------- */
+  console.log('\n[②b] 附件封面：缩放 / 位移 + 粘贴');
+  ok(await ev(`!!document.querySelector('[data-att-prev]')`), '面板里有封面预览框');
+  ok(await ev(`(function(){ var b=document.querySelector('.attvp-bar'); return !!b && b.hidden; })()`),
+    '还没封面时，缩放条是收起的');
+
+  await ev(`(function(){
+    var svg='<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><rect width="160" height="120" fill="#7a9c74"/></svg>';
+    var i=document.querySelector('[data-att-f="封面"]');
+    i.value='data:image/svg+xml,'+encodeURIComponent(svg);
+    i.dispatchEvent(new Event('input',{bubbles:true}));
+    return 1; })()`);
+  await sleep(200);
+  ok(await ev(`(function(){ var b=document.querySelector('.attvp-bar'); return !!b && !b.hidden; })()`),
+    '★ 填了封面 → 缩放条出现');
+  ok(await ev(`(function(){
+    var p=document.querySelector('[data-att-prev]');
+    var sz=p.style.backgroundSize||'';
+    return sz !== '' && sz.indexOf('cover') < 0; })()`),
+    '★ 预览用的是「视口」尺寸（不再写死 cover）');
+
+  await clickAt('[data-att-zoom="0.15"]');
+  await sleep(200);
+  const z1 = Number(await ev(`document.querySelector('[data-att-zoomslider]').value`));
+  ok(z1 > 1, '★ 点「＋」→ 缩放值变大（' + z1.toFixed(2) + '）');
+  ok(await ev(`document.querySelector('[data-att-pct]').textContent === Math.round(Number(document.querySelector('[data-att-zoomslider]').value)*100)+'%'`),
+    '百分比读数跟着变');
+  await clickAt('[data-att-reset]');
+  await sleep(200);
+  ok(Number(await ev(`document.querySelector('[data-att-zoomslider]').value`)) === 1, '点「重置」→ 回到 100%');
+  /* 再放大两档：好验证「视口」确实写进了数据（默认值不写字段） */
+  await clickAt('[data-att-zoom="0.15"]');
+  await clickAt('[data-att-zoom="0.15"]');
+  await sleep(200);
+
   await clickAt('#saveBtn');
   await sleep(900);
   const saved = JSON.parse(await ev(`(function(){
@@ -268,6 +313,11 @@ async function main() {
   const last = (saved.att || [])[2] || {};
   ok(last['名称'] === '限定亚克力立牌' && last['类型'] === 'DLC', '新增的那个名称 / 类型都对');
   ok(last['价格'] === 199 && typeof last['价格'] === 'number', '★ 价格存成数字 199（不是字符串）');
+  /* ②b 里填封面的是**刚新增的那个附件**（attSel 指向它，就是 last） */
+  ok(!!(last['封面'] && String(last['封面']).indexOf('svg+xml') >= 0),
+    '★ 附件封面进了数据（填的 SVG 带回去了）');
+  ok(!!last['封面视口'] && typeof last['封面视口']['s'] === 'number',
+    '★ 封面视口（缩放/位移）也跟着存进去了：' + JSON.stringify(last['封面视口']));
 
   /* 回到卡片墙：新增的附件要能在卡片上看到。
      ⚠️ 卡片墙 (.poster) 出现在**经典视图的系列详情**里：

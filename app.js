@@ -8082,7 +8082,7 @@ function attachList(row){
   if (!Array.isArray(a)) a = [a];        /* 兜底：被存成单个对象也认 */
   return a.map(function(x){
     if (!x || typeof x !== 'object') return null;
-    return {
+    var o = {
       名称: String(x['名称'] == null ? '' : x['名称']).trim(),
       类型: String(x['类型'] == null ? '' : x['类型']).trim(),
       价格: x['价格'],
@@ -8090,6 +8090,14 @@ function attachList(row){
       定金: x['定金'],
       尾款: x['尾款']
     };
+    /* v165：封面的缩放 / 位移。⚠️ 这个函数会**重建对象**（就是上面那份字面量），
+       新增字段必须在这里补上 —— 否则编辑面板里调好的视口一保存就被丢掉。 */
+    var vp = x['封面视口'];
+    if (vp && typeof vp === 'object'){
+      var s = num(vp.s) || 1, vx = num(vp.x) || 0, vy = num(vp.y) || 0;
+      if (s !== 1 || vx !== 0 || vy !== 0) o['封面视口'] = { s: s, x: vx, y: vy };
+    }
+    return o;
   }).filter(function(x){
     return x && (x['名称'] || x['类型'] || x['封面'] || num(x['价格']) || num(x['定金']) || num(x['尾款']));
   });
@@ -8109,6 +8117,14 @@ function attachCoverUrl(a){
   if (!c) return '';
   if (Array.isArray(c)){ c = (c[0] && (c[0].imageUrl || c[0].url)) || ''; }
   return resolveImgUrl(String(c || ''));
+}
+/* v165：附件封面的「缩放 / 位置」—— 和物品封面同一套语义（s/x/y），存在附件的 `封面视口` 上。
+   物品封面用的是 `封面[0].viewport`（数组嵌套），附件封面是**平铺的字符串**，
+   所以另开一个字段，不动已有数据（老附件没这个字段 → 默认 {s:1,x:0,y:0}）。 */
+function attachVp(a){
+  var v = a && a['封面视口'];
+  if (!v || typeof v !== 'object') return { s:1, x:0, y:0 };
+  return { s: num(v.s) || 1, x: num(v.x) || 0, y: num(v.y) || 0 };
 }
 /* ============================================================
  * v159：物品名的展示 —— 「名称」黑色 + 「备注名」灰色小一号。
@@ -8137,7 +8153,11 @@ function dlcCardHTML(a, i){
   var kind = a['类型'] || '附件';
   var pr = num(a['价格']);
   var cu = attachCoverUrl(a);
-  var bg = cu ? "background-image:url('"+cu.replace(/[\"'()\\]/g,'')+"');background-size:cover;background-position:center" : '';
+  /* v165：附件封面也能调缩放 / 位置 —— 换算与物品卡片同源（卡片一律不用 contain） */
+  var avp = attachVp(a);
+  var bg = cu ? ("background-image:url('"+cu.replace(/["'()\\]/g,'')+"')"+
+    ";background-repeat:no-repeat;background-position:"+vpPosCss(avp)+
+    ";background-size:"+vpSizeCss(avp.s, false)) : '';
   return '<div class="dlccard" title="'+esc(nm)+'">'+
     '<span class="dlckind">'+esc(kind)+'</span>'+
     '<div class="dlccov'+(cu?'':' noimg')+'" style="'+bg+'">'+(cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
@@ -10986,6 +11006,8 @@ document.addEventListener('click', function(ev){
   var key = node.getAttribute('data-key');
   /* v162：附件编辑面板 —— 在编辑表单右边并出（左=本体，右=附件） */
   if (act==='attopen'){ openAttachPanel(); return; }
+  /* v165：附件面板里的「保存」= 点一下主表单的保存按钮（走同一套校验 / 落库 / 关表单） */
+  if (act==='attsave'){ var _sb = $('saveBtn'); if (_sb) _sb.click(); return; }
   if (act==='attclose'){ closeAttachPanel(); return; }
   if (act==='attsel'){ ui.attSel = num(node.getAttribute('data-i')); rerenderAttachPanel(); return; }
   if (act==='attadd'){
@@ -12305,12 +12327,17 @@ function setImgPreview(prev, url, k){
   var hint = prev.querySelector('.imgvp-hint'); if (hint) hint.hidden = false;
   var bar = prev.parentNode.querySelector('.imgvp-bar'); if (bar) bar.hidden = false;
 }
+/* v165：把「按视口上样式」抽出来 —— 表单封面（editing.vals）与附件封面（附件对象）共用这一份 */
+function applyVpTo(prev, vp){
+  if (!prev) return;
+  vp = vp || {s:1,x:0,y:0};
+  prev.style.backgroundPosition = vpPosCss(vp);
+  prev.style.backgroundSize = vpSizeCss(vp.s, true);
+}
 function applyImgViewport(prev, k){
   if (!prev || !k) return;
   var vp = (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0};
-  /* v146：尺寸/位置换算统一走 vpSizeCss / vpPosCss（卡片、初始内联样式用的是同一对函数） */
-  prev.style.backgroundPosition = vpPosCss(vp);
-  prev.style.backgroundSize = vpSizeCss(vp.s, true);
+  applyVpTo(prev, vp);
 }
 /* ---------- 表单控件绑定（单个表单 / 批量表单共用） ---------- */
 function wireFormControls(host, saveDraft){
@@ -13923,7 +13950,12 @@ function attachPanelHTML(){
   var sel = num(ui.attSel);
   if (sel < 0 || sel >= list.length) sel = list.length ? 0 : -1;
   var h = '<div class="sheet-head"><div><p>Attachments</p><h2>附件</h2></div>'+
-    '<button class="x" type="button" data-act="attclose" aria-label="收起附件">×</button></div>';
+    '<div class="att-head-btns">'+
+      /* v165：用户问「附件编辑好之后是不是要点保存」—— 是。索性把「保存」直接放这儿，
+         免得他去左边主表单上找（点了就等于点主表单的保存，整条记录一起落库）。 */
+      '<button class="btn primary sm" type="button" data-act="attsave" title="保存整条记录（包括附件）">保存</button>'+
+      '<button class="x" type="button" data-act="attclose" aria-label="收起附件">×</button>'+
+    '</div></div>';
   if (list.length){
     h += '<div class="attlist">'+list.map(function(a, i){
       return '<button type="button" class="attitem'+(i===sel?' on':'')+'" data-act="attsel" data-i="'+i+'">'+
@@ -13933,17 +13965,27 @@ function attachPanelHTML(){
     h += '<p class="attempty">还没有附件。点下面的「＋ 添加附件」，给这件东西挂个 DLC / 特典。</p>';
   }
   h += '<button type="button" class="btn ghost sm attaddbtn" data-act="attadd">＋ 添加附件</button>';
+  h += '<p class="att-tip">新加 / 改完附件后，点右上角「保存」才会真正写进数据（等于左侧表单的「保存」）。</p>';
   if (sel >= 0){
     var a = list[sel];
     var cu = String(a['封面'] || '');
+    var _avp = attachVp(a);
+    var _abgStyle = cu ? ("background-image:url('"+resolveImgUrl(cu).replace(/["'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+vpPosCss(_avp)+";background-size:"+vpSizeCss(_avp.s,true)) : '';
     h += '<div class="attform">'+
       '<label class="af"><u>名称</u><input data-att-f="名称" type="text" value="'+esc(a['名称'] || '')+'" placeholder="如 特典亚克力立牌" autocomplete="off"></label>'+
       '<label class="af"><u>类型</u><input data-att-f="类型" type="text" list="attTypeList" value="'+esc(a['类型'] || '')+'" placeholder="DLC / 特典…" autocomplete="off"></label>'+
       '<datalist id="attTypeList">'+ATTACH_TYPES.map(function(t){ return '<option value="'+esc(t)+'"></option>'; }).join('')+'</datalist>'+
       '<label class="af"><u>价格</u><input data-att-f="价格" type="number" value="'+(a['价格']==null?'':esc(String(a['价格'])))+'" placeholder="0" inputmode="decimal"></label>'+
       '<div class="af afimg"><u>封面</u>'+
-        '<div class="attcov'+(cu?'':' noimg')+'" data-att-prev="1" style="'+(cu?"background-image:url('"+cu.replace(/[\"'()\\]/g,'')+"');background-size:cover;background-position:center":'')+'">'+(cu?'':'<b>封面</b>')+'</div>'+
-        '<div class="imgrow"><input data-att-f="封面" type="text" value="'+esc(cu)+'" placeholder="图片链接 / 点右侧上传" autocomplete="off">'+
+        '<div class="attcov'+(cu?'':' noimg')+'" data-att-prev="1" tabindex="0" title="拖拽移动 · 滚轮 / 滑杆缩放 · Ctrl+V 粘贴图片" style="'+_abgStyle+'">'+(cu?'':'<b>封面</b>')+'</div>'+
+        '<div class="attvp-bar"'+(cu?'':' hidden')+'>'+
+          '<button type="button" class="btn ghost xs" data-att-zoom="-0.15">−</button>'+
+          '<input type="range" class="attvp-slider" data-att-zoomslider min="'+VP_ZMIN+'" max="'+VP_ZMAX+'" step="0.01" value="'+_avp.s+'" title="拖动缩放">'+
+          '<button type="button" class="btn ghost xs" data-att-zoom="0.15">+</button>'+
+          '<span class="attvp-pct" data-att-pct>'+Math.round(_avp.s*100)+'%</span>'+
+          '<button type="button" class="btn ghost xs" data-att-reset>重置</button>'+
+        '</div>'+
+        '<div class="imgrow"><input data-att-f="封面" type="text" value="'+esc(cu)+'" placeholder="图片链接 / 粘贴图片 / 点右侧上传" autocomplete="off">'+
         '<label class="btn ghost sm upl" for="attUp">上传<input id="attUp" type="file" accept="image/*" hidden></label></div>'+
       '</div>'+
       '<button type="button" class="btn ghost sm attdel" data-act="attdel" data-i="'+sel+'">删除这个附件</button>'+
@@ -13969,6 +14011,29 @@ function wireAttachPanel(panel, saveDraft){
     return (i >= 0 && i < l.length) ? l[i] : null;
   }
   function bump(){ if (saveDraft) saveDraft(); }
+
+  /* 把当前附件封面画到预览框上（含视口）；u 为空就退回「封面」占位 */
+  function paintCover(u){
+    var prev = panel.querySelector('[data-att-prev]');
+    if (!prev) return;
+    var has = !!u;
+    prev.classList.toggle('noimg', !has);
+    if (has){
+      prev.style.backgroundImage = "url('" + resolveImgUrl(u).replace(/["'()\\]/g,'') + "')";
+      prev.style.backgroundRepeat = 'no-repeat';
+      applyVpTo(prev, attachVp(cur()));
+      prev.innerHTML = '';
+    } else {
+      prev.style.backgroundImage = '';
+      prev.style.backgroundRepeat = '';
+      prev.style.backgroundPosition = '';
+      prev.style.backgroundSize = '';
+      prev.innerHTML = '<b>封面</b>';
+    }
+    var bar = panel.querySelector('.attvp-bar');
+    if (bar) bar.hidden = !has;
+  }
+
   panel.querySelectorAll('[data-att-f]').forEach(function(inp){
     var f = inp.getAttribute('data-att-f');
     function commit(){
@@ -13977,43 +14042,105 @@ function wireAttachPanel(panel, saveDraft){
       a[f] = (f === '价格') ? (v === '' ? null : num(v)) : v;
       bump();
       if (f === '类型' || f === '名称') attachSyncList(panel);
-      if (f === '封面'){
-        var prev = panel.querySelector('[data-att-prev]');
-        if (prev){
-          var u = String(v || '');
-          prev.classList.toggle('noimg', !u);
-          prev.style.backgroundImage = u ? "url('"+u.replace(/[\"'()\\]/g,'')+"')" : '';
-          prev.style.backgroundSize = u ? 'cover' : '';
-          prev.style.backgroundPosition = u ? 'center' : '';
-          prev.innerHTML = u ? '' : '<b>封面</b>';
-        }
-      }
+      if (f === '封面') paintCover(String(v || ''));
     }
     inp.addEventListener('input', commit);
     inp.addEventListener('change', commit);
   });
+
   var up = panel.querySelector('#attUp');
   if (up){
     up.onchange = function(){
       var file = up.files && up.files[0]; if (!file) return;
-      compressImage(file, 800, function(dataUrl){
+      /* v165：和表单封面一样压到长边 1200（附件图常是店铺大图，800 有点糊） */
+      compressImage(file, 1200, function(dataUrl){
         if (!dataUrl){ toast('这张图读不出来，换个文件试试'); return; }
         var a = cur(); if (!a) return;
         a['封面'] = dataUrl;
+        a['封面视口'] = a['封面视口'] || { s:1, x:0, y:0 };
         bump();
-        var inp = panel.querySelector('[data-att-f="封面"]');
-        if (inp) inp.value = dataUrl;
-        var prev = panel.querySelector('[data-att-prev]');
-        if (prev){
-          prev.classList.remove('noimg');
-          prev.style.backgroundImage = "url('"+dataUrl+"')";
-          prev.style.backgroundSize = 'cover';
-          prev.style.backgroundPosition = 'center';
-          prev.innerHTML = '';
-        }
+        var inp = panel.querySelector('[data-att-f="封面"]'); if (inp) inp.value = dataUrl;
+        paintCover(dataUrl);
       });
     };
   }
+
+  /* ---------- v165：附件封面的缩放 / 位移（和物品封面同一套手势，不弹窗） ---------- */
+  var prev = panel.querySelector('[data-att-prev]');
+  if (prev){
+    function vp(){ return attachVp(cur()); }
+    function setVp(o){
+      var a = cur(); if (!a) return;
+      var nv = {
+        s: Math.max(VP_ZMIN, Math.min(VP_ZMAX, num(o.s) || 1)),
+        x: Math.max(-VP_PAN, Math.min(VP_PAN, num(o.x) || 0)),
+        y: Math.max(-VP_PAN, Math.min(VP_PAN, num(o.y) || 0))
+      };
+      a['封面视口'] = nv;
+      prev.style.backgroundPosition = vpPosCss(nv);
+      prev.style.backgroundSize = vpSizeCss(nv.s, true);
+      var zsl = panel.querySelector('[data-att-zoomslider]'); if (zsl) zsl.value = nv.s;
+      var pc = panel.querySelector('[data-att-pct]'); if (pc) pc.textContent = Math.round(nv.s*100) + '%';
+      bump();
+    }
+    panel.querySelectorAll('[data-att-zoom]').forEach(function(b){
+      b.onclick = function(){ var o = vp(); o.s = (o.s || 1) + parseFloat(b.getAttribute('data-att-zoom')); setVp(o); };
+    });
+    var zsl = panel.querySelector('[data-att-zoomslider]');
+    if (zsl) zsl.addEventListener('input', function(){ var o = vp(); o.s = parseFloat(zsl.value); setVp(o); });
+    var rb = panel.querySelector('[data-att-reset]');
+    if (rb) rb.onclick = function(){ setVp({ s:1, x:0, y:0 }); };
+
+    /* 拖拽移动：只在拖拽期间挂 document 监听，松手立刻摘掉（不留监听垃圾） */
+    prev.addEventListener('mousedown', function(e){
+      var a = cur(); if (!a || !a['封面']) return;
+      e.preventDefault();
+      var st = { cx: e.clientX, cy: e.clientY, vp: vp() };
+      var w = Math.max(1, prev.clientWidth), h = Math.max(1, prev.clientHeight);
+      prev.classList.add('dragging');
+      function onMove(ev){
+        var o = { s: st.vp.s, x: st.vp.x, y: st.vp.y };
+        o.x = st.vp.x - (ev.clientX - st.cx) * 100 / w * (st.vp.s || 1);
+        o.y = st.vp.y - (ev.clientY - st.cy) * 100 / h * (st.vp.s || 1);
+        setVp(o);
+      }
+      function onUp(){
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        prev.classList.remove('dragging');
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    /* 滚轮缩放 */
+    prev.addEventListener('wheel', function(e){
+      var a = cur(); if (!a || !a['封面']) return;
+      e.preventDefault();
+      var o = vp(); o.s = (o.s || 1) + (e.deltaY < 0 ? 0.08 : -0.08); setVp(o);
+    }, { passive: false });
+  }
+
+  /* Ctrl+V 粘贴图片当附件封面（与表单封面同一个手法） */
+  panel.addEventListener('paste', function(e){
+    var a = cur(); if (!a) return;
+    var items = (e.clipboardData && e.clipboardData.items) || [];
+    for (var i = 0; i < items.length; i++){
+      if (String(items[i].type || '').indexOf('image') !== 0) continue;
+      var file = items[i].getAsFile(); if (!file) continue;
+      e.preventDefault();
+      compressImage(file, 1200, function(dataUrl){
+        if (!dataUrl){ toast('这张图读不出来，换个图片试试'); return; }
+        var b = cur(); if (!b) return;
+        b['封面'] = dataUrl;
+        b['封面视口'] = b['封面视口'] || { s:1, x:0, y:0 };
+        bump();
+        var inp = panel.querySelector('[data-att-f="封面"]'); if (inp) inp.value = dataUrl;
+        paintCover(dataUrl);
+        toast('已把粘贴的图片设为附件封面');
+      });
+      return;
+    }
+  });
 }
 function rerenderAttachPanel(){
   var host = attachCtx && attachCtx.host; if (!host) return;
