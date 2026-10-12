@@ -147,7 +147,11 @@ async function main() {
        附件:[{名称:'特典亚克力立牌', 类型:'DLC', 价格:120},
              {名称:'限定挂件', 类型:'特典', 价格:80}]},
       {_id:'a2', 名称:'没有附件的', 大类:'手办', IP:'宝可梦', 系列:'某系列',
-       状态:['在库'], 持有:1, 编号:'002', _upd:1,_rev:1}
+       状态:['在库'], 持有:1, 编号:'002', _upd:1,_rev:1},
+      /* v167：宝可梦 + 带属性 → 封面右下角本来就有属性图标，附件标签得给它让位 */
+      {_id:'a3', 名称:'带属性又带附件', 大类:'手办', IP:'宝可梦', 系列:'某系列', 属性:'草',
+       状态:['在库'], 持有:1, 编号:'003', _upd:1,_rev:1,
+       附件:[{名称:'草系立牌', 类型:'DLC'}]}
     ];
     U.view='collection'; U.collection.mode='cat'; U.collection.cat=''; U.collection.sub='';
     U.collection.ipId=null; U.collection.seriesId='se1'; U.collection.q=''; U.collection.qDraft='';
@@ -164,22 +168,36 @@ async function main() {
     '有附件的卡片上出现 DLC 标签');
   ok(await ev(`!!document.querySelector('.poster .dlctags .dlctag[data-t="特典"]')`),
     '特典标签也在（一个类型一个标签）');
+  /* v167：用户改主意了 —— 要「冰箱贴那个属性图标的位置」，即封面内的右下角 */
   ok(await ev(`(function(){
     var t=document.querySelector('.poster .dlctags .dlctag');
-    return !!t && !t.closest('.cover'); })()`),
-    '★ 标签不在封面里（用户要求：放整个卡片的右下角，不是封面右下角）');
+    return !!t && !!t.closest('.cover'); })()`),
+    '★ 标签在**封面里**（v167：用户点名要和属性图标同一位置）');
   ok(await ev(`(function(){
-    var p=document.querySelector('.poster.hasdlc'); if(!p) return false;
-    var t=p.querySelector('.dlctags'); if(!t) return false;
-    var pb=p.getBoundingClientRect(), tb=t.getBoundingClientRect();
-    return (pb.right - tb.right) < 14 && (pb.bottom - tb.bottom) < 16; })()`),
-    '★ 标签确实贴着卡片的右下角');
+    var c=document.querySelector('.poster.hasdlc .cover'); if(!c) return false;
+    var t=c.querySelector('.dlctags'); if(!t) return false;
+    var cb=c.getBoundingClientRect(), tb=t.getBoundingClientRect();
+    return (cb.right - tb.right) < 10 && (cb.bottom - tb.bottom) < 10; })()`),
+    '★ 标签贴着封面的右下角');
+  ok(await ev(`(function(){
+    var q=document.querySelector('.poster.hasdlc .pkquick'); if(!q) return false;
+    var t=document.querySelector('.poster.hasdlc .dlctags'); if(!t) return false;
+    var qb=q.getBoundingClientRect(), tb=t.getBoundingClientRect();
+    return Math.abs((qb.top+qb.height/2) - (tb.top+tb.height/2)) < 12; })()`),
+    '★ 和左下角的「在库 / 想收」在同一水平线（一左一右）');
   ok(await ev(`(function(){
     var t=document.querySelector('.poster .dlctag'); if(!t) return false;
     var b=t.getBoundingClientRect();
     return b.height >= 20 && b.width >= 26; })()`),
     '★ 标签的点击热区够大（用户报「容易点不到」）—— 实测 '
       + await ev(`(function(){var b=document.querySelector('.poster .dlctag').getBoundingClientRect(); return Math.round(b.width)+'×'+Math.round(b.height);})()`));
+  ok(await ev(`(function(){
+    var p=document.querySelector('.poster[data-id="a3"]'); if(!p) return false;
+    var t=p.querySelector('.dlctags'), y=p.querySelector('.pktypes');
+    if(!t||!y) return false;
+    var tb=t.getBoundingClientRect(), yb=y.getBoundingClientRect();
+    return tb.right <= yb.left + 2; })()`),
+    '★ 右下角已有属性图标时，附件标签自动往左让开（不叠在一起）');
   ok(await ev(`(function(){
     var p=document.querySelector('.poster[data-id="a2"]');
     return !!p && !p.querySelector('.dlctag'); })()`),

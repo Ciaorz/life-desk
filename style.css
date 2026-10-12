@@ -4157,16 +4157,25 @@ input.search{margin-bottom:12px}
 /* v165：标签要「看着小、点得到大」—— 用户报「特典 / DLC 容易点不到」。
    ⚠️ 原来的 padding 用 em，而 em 相对的是**标签自己**的字号（约 7px），
       算出来只有 2px 边距，热区小得可怜。现在改用 min-height + px padding：
-      字号仍小（9.5px），但每个标签可点面积 ≥22px 高。 */
-.poster.hasdlc h4{padding-right:6em}        /* 给右下角的类型标签让位，别压住标题 */
-.dlctags{position:absolute;right:0;bottom:0;display:flex;gap:6px;
-  justify-content:flex-end;max-width:100%}
-.dlctag{display:inline-flex;align-items:center;justify-content:center;
+      字号仍小（9.5px），但每个标签可点面积 ≥22px 高。
+   v167：位置改到**封面里**、底部靠右 —— 用户点名要「冰箱贴那个属性图标的位置」，
+      也就是和左下角「在库 / 想收」同一水平线的另一端（.pktypes 就在 right:.5em;bottom:.5em）。
+      ⚠️ 用「一般兄弟选择器」（.score ~ / .pktypes ~）而不是 :has —— 更老的 Chrome 也认。 */
+.dlctags{position:absolute;right:.5em;bottom:.5em;display:flex;gap:.286em;
+  align-items:center;justify-content:flex-end;max-width:calc(100% - 1em);z-index:2}
+/* 同一角落可能已经有人：星级 → 标签抬到它上方；属性图标 → 标签往左让。两条改的是不同属性，可叠加 */
+.score ~ .dlctags{right:.5em;bottom:2.4em}
+.pktypes ~ .dlctags{right:5.4em}
+.dlctag{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;
   min-height:22px;padding:0 8px;font-size:9.5px;font-weight:600;line-height:1;
-  letter-spacing:.04em;border-radius:7px;background:rgba(41,37,31,.10);color:var(--muted);
+  letter-spacing:.04em;border-radius:7px;
+  /* ⚠️ v167：标签现在浮在**封面图**上，底色不再固定 ——
+     原来那套「10% 深底 + 灰字」在深色封面上等于隐形（截图上「特典」就糊成一团）。
+     改成和旁边「在库 / 想收」(.pkq) 完全同一套：白底 + 深字 + 白描边，放什么图上都读得清。 */
+  background:rgba(255,255,255,.88);color:#5b554c;border:1px solid rgba(255,255,255,.6);
   white-space:nowrap;cursor:pointer;transition:background .15s}
-.dlctag:hover{background:rgba(41,37,31,.16);color:var(--ink)}
-.dlctag.on{background:var(--ink);color:#fff}
+.dlctag:hover{background:#fff;color:var(--ink)}
+.dlctag.on{background:var(--ink);color:#fff;border-color:var(--ink)}
 /* 附件展示卡 —— 与普通卡同宽，内容紧凑 */
 .dlccard{position:relative;border:1px solid var(--line);border-radius:.857em;padding:.6em;
   background:var(--card);display:flex;flex-direction:column;gap:.4em;align-self:start;

@@ -8224,8 +8224,11 @@ function collectionPosterHTML(r){
     (num(r['星级'])?'<span class="score">'+stars(r['星级'])+'</span>':'')+
     pkQuickBtnsHTML(r)+
     pkTypeIconsHTML(r)+
-    '</div><h4>'+nameHTML(r)+'</h4><p>'+esc(sub||'—')+'</p>'+
+    /* v167：附件类型标签挪进封面里（用户点名要「冰箱贴那个属性图标的位置」）——
+       即封面底部靠右，和左下角的「在库 / 想收」同一水平线的另一端。
+       ⚠️ 必须排在 .pktypes 之后：CSS 靠「一般兄弟选择器」给它让位。 */
     tags +
+    '</div><h4>'+nameHTML(r)+'</h4><p>'+esc(sub||'—')+'</p>'+
     '</div>';
 }
 function collectionWall(rows, cols){

@@ -543,7 +543,19 @@
    ⚠️ 返回 **null 而不是 0** —— 「没填」和「填了 0 元」必须分得开，否则卡片上会冒出一排 ¥0（行内显示「—」）。
    删掉了不再有调用点的 `poTotalChip`（其余额逻辑由 poTotalOf 承担）。
    ⚠️ 动了 app.js + style.css，三件套一起推。回归：test_preorder（148）+ e2e_preorder_cdp（43）。 */
-const CACHE = 'lifedesk-v166-2026-10-12';
+/* v167（2026-10-12）：附件标签**挪进封面里**。
+   用户原话：「附件按钮位置是在想收那一行的右下角。就是放在冰箱贴那个属性图标的位置。」
+   解出来 = 封面**底部靠右**：.pkquick（在库 / 想收）在 left:.5em;bottom:.5em，
+   .pktypes（属性图标）在 right:.5em;bottom:.5em —— 同一水平线的两端。
+   做法：`collectionPosterHTML` 里把标签挪进 `.cover`（排在 `.pktypes` 之后），
+   `.dlctags` 改 `right:.5em;bottom:.5em`；用**一般兄弟选择器**给同角落的人让位：
+      `.score ~ .dlctags{right:.5em;bottom:2.4em}`（有星级 → 抬上去）
+      `.pktypes ~ .dlctags{right:5.4em}`（有属性图标 → 往左让；两条改不同属性，可叠加）
+   ⚠️ 顺带修了个「上了封面图就隐形」的问题：原来标签是「10% 深底 + 灰字」，
+      浮在深色封面图上等于看不见（截图里「特典」糊成一团）。现在改成和旁边 .pkq
+      完全同一套——白底 + 深字 + 白描边，放什么图上都读得清。
+   ⚠️ 动了 app.js + style.css，三件套一起推。回归：e2e_attach_cdp（41 条，含让位验证）。 */
+const CACHE = 'lifedesk-v167-2026-10-12';
 
 /* v144（2026-10-04）：修「手机端什么都没动却显示待上传 N 条」。两个独立根因：
    ① **批量编辑不动 `_upd`/`_rev`** —— 改动对增量同步是隐形的：上传时靠内容指纹能发现，
