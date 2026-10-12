@@ -133,6 +133,11 @@ async function main() {
     var ty = 0, tx = 0;
     if (m){ var q = m[1].split(','); tx = parseFloat(q[4]); ty = parseFloat(q[5]); }
     var bs = String(pcs.backgroundSize || '').trim();
+    /* ⚠️ v172：框**不再等于宿主的高度** —— 卡片底部要给「徽标留白」让出 1/6
+       （.poster .cover.cv::before{bottom:calc(100%/6)}）。所以尺寸一律取取景层自己的盒，
+       否则卡片那一路量出来的位置是错的（图会被算到留白里去）。 */
+    var lw = parseFloat(pcs.width) || b.width;
+    var lh = parseFloat(pcs.height) || b.height;
     var raw = (el.style.getPropertyValue('--cvi') || '').replace(/^url\\(\\s*['"]?/, '').replace(/['"]?\\s*\\)$/, '');
     var nat = await new Promise(function(res){
       if (!raw) return res([0,0]);
@@ -141,13 +146,13 @@ async function main() {
       i.onerror = function(){ res([0,0]); };
       i.src = raw;
     });
-    var pm = /([\\d.]+)%/.exec(bs), rw = b.width, rh = b.width;
-    if (pm && nat[0]){ rw = b.width * parseFloat(pm[1]) / 100; rh = rw * nat[1] / nat[0]; }
-    else if (/contain/i.test(bs) && nat[0]){ var k = Math.min(b.width/nat[0], b.height/nat[1]); rw = nat[0]*k; rh = nat[1]*k; }
-    else if (nat[0]){ rh = b.width * nat[1] / nat[0]; }
-    var top = (b.height - rh) / 2 + ty;
-    return { w:Math.round(b.width), h:Math.round(b.height), rw:Math.round(rw), rh:Math.round(rh),
-             tx:tx, ty:ty, top:top, frac: top / b.height, nat:nat, bs:bs };
+    var pm = /([\\d.]+)%/.exec(bs), rw = lw, rh = lw;
+    if (pm && nat[0]){ rw = lw * parseFloat(pm[1]) / 100; rh = rw * nat[1] / nat[0]; }
+    else if (/contain/i.test(bs) && nat[0]){ var k = Math.min(lw/nat[0], lh/nat[1]); rw = nat[0]*k; rh = nat[1]*k; }
+    else if (nat[0]){ rh = lw * nat[1] / nat[0]; }
+    var top = (lh - rh) / 2 + ty;      /* 图层内：图的上边缘离图层顶多远 */
+    return { w:Math.round(lw), h:Math.round(lh), rw:Math.round(rw), rh:Math.round(rh),
+             tx:tx, ty:ty, top:top, frac: top / lh, nat:nat, bs:bs };
   };`);
 
   /* ---------- 注入：一张**正方形**封面（正是老 bug 最容易翻车的形状） ---------- */
@@ -256,7 +261,7 @@ async function main() {
   await clickAt('[data-img-reset]');
   await sleep(250);
   const before = await ev(`document.querySelector('[data-img-prev]').style.getPropertyValue('--cvy')`);
-  /* ⚠️ 预览框很高（3/4.2），不先滚到视口中间的话中心点会落在屏幕外，鼠标事件打不到 */
+  /* ⚠️ 预览框很高（6/7），不先滚到视口中间的话中心点会落在屏幕外，鼠标事件打不到 */
   const box = await ev(`(function(){
     var el=document.querySelector('[data-img-prev]');
     el.scrollIntoView({block:'center'});

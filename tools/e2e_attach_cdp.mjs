@@ -160,7 +160,6 @@ async function main() {
     U.dlcOpen={};
     window.__render(); return 1; })()`);
   await sleep(500);
-  console.log('  诊断：卡片 id = ' + await ev(`JSON.stringify(Array.prototype.map.call(document.querySelectorAll('.poster'),function(p){return p.getAttribute('data-id');}))`));
 
   /* ---------- ① 卡片右下角的类型标签 ---------- */
   console.log('[①] 卡片右下角的类型标签');
@@ -168,23 +167,62 @@ async function main() {
     '有附件的卡片上出现 DLC 标签');
   ok(await ev(`!!document.querySelector('.poster .dlctags .dlctag[data-t="特典"]')`),
     '特典标签也在（一个类型一个标签）');
-  /* v167：用户改主意了 —— 要「冰箱贴那个属性图标的位置」，即封面内的右下角 */
+  /* v172：用户澄清 —— 不是「卡片外面多一条白条」，而是**卡片里预留一个高度**、
+     把封面「露图」的区域缩短一截（卡片总高不变、排版不动）。 */
   ok(await ev(`(function(){
     var t=document.querySelector('.poster .dlctags .dlctag');
-    return !!t && !!t.closest('.cover'); })()`),
-    '★ 标签在**封面里**（v167：用户点名要和属性图标同一位置）');
+    return !!t && !!t.closest('.pkstrip') && !!t.closest('.cover'); })()`),
+    '★ 标签在封面**内部**底部预留的留白里（不是卡片外面多出来的一条）');
   ok(await ev(`(function(){
-    var c=document.querySelector('.poster.hasdlc .cover'); if(!c) return false;
-    var t=c.querySelector('.dlctags'); if(!t) return false;
-    var cb=c.getBoundingClientRect(), tb=t.getBoundingClientRect();
-    return (cb.right - tb.right) < 10 && (cb.bottom - tb.bottom) < 10; })()`),
-    '★ 标签贴着封面的右下角');
+    var p=document.querySelector('.poster'); if(!p) return false;
+    var tags=Array.prototype.map.call(p.children,function(c){return c.tagName.toLowerCase();}).join(',');
+    return p.children.length===3 && tags==='div,h4,p' && p.children[0].classList.contains('cover'); })()`),
+    '★ 卡片结构回到原样（封面 + 名字 + 副标题），外面没多出任何一条');
   ok(await ev(`(function(){
-    var q=document.querySelector('.poster.hasdlc .pkquick'); if(!q) return false;
-    var t=document.querySelector('.poster.hasdlc .dlctags'); if(!t) return false;
+    /* 卡片总高没变：封面仍是 3/4.2（高 = 宽 × 1.4）—— 用户报的「卡片变长了」已修 */
+    var r=document.querySelector('.poster .cover').getBoundingClientRect();
+    return Math.abs(r.height/r.width - 1.4) < 0.02; })()`),
+    '★ 卡片高度和以前一样（封面仍 3/4.2，实测 '
+      + await ev(`(function(){var r=document.querySelector('.poster .cover').getBoundingClientRect(); return (r.height/r.width).toFixed(3);})()`) + '）');
+  ok(await ev(`(function(){
+    /* 露图区域 = 封面高 − 留白(1/6)，其宽高比应正好 6/7（与表单预览 / 详情大图同一口径） */
+    var c=document.querySelector('.poster .cover'), r=c.getBoundingClientRect();
+    var cs=getComputedStyle(c,'::before');
+    var lh=parseFloat(cs.height)||0, lw=parseFloat(cs.width)||0;
+    return lh>0 && Math.abs(lh/r.height - 5/6) < 0.01 && Math.abs(lh/lw - 7/6) < 0.01; })()`),
+    '★ 封面图只占上面 5/6、下面 1/6 是预留留白（露图区域 6/7）');
+  ok(await ev(`(function(){
+    /* 留白里不许有东西压到图上 —— 用户报「看不清那行字」的根因。
+       ⚠️ 图的下沿 = 取景层自己的 top+height（卡片上取景层是缩进过的，不能拿封面盒算）。 */
+    var bad=0;
+    Array.prototype.forEach.call(document.querySelectorAll('.poster'), function(p){
+      var c=p.querySelector('.cover'); if(!c) return;
+      var r=c.getBoundingClientRect();
+      var cs=getComputedStyle(c,'::before');
+      var imgBottom = r.top + (parseFloat(cs.top)||0) + (parseFloat(cs.height)||0);
+      Array.prototype.forEach.call(p.querySelectorAll('.pkstrip > *'), function(el){
+        var b=el.getBoundingClientRect();
+        if (b.height && b.top < imgBottom - 1) bad++;
+      });
+    });
+    return bad===0; })()`),
+    '★ 留白里的徽标一个都没压到图上（图正好停在留白上沿）');
+  ok(await ev(`(function(){
+    /* 「固定高度」= 每张卡一模一样（用户说自己手动调高度不一致，不好看） */
+    var hs={}, n=0;
+    Array.prototype.forEach.call(document.querySelectorAll('.poster .pkstrip'), function(b){
+      hs[Math.round(b.getBoundingClientRect().height)]=1; n++;
+    });
+    return n>0 && Object.keys(hs).length===1; })()`),
+    '★ 每张卡的留白一样高（'
+      + await ev(`(function(){var b=document.querySelector('.poster .pkstrip'); return b?Math.round(b.getBoundingClientRect().height)+'px':'?';})()`)
+      + '，全部一致）');
+  ok(await ev(`(function(){
+    var q=document.querySelector('.poster .pkquick'), t=document.querySelector('.poster .dlctags');
+    if(!q||!t) return false;
     var qb=q.getBoundingClientRect(), tb=t.getBoundingClientRect();
-    return Math.abs((qb.top+qb.height/2) - (tb.top+tb.height/2)) < 12; })()`),
-    '★ 和左下角的「在库 / 想收」在同一水平线（一左一右）');
+    return Math.abs((qb.top+qb.height/2) - (tb.top+tb.height/2)) < 6; })()`),
+    '★ 状态药丸与附件标签在同一行（白条内一左一右）');
   ok(await ev(`(function(){
     var t=document.querySelector('.poster .dlctag'); if(!t) return false;
     var b=t.getBoundingClientRect();
@@ -192,12 +230,13 @@ async function main() {
     '★ 标签的点击热区够大（用户报「容易点不到」）—— 实测 '
       + await ev(`(function(){var b=document.querySelector('.poster .dlctag').getBoundingClientRect(); return Math.round(b.width)+'×'+Math.round(b.height);})()`));
   ok(await ev(`(function(){
+    /* 现在是文档流里的一行：属性图标在左、附件标签在右，天然不叠 */
     var p=document.querySelector('.poster[data-id="a3"]'); if(!p) return false;
     var t=p.querySelector('.dlctags'), y=p.querySelector('.pktypes');
     if(!t||!y) return false;
     var tb=t.getBoundingClientRect(), yb=y.getBoundingClientRect();
-    return tb.right <= yb.left + 2; })()`),
-    '★ 右下角已有属性图标时，附件标签自动往左让开（不叠在一起）');
+    return tb.left >= yb.right - 2; })()`),
+    '★ 属性图标与附件标签排在白条的同一行、互不重叠');
   ok(await ev(`(function(){
     var p=document.querySelector('.poster[data-id="a2"]');
     return !!p && !p.querySelector('.dlctag'); })()`),

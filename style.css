@@ -339,10 +339,17 @@ input.search:focus{border-color:var(--accent);background:#fff}
   gap:calc(18px * var(--cs));font-size:calc(14px * var(--cs))}
 .poster{cursor:pointer;transition:transform .2s}
 .poster:hover{transform:translateY(-3px)}
+/* v172：圆角 / 投影回到封面自己身上（v171 那层 .pcard 已去掉，卡片结构回到原样）。
+   白底是给底部「预留留白」用的 —— 封面图（取景层）被顶到留白上方，露出来的就是这块白。 */
 .poster .cover{position:relative;aspect-ratio:3/4.2;border-radius:.857em;overflow:hidden;
-  box-shadow:0 .714em 1.714em rgba(63,48,36,.14);background-size:cover;background-position:center}
+  background:#fff;background-size:cover;background-position:center;
+  box-shadow:0 .714em 1.714em rgba(63,48,36,.14)}
 .poster .cover.noimg{display:flex;align-items:center;justify-content:center}
-.poster .cover.noimg b{font:700 2.857em/1 "Songti SC",serif;color:rgba(255,255,255,.9);letter-spacing:.04em}
+/* ⚠️ 无封面时 `coverStyle()` 给的是一条**彩色渐变**（按名字色相算），不是白底 ——
+   所以首字保持纯白（放渐变上看得清）。v172：再把它往上挪半个留白的高度，
+   让首字在「露图区」里居中 —— margin 的百分比按**宽度**算，留白高 = 封面高/6 = 1.4w/6。 */
+.poster .cover.noimg b{font:700 2.857em/1 "Songti SC",serif;color:rgba(255,255,255,.92);
+  letter-spacing:.04em;margin-bottom:calc(140% / 6)}
 .poster .cover .tag{position:absolute;left:.571em;top:.571em;padding:.214em .571em;border-radius:.5em;
   background:rgba(255,255,255,.9);font-size:.679em;font-weight:700;letter-spacing:.06em}
 .poster .cover .no{position:absolute;right:.571em;top:.571em;padding:.214em .5em;border-radius:.5em;
@@ -350,7 +357,8 @@ input.search:focus{border-color:var(--accent);background:#fff}
 /* v134：原来的「贴纸版」角标（.vertag）已删除 ——
    30周年冰箱贴的左上角标签现在直接写「冰箱贴 / 贴纸」（见 app.js 的 pkCardTag），
    不用再额外挂一层。 */
-.poster .cover .score{position:absolute;right:.571em;bottom:.571em;padding:.214em .571em;border-radius:.5em;
+/* v172：底部留白占了封面高的 1/6 —— 星级要抬到留白**上方**（否则和留白里的附件标签撞一起） */
+.poster .cover .score{position:absolute;right:.571em;bottom:calc(100% / 6 + .571em);padding:.214em .571em;border-radius:.5em;
   background:rgba(41,37,31,.72);color:#fff;font-size:.714em;letter-spacing:.06em}
 /* v96k 修正：改用 .wall .poster h4（特异性 0,0,2,1）——
    原来的 .poster h4（0,0,1,1）被后面的 .grp h4{font:700 14px...} 覆盖了，
@@ -817,7 +825,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .locrow b{font-size:13.5px;font-weight:620}
 .locrow span{color:var(--muted);font-size:11.5px}
 .locrow .ops{display:flex;gap:6px}
-.imgwrap .imgprev{min-height:200px;aspect-ratio:3/4.2;border-radius:12px;background:#fff;margin-bottom:9px;
+.imgwrap .imgprev{min-height:200px;aspect-ratio:6/7;border-radius:12px;background:#fff;margin-bottom:9px;
   border:1px solid rgba(111,89,67,.08);overflow:hidden;position:relative;cursor:grab;outline:0;
   background-position:50% 50%;background-size:100% auto;background-repeat:no-repeat}
 .imgwrap .imgprev:active{cursor:grabbing}
@@ -3286,7 +3294,7 @@ input.search{margin-bottom:12px}
   .studyclassic .sr-shelf { padding: 0 14px 60px; margin: 0; border-radius: 0; }
 
   /* --- 2c. 编辑/录入封面预览：手机端保持竖向比例但稍矮 --- */
-  .imgwrap .imgprev { min-height: 160px; aspect-ratio: 3/4.2; }
+  .imgwrap .imgprev { min-height: 160px; aspect-ratio: 6/7; }
 
   /* --- 3. 关闭 iOS 聚焦自动放大 ---
      iOS Safari 遇到 font-size < 16px 的输入框会在聚焦时把整页放大，
@@ -4148,33 +4156,25 @@ input.search{margin-bottom:12px}
 .catfield{transition:none}
 
 /* ============================================================
-   v162：附件（DLC / 特典 …）
-   ① 卡片**右下角**的类型标签（同类型只出一个），点了才在右边并出展示卡；
-   ② 展示卡紧跟在本体卡后面 —— 网格里就落在它右边。
-   ⚠️ 标签放的是「整个卡片的右下角」，不是封面里（封面右下角是星级 .score）。
-   ============================================================ */
+   v162：附件（DLC / 特典 …）的**类型标签**（同类型只出一个），点了才在右边并出展示卡。
+   v167 曾把它放进封面右下角；v171 起挪到卡片底部的「信息白条」里（见文件末尾 .pkstrip）——
+   白底上不需要再靠「白底 + 白描边」来对抗封面图了。 */
 .poster{position:relative}
 /* v165：标签要「看着小、点得到大」—— 用户报「特典 / DLC 容易点不到」。
-   ⚠️ 原来的 padding 用 em，而 em 相对的是**标签自己**的字号（约 7px），
-      算出来只有 2px 边距，热区小得可怜。现在改用 min-height + px padding：
-      字号仍小（9.5px），但每个标签可点面积 ≥22px 高。
-   v167：位置改到**封面里**、底部靠右 —— 用户点名要「冰箱贴那个属性图标的位置」，
-      也就是和左下角「在库 / 想收」同一水平线的另一端（.pktypes 就在 right:.5em;bottom:.5em）。
-      ⚠️ 用「一般兄弟选择器」（.score ~ / .pktypes ~）而不是 :has —— 更老的 Chrome 也认。 */
-.dlctags{position:absolute;right:.5em;bottom:.5em;display:flex;gap:.286em;
-  align-items:center;justify-content:flex-end;max-width:calc(100% - 1em);z-index:2}
-/* 同一角落可能已经有人：星级 → 标签抬到它上方；属性图标 → 标签往左让。两条改的是不同属性，可叠加 */
-.score ~ .dlctags{right:.5em;bottom:2.4em}
-.pktypes ~ .dlctags{right:5.4em}
+   ⚠️ 尺寸一律写成 `px × var(--cs)`：
+      · 不能用 em —— .dlctag 自己的 font-size 很小（.54em），em 相对的是**它自己**，
+        padding 会算成 1~2px，热区小得可怜（v165 踩过这个坑）；
+      · 也不能写死 px —— 卡片大小滑杆调的是 .wall 的 font-size（--cs），
+        写死就跟不上，大卡片上标签会显得特别小。
+   ⇒ px × var(--cs) 两头都对：默认 22px 高（热区够大），卡片放大时一起放大。 */
+.dlctags{display:flex;gap:.286em;align-items:center;justify-content:flex-end;max-width:70%}
 .dlctag{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;
-  min-height:22px;padding:0 8px;font-size:9.5px;font-weight:600;line-height:1;
-  letter-spacing:.04em;border-radius:7px;
-  /* ⚠️ v167：标签现在浮在**封面图**上，底色不再固定 ——
-     原来那套「10% 深底 + 灰字」在深色封面上等于隐形（截图上「特典」就糊成一团）。
-     改成和旁边「在库 / 想收」(.pkq) 完全同一套：白底 + 深字 + 白描边，放什么图上都读得清。 */
-  background:rgba(255,255,255,.88);color:#5b554c;border:1px solid rgba(255,255,255,.6);
-  white-space:nowrap;cursor:pointer;transition:background .15s}
-.dlctag:hover{background:#fff;color:var(--ink)}
+  min-height:calc(22px * var(--cs,1));padding:0 calc(8px * var(--cs,1));
+  font-size:calc(9.5px * var(--cs,1));font-weight:600;line-height:1;
+  letter-spacing:.04em;border-radius:calc(7px * var(--cs,1));
+  background:rgba(41,37,31,.07);color:var(--muted);border:1px solid transparent;
+  white-space:nowrap;cursor:pointer;transition:background .15s,color .15s}
+.dlctag:hover{background:rgba(41,37,31,.15);color:var(--ink)}
 .dlctag.on{background:var(--ink);color:#fff;border-color:var(--ink)}
 /* 附件展示卡 —— 与普通卡同宽，内容紧凑 */
 .dlccard{position:relative;border:1px solid var(--line);border-radius:.857em;padding:.6em;
@@ -4182,16 +4182,15 @@ input.search{margin-bottom:12px}
   box-shadow:0 .357em .857em rgba(63,48,36,.08)}
 .dlccard .dlckind{position:absolute;left:.6em;top:.6em;z-index:1;font-size:.62em;font-weight:700;
   letter-spacing:.06em;padding:.3em .5em;border-radius:.45em;background:rgba(41,37,31,.78);color:#fff}
-.dlccard .dlccov{aspect-ratio:3/4.2;border-radius:.6em;background-size:cover;
+.dlccard .dlccov{aspect-ratio:6/7;border-radius:.6em;background-size:cover;
   background-position:center;background-repeat:no-repeat;display:flex;align-items:center;
   justify-content:center;overflow:hidden;background-color:#f1ebe3}
 .dlccard .dlccov.noimg b{font:700 2.2em/1 "Songti SC",serif;color:rgba(255,255,255,.9)}
 .dlccard strong{font-size:.86em;font-weight:650;line-height:1.35}
 .dlccard .dlcpr{font-size:.78em;color:var(--muted)}
 @media (max-width:560px){
-  /* 手机上更难精准点按 → 热区再放大一档（字号仍不大） */
-  .poster.hasdlc h4{padding-right:5.4em}
-  .dlctag{min-height:26px;padding:0 9px;font-size:10px}
+  /* 手机上更难精准点按 → 热区再放大一档（字号仍不大）。v171：同样走 px × --cs */
+  .dlctag{min-height:calc(26px * var(--cs,1));padding:0 calc(9px * var(--cs,1));font-size:calc(10px * var(--cs,1))}
   .dlccard{padding:.5em;gap:.3em}
 }
 
@@ -4219,7 +4218,7 @@ input.search{margin-bottom:12px}
 .af input{flex:1;min-width:0}
 .afimg{flex-direction:column;align-items:stretch;gap:8px}
 .afimg > u{flex:none}
-.attcov{aspect-ratio:3/4.2;max-width:190px;border-radius:10px;background:#f1ebe3;
+.attcov{aspect-ratio:6/7;max-width:190px;border-radius:10px;background:#f1ebe3;
   background-size:cover;background-position:center;background-repeat:no-repeat;display:flex;
   align-items:center;justify-content:center;overflow:hidden}
 .attcov.noimg{border:1px dashed var(--line)}
@@ -4322,7 +4321,7 @@ input.search{margin-bottom:12px}
    第二行的五项是用户点名的：价格 / 购入时间 / 购入渠道 / 持有数 / 存放位置。
    ============================================================ */
 .sheet-head-r{display:flex;align-items:center;gap:8px;flex:0 0 auto}
-.dbig{width:auto;height:min(48vh,430px);min-height:180px;aspect-ratio:3/4.2;border-radius:16px;
+.dbig{width:auto;height:min(48vh,430px);min-height:180px;aspect-ratio:6/7;border-radius:16px;
   background-color:#f1ebe3;background-position:center;background-repeat:no-repeat;
   display:flex;align-items:center;justify-content:center;overflow:hidden;
   cursor:zoom-in;margin:0;box-shadow:0 10px 26px rgba(63,48,36,.10)}
@@ -4400,7 +4399,7 @@ input.search{margin-bottom:12px}
 .datt-item{display:flex;align-items:center;gap:11px;padding:5px;border-radius:12px;
   cursor:pointer;transition:background .15s}
 .datt-item:hover{background:rgba(41,37,31,.05)}
-.datt-pic{flex:0 0 auto;width:58px;height:74px;border-radius:9px;background-color:#f1ebe3;
+.datt-pic{flex:0 0 auto;width:58px;height:auto;aspect-ratio:6/7;border-radius:9px;background-color:#f1ebe3;
   background-position:center;background-repeat:no-repeat;display:flex;align-items:center;
   justify-content:center;overflow:hidden}
 .datt-pic b{font:700 1.5em/1 "Songti SC",serif;color:rgba(120,100,80,.45)}
@@ -4440,3 +4439,34 @@ input.search{margin-bottom:12px}
 /* ⚠️ 别写 `.cv > *{position:relative}` —— 那会把 .imgdel（表单预览右上角的 ✕）这类
    absolute 子元素压回 relative（同特异性、写在后面就赢）。角标本来就都是 absolute +
    排在取景层之后，天然画在它上面，不用管。 */
+
+/* ============================================================
+   v172：卡片底部「预留留白」（修正 v171 的误解）
+   ------------------------------------------------------------
+   用户原话：「我想要的效果是，和我截图里一样，**预留一个高度**，而不是额外加一个白条。
+   相当于是把原来展示卡的封面展示区域**缩短一截**。… 结果你直接加了一个白条上去，
+   弄得和以前完全不一样了，不但卡片变长了，排版也变了，不好看了。」
+   ⇒ 所以卡片总高度**必须和以前一样**（封面还是 3/4.2）。做法：
+        · 封面里的「取景层」(.cv::before) 从**底部让出 1/6 高度** ⇒ 露图区域短了一截；
+        · 让出来的那块就是留白（靠 .cover 自己的白底显出来）；
+        · 状态药丸 / 属性图标 / 附件标签作为一条绝对定位的横条（.pkstrip）钉在这块留白里。
+   结果：封面 / 名字 / 副标题的位置和以前一模一样，只是封面图短了一截。
+   · 留白高度 = 封面高的 **1/6**（`calc(100% / 6)`；百分比相对 .cover 的高度 ⇒ 随卡片大小等比缩放）。
+     取整成 1/6 是为了让**露图区域的宽高比正好是 6/7**：1.4w × (1 − 1/6) = 7w/6 ⇒ 宽:高 = 6:7。
+     表单预览 / 详情大图 / 附件封面也统一成 6/7 —— v170「三处同一个取景」才继续成立。
+   ============================================================ */
+.poster .cover.cv::before{bottom:calc(100% / 6)}
+.poster .pkstrip{position:absolute;left:0;right:0;bottom:0;height:calc(100% / 6);z-index:2;
+  display:flex;align-items:center;gap:.286em;padding:0 .5em;background:#fff;overflow:hidden}
+/* 条里的角标回到文档流：状态药丸 / 属性图标靠左，附件标签靠右（margin-left:auto 顶过去） */
+.poster .pkstrip .pkquick,
+.poster .pkstrip .pktypes,
+.poster .pkstrip .dlctags{position:static;left:auto;right:auto;top:auto;bottom:auto;z-index:auto}
+.poster .pkstrip .dlctags{margin-left:auto}
+/* 白底上的药丸改成浅灰底 —— 原来那套「白底 + 白描边」是给封面图准备的，放留白上等于看不见 */
+.poster .pkstrip .pkq{background:rgba(41,37,31,.06);border-color:transparent;color:#5b554c}
+.poster .pkstrip .pkq:hover{background:rgba(41,37,31,.13);border-color:transparent}
+.poster .pkstrip .pkq.pkq-lib.on{background:var(--green);border-color:var(--green);color:#fff}
+.poster .pkstrip .pkq.pkq-wish.on{background:var(--red);border-color:var(--red);color:#fff}
+.poster .pkstrip .pkq.pkq-ball{background:transparent;border-color:transparent}
+.poster .pkstrip .pkq.pkq-ball:hover{background:transparent}

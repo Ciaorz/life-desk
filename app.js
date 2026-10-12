@@ -8272,12 +8272,18 @@ function dlcCardsHTML(r){
   return out;
 }
 /* 单张藏品卡（卡片墙用）—— 抽出来是为了能在它后面紧跟附件展示卡 */
+/* v172：卡片底部「预留留白」里那一行 —— 状态药丸 / 属性图标 / 附件标签。
+   ⚠️ 它是 `.cover` **内部**一条绝对定位的横条（高度 = 封面高的 1/6，见 style.css 的 .pkbar），
+   封面图（取景层 .cv::before）被顶到它上面 —— 所以**卡片总高度一点没变**（封面还是 3/4.2），
+   只是封面「露图」的区域短了一截。用户要的就是这个「预留一个高度」。 */
+function pkStripHTML(r){
+  return '<div class="pkstrip">'+pkQuickBtnsHTML(r)+pkTypeIconsHTML(r)+dlcTagsHTML(r)+'</div>';
+}
 function collectionPosterHTML(r){
   var t=r['名称']||'未命名';
   var sub=(r['小类']||'')+(r['IP']?' · '+r['IP']:'');
   var no=String(r['编号']||'');
-  var tags = dlcTagsHTML(r);
-  return '<div class="poster'+(tags?' hasdlc':'')+'" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
+  return '<div class="poster" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
     ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
     '<div class="cover cv'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
     (hasCover(r)?'':'<b>'+esc(String(t).slice(0,1))+'</b>')+
@@ -8287,13 +8293,9 @@ function collectionPosterHTML(r){
        v134：角标去掉了 —— 30周年冰箱贴的左上角标签本身就直接写「冰箱贴 / 贴纸」。 */
     (no?'<span class="no">'+esc(no)+'</span>':'')+
     (num(r['星级'])?'<span class="score">'+stars(r['星级'])+'</span>':'')+
-    pkQuickBtnsHTML(r)+
-    pkTypeIconsHTML(r)+
-    /* v167：附件类型标签挪进封面里（用户点名要「冰箱贴那个属性图标的位置」）——
-       即封面底部靠右，和左下角的「在库 / 想收」同一水平线的另一端。
-       ⚠️ 必须排在 .pktypes 之后：CSS 靠「一般兄弟选择器」给它让位。 */
-    tags +
-    '</div><h4>'+nameHTML(r)+'</h4><p>'+esc(sub||'—')+'</p>'+
+    pkStripHTML(r)+
+    '</div>'+
+    '<h4>'+nameHTML(r)+'</h4><p>'+esc(sub||'—')+'</p>'+
     '</div>';
 }
 function collectionWall(rows, cols){
@@ -13493,8 +13495,7 @@ function seriesCloudWall(rows, cols){
          v134：角标去掉了 —— 30周年冰箱贴的左上角标签本身就直接写「冰箱贴 / 贴纸」。 */
       (no?'<span class="no">'+esc(no)+'</span>':'')+
       (num(r['星级'])?'<span class="score">'+stars(r['星级'])+'</span>':'')+
-      pkQuickBtnsHTML(r)+
-      pkTypeIconsHTML(r)+
+      pkStripHTML(r)+
       '</div>'+
       wishTag+
       '<h4>'+esc(t)+'</h4><p>'+esc(sub||'—')+'</p></div>';
