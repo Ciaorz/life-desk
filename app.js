@@ -15967,6 +15967,36 @@ function patchRowFields(key, id, patch){
   else if (MODE==='local'){ lsSet(key, store[key].rows); localCacheSet(); }
   return true;
 }
+/* v168：详情弹窗第一行的「状态」—— 三个可点药丸（在库 / 云游 / 想收）。
+   ⚠️ 不走自己那套判断，直接交给 toggleRowStatus（它内部过 normalizeOwnStatus）——
+   铁律 10 的合法形态只有三种，别在这里另写一份。 */
+function detailStatusBtns(row){
+  var arr = Array.isArray(row['状态']) ? row['状态'] : String(row['状态']||'').split(',');
+  var has = function(s){ return arr.indexOf(s) >= 0; };
+  return ['在库','云游','想收'].map(function(s){
+    return '<button type="button" class="dstat-btn'+(has(s)?' on':'')+'"'+
+      ' data-dstat="'+esc(s)+'" title="'+esc(s==='在库'?'标记为在库（会自动清掉想收 / 云游）':(s==='云游'?'标记为云游（还没到手）':'标记为想收（挂在云游上）'))+'">'+
+      esc(s)+'</button>';
+  }).join('');
+}
+/* v168：点详情卡的大封面 → 全屏看原图。按**同一个视口**（缩放/位移）显示，
+   和卡片、表单三处口径一致；Esc 或点任意处关闭。 */
+function openBigCover(row, title){
+  if (!hasCover(row)){ toast('这件还没有封面'); return; }
+  var d = document.createElement('div');
+  d.className = 'imgfull';
+  d.innerHTML = '<div class="ifpic" style="'+coverStyle(row, title)+'"></div>'+
+    '<span class="ifname">'+esc(title)+'</span>'+
+    '<button class="ifx" type="button" aria-label="关闭">×</button>';
+  document.body.appendChild(d);
+  function shut(){
+    d.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e){ if (e.key === 'Escape') shut(); }
+  d.onclick = shut;
+  document.addEventListener('keydown', onKey);
+}
 function openItemDetail(key, id){
   var row=store[key].rows.filter(function(r){ return String(r._id)===String(id); })[0];
   if (!row) return;
@@ -15979,12 +16009,13 @@ function openItemDetail(key, id){
   var loc=row['存储地点']||'', ch=row['购入渠道']||'';
   var price=num(row['购入价格']), date=dstr(row['购入日期']);
   function ed(field, shown){
-    return '<b class="ed" data-edin="'+field+'" title="单击编辑">'+shown+'<span class="edhint">✎</span></b>';
+    return '<b class="dq" data-edin="'+field+'" title="单击编辑">'+shown+'<span class="edhint">✎</span></b>';
   }
+  var NONE = '<span class="dq-empty">还没记</span>';
   var host=$('sheetHost');
-  var h='<div class="sheet"><div class="sheet-head"><div>'+
+  var h='<div class="sheet detail-sheet"><div class="sheet-head"><div>'+
     '<p>'+esc(MODS[key].eyebrow)+'</p><h2>'+esc(title)+'</h2></div>'+
-    '<div style="display:flex;align-items:center;gap:8px;flex:0 0 auto">'+
+    '<div class="sheet-head-r">'+
       '<div class="sheet-nav">'+
         '<button type="button" data-dnav="-1" title="上一条（←）"'+(pos<=1?' disabled':'')+'>‹</button>'+
         '<span class="dpos">'+pos+' / '+ids.length+'</span>'+
@@ -15992,25 +16023,33 @@ function openItemDetail(key, id){
       '</div>'+
       '<button class="x" type="button" data-x="1">×</button>'+
     '</div></div>'+
-    '<div class="dtop">'+
-      '<div class="ph" style="'+coverStyle(row,title)+'">'+(hasCover(row)?'':'<b>'+esc(String(title).slice(0,1))+'</b>')+'</div>'+
-      '<div class="dtinfo"><h3>'+esc(title)+'</h3><div class="meta">'+statusPill(row['状态'])+
-        '<span class="pill s0">'+esc(cat)+(sub?' · '+esc(sub):'')+'</span>'+
-        (num(row['星级'])?'<span class="stars">'+stars(row['星级'])+'</span>':'')+
-        (ipName?'<span class="pill s2" data-gotoip="'+esc(ipName)+'" style="cursor:pointer">IP · '+esc(ipName)+'</span>':'')+
-      '</div></div></div>'+
-    /* v112：这行小标题手机端会隐藏（.buyh）—— 窄屏纵向空间紧张，四项内容本身已自解释 */
-    '<div class="buybox"><h4 class="buyh">购入信息</h4><div class="buygrid">'+
-      '<div><u>购入时间</u>'+ed('购入日期', date?esc(date):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
-      '<div><u>'+(row['端盒']?'端盒价':'价格')+'</u>'+ed('购入价格', price?esc('¥'+price.toFixed(2)):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
-      '<div><u>存放位置</u>'+ed('存储地点', loc?esc(loc):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没指定</span>')+'</div>'+
-      '<div><u>购入渠道</u>'+ed('购入渠道', ch?esc(ch):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>')+'</div>'+
-      '<div class="holdcell"><u>持有</u><div class="holdrow">'+
+    /* v168：封面占大面积（用户要求），点一下看原图 */
+    '<div class="dbig'+(hasCover(row)?'':' noimg')+'" style="'+coverStyle(row,title)+'"'+
+      ' title="点一下看大图">'+
+      (hasCover(row)?'':'<b>'+esc(String(title).slice(0,1))+'</b>')+
+    '</div>'+
+    '<div class="dhead"><h3 class="dname">'+nameHTML(row)+
+      (num(row['星级'])?'<span class="stars">'+stars(row['星级'])+'</span>':'')+
+    '</h3>'+
+      ((cat||sub||ipName)?'<p class="dsub">'+
+        esc([cat, sub].filter(Boolean).join(' · '))+
+        (ipName?(((cat||sub)?' · ':'')+'<b class="dsub-ip" data-gotoip="'+esc(ipName)+'">IP · '+esc(ipName)+'</b>'):'')+
+      '</p>':'')+
+    '</div>'+
+    /* 第一行：状态（可点切换） */
+    '<div class="drow dstat">'+detailStatusBtns(row)+'</div>'+
+    /* 第二行：快速编辑 —— 价格 / 购入时间 / 购入渠道 / 持有数 / 存放位置（用户点名的五项） */
+    '<div class="drow dquick">'+
+      ed('购入价格', price?esc('¥'+price.toFixed(2)):NONE)+
+      ed('购入日期', date?esc(date):NONE)+
+      ed('购入渠道', ch?esc(ch):NONE)+
+      '<span class="dq-hold">'+
         '<button type="button" class="hstep" data-hold="-1" title="减 1 件"'+(num(effHold(row))<=0?' disabled':'')+'>−</button>'+
-        ed('持有', function(){ var h=effHold(row); return h!=null?esc(h):'<span style="color:#a89c8d;font-weight:500;font-size:13px">还没记</span>'; }())+
+        ed('持有', function(){ var hv=effHold(row); return hv!=null?esc(hv):NONE; }())+
         '<button type="button" class="hstep" data-hold="1" title="加 1 件">＋</button>'+
-      '</div></div>'+
-    '</div></div>'+
+      '</span>'+
+      ed('存储地点', loc?esc(loc):NONE)+
+    '</div>'+
     (row['短评']?'<p class="dnote">'+esc(row['短评'])+'</p>':'')+
     '<div class="sheet-actions">'+
       '<button class="btn ghost" type="button" id="dDel" style="margin-right:auto;color:var(--red)">删除</button>'+
@@ -16031,6 +16070,18 @@ function openItemDetail(key, id){
       bumpHold(key, id, parseInt(n.getAttribute('data-hold'),10));
     };
   });
+  /* 状态药丸：点一下就地切换 —— 走的还是 toggleRowStatus，和卡片上的快捷按钮同一套规则 */
+  host.querySelectorAll('[data-dstat]').forEach(function(n){
+    n.onclick=function(e){
+      e.stopPropagation();
+      toggleRowStatus(key, id, n.getAttribute('data-dstat'));
+      render();
+      openItemDetail(key, id);
+      toast('已改为「'+n.getAttribute('data-dstat')+'」');
+    };
+  });
+  var big=host.querySelector('.dbig');
+  if (big) big.onclick=function(e){ e.stopPropagation(); openBigCover(row, title); };
   bindSheetBackdrop(host);
   $('dEdit').onclick=function(){ closeSheet(); openForm(key, id); };
   $('dDel').onclick=function(){

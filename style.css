@@ -4314,3 +4314,61 @@ input.search{margin-bottom:12px}
 /* v165：附件面板头部的按钮组 + 「记得保存」提示 */
 .att-head-btns{display:flex;align-items:center;gap:8px}
 .att-tip{font-size:11px;color:var(--warn,#c77700);margin:8px 0 2px;line-height:1.6}
+
+/* ============================================================
+   v168：详情弹窗改版 —— **大封面 + 两行快速编辑**（用户要求）
+   布局：头部（标题 / 上一条下一条 / ×）→ 大封面（点一下看原图）
+         → 名称 + 大类·小类·IP → 第一行状态药丸 → 第二行快速编辑 → 底部按钮
+   第二行的五项是用户点名的：价格 / 购入时间 / 购入渠道 / 持有数 / 存放位置。
+   ============================================================ */
+.sheet-head-r{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.dbig{width:100%;height:min(50vh,440px);min-height:180px;border-radius:16px;
+  background-color:#f1ebe3;background-position:center;background-repeat:no-repeat;
+  display:flex;align-items:center;justify-content:center;overflow:hidden;
+  cursor:zoom-in;margin:2px 0 12px;box-shadow:0 10px 26px rgba(63,48,36,.10)}
+.dbig b{font:700 3.4em/1 "Songti SC",serif;color:rgba(120,100,80,.42)}
+.dhead{margin-bottom:2px}
+.dname{display:flex;align-items:center;gap:8px;font-size:17px;font-weight:650;
+  line-height:1.35;margin:0}
+.dsub{font-size:12px;color:var(--muted);margin:5px 0 0;line-height:1.5}
+.dsub-ip{color:var(--accent);cursor:pointer;font-weight:500}
+.dsub-ip:hover{text-decoration:underline}
+.drow{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+.dstat{margin-top:11px}
+.dquick{margin-top:8px}
+/* 第一行：状态药丸（可点切换） */
+.dstat-btn{font:inherit;font-size:12.5px;font-weight:500;padding:6px 14px;border-radius:999px;
+  border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer;
+  transition:background .15s,border-color .15s,color .15s}
+.dstat-btn:hover{border-color:var(--accent);color:var(--ink)}
+.dstat-btn.on{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:650}
+/* 第二行：快速编辑的每一小块（点了就地改，不弹窗） */
+.dq{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:600;
+  padding:7px 12px;border-radius:11px;background:rgba(41,37,31,.055);
+  border:1px solid transparent;cursor:pointer;transition:background .15s;white-space:nowrap}
+.dq:hover{background:rgba(41,37,31,.11)}
+.dq .edhint{opacity:0;font-size:11px;transition:opacity .15s}
+.dq:hover .edhint{opacity:.45}
+.dq-empty{color:#a89c8d;font-weight:500}
+/* 「持有」是步进器：外面套一层，好让 − / ＋ 看起来是同一个组 */
+.dq-hold{display:inline-flex;align-items:center;gap:2px;padding:2px;
+  border-radius:13px;background:rgba(41,37,31,.055)}
+.dq-hold .dq{background:transparent;padding:5px 10px}
+.dq-hold .dq:hover{background:rgba(41,37,31,.09)}
+@media (max-width:560px){
+  .dbig{height:min(42vh,340px);border-radius:12px}
+  .dname{font-size:16px}
+  .dq{font-size:12px;padding:6px 10px}
+}
+
+/* 点大封面 → 全屏看原图 */
+.imgfull{position:fixed;inset:0;z-index:99999;background:rgba(18,14,10,.93);
+  display:flex;align-items:center;justify-content:center;padding:3vh 3vw;cursor:zoom-out}
+.ifpic{width:100%;height:100%;background-repeat:no-repeat;overflow:hidden;border-radius:10px}
+.ifname{position:absolute;left:0;right:0;bottom:calc(1.6vh + env(safe-area-inset-bottom,0px));
+  text-align:center;color:rgba(255,255,255,.8);font-size:13px;letter-spacing:.04em;
+  pointer-events:none}
+.ifx{position:absolute;right:18px;top:calc(16px + env(safe-area-inset-top,0px));
+  width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.35);
+  background:rgba(255,255,255,.12);color:#fff;font-size:20px;line-height:1;cursor:pointer}
+.ifx:hover{background:rgba(255,255,255,.22)}
