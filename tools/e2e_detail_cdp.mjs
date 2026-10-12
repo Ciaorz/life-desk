@@ -139,7 +139,14 @@ async function main() {
       {_id:'d1', 名称:'测试手办', 大类:'手办', 小类:'景品', IP:'宝可梦', 系列:'某系列',
        状态:['在库'], 持有:2, 编号:'001', 购入价格:180, 购入日期:'2026-09-20',
        购入渠道:'淘宝', 存储地点:'客厅柜', 星级:4, _upd:1,_rev:1,
-       封面:[{imageUrl:'data:image/svg+xml,'+encodeURIComponent(svg)}]}
+       封面:[{imageUrl:'data:image/svg+xml,'+encodeURIComponent(svg)}]},
+      {_id:'d2', 名称:'带附件的手办', 大类:'手办', 小类:'景品', IP:'宝可梦', 系列:'某系列',
+       状态:['在库'], 持有:1, 编号:'002', 购入价格:120, _upd:1,_rev:1,
+       封面:[{imageUrl:'data:image/svg+xml,'+encodeURIComponent(svg)}],
+       附件:[{名称:'特典亚克力立牌', 类型:'DLC', 价格:80, 定金:30, 尾款:50,
+             封面:'data:image/svg+xml,'+encodeURIComponent(svg)},
+             {名称:'限定挂件', 类型:'特典', 价格:40,
+             封面:'data:image/svg+xml,'+encodeURIComponent(svg)}]}
     ];
     U.view='collection'; U.collection.classic=true; U.collection.view='wall';
     U.collection.mode='cat'; U.collection.cat=''; U.collection.sub='';
@@ -229,12 +236,69 @@ async function main() {
   ok(await ev(`!!document.getElementById('dEdit') && !!document.getElementById('dDel')`),
     '底部「删除 / 编辑」都在');
 
+  /* ---------- ⑥ v169：状态栏与名字同一行 + 详情页的附件区 ---------- */
+  console.log('\n[⑥] 状态靠右 & 附件区（默认收起）');
+  /* 先把上一个弹窗关掉（点它自己的 ×），否则卡片被挡住点不到 */
+  if (await ev(`!!document.querySelector('.detail-sheet')`)) { await clickAt('[data-x="1"]'); await sleep(350); }
+  await clickAt('.poster[data-id="d2"]');
+  await sleep(500);
+  ok(await ev(`(function(){
+    var n=document.querySelector('.dname'), s=document.querySelector('.dstat');
+    if(!n||!s) return false;
+    var nb=n.getBoundingClientRect(), sb=s.getBoundingClientRect();
+    return Math.abs(nb.top - sb.top) < 14; })()`),
+    '★ 状态药丸和名称在**同一行**');
+  ok(await ev(`(function(){
+    var n=document.querySelector('.dname'), s=document.querySelector('.dstat');
+    var d=document.querySelector('.detail-sheet').getBoundingClientRect();
+    return s.getBoundingClientRect().left > n.getBoundingClientRect().left; })()`),
+    '★ 而且靠右端');
+  ok(await ev(`!!document.querySelector('.dbig-att')`), '★ 有附件 → 封面右下角出现附件按钮');
+  ok(await ev(`(function(){
+    var b=document.querySelector('.dbig-att'), c=document.querySelector('.dbig');
+    var bb=b.getBoundingClientRect(), cb=c.getBoundingClientRect();
+    return (cb.right-bb.right) < 20 && (cb.bottom-bb.bottom) < 20; })()`),
+    '★ 按钮就贴在封面图的右下角');
+  ok(!(await ev(`!!document.querySelector('.datt-block')`)), '★ 附件区默认是**收起**的');
+
+  await clickAt('.dbig-att');
+  await sleep(450);
+  ok(await ev(`!!document.querySelector('.datt-block')`), '★ 点附件按钮 → 附件区展开');
+  ok(await ev(`document.querySelectorAll('.datt-item').length === 2`), '两个附件都在里面');
+  ok(await ev(`(function(){
+    var b=document.querySelector('.dbig').getBoundingClientRect();
+    var t=document.querySelector('.datt-block').getBoundingClientRect();
+    return t.top >= b.bottom - 4; })()`),
+    '★ 顺序是「主体在上、附件在下」（手机窄屏也顺）');
+  await clickAt('.dbig-att');
+  await sleep(400);
+  ok(!(await ev(`!!document.querySelector('.datt-block')`)), '再点一次收起');
+
+  /* ---------- ⑦ 点附件 → 只开附件详情 ---------- */
+  console.log('\n[⑦] 附件详情（不打开主体详情）');
+  await clickAt('.dbig-att');
+  await sleep(400);
+  await clickAt('.datt-item');
+  await sleep(500);
+  ok(await ev(`(function(){var h=document.querySelector('.detail-sheet h2'); return !!h && h.textContent.indexOf('特典亚克力立牌')>=0;})()`),
+    '★ 打开的是**附件**详情（标题是附件名）');
+  ok(!(await ev(`!!document.getElementById('dEdit')`)), '★ 没有出现主体详情才有的「编辑」按钮');
+  ok(await ev(`(function(){var p=document.querySelector('.detail-sheet .dsub'); return !!p && p.textContent.indexOf('带附件的手办')>=0;})()`),
+    '附件详情里标注了它挂在哪件东西上');
+  ok(await ev(`document.querySelectorAll('.detail-sheet .dquick .dq').length >= 2`),
+    '附件详情的价格 / 定金 / 尾款也在');
+
   const errs = JSON.parse(await ev('JSON.stringify(window.__errs||[])') || '[]');
   ok(errs.length === 0, '页面没有 JS 报错' + (errs.length ? '：' + JSON.stringify(errs) : ''));
 
   /* 截图 */
   try {
-    await send('Emulation.setDeviceMetricsOverride', { width: 900, height: 1000, deviceScaleFactor: 2, mobile: false });
+    if (await ev(`!!document.querySelector('.detail-sheet')`)) { await clickAt('[data-x="1"]'); await sleep(300); }
+    await clickAt('.poster[data-id="d2"]');
+    await sleep(450);
+    /* 确保附件区是展开的（幂等：已经开着就别再点，否则会收起来） */
+    if (!(await ev(`!!document.querySelector('.datt-block')`))) { await clickAt('.dbig-att'); await sleep(420); }
+    await send('Emulation.setDeviceMetricsOverride', { width: 900, height: 1200, deviceScaleFactor: 2, mobile: false });
     await sleep(350);
     const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
     const dir = join(ROOT, '下载图', '_预览');

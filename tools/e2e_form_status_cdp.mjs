@@ -89,6 +89,12 @@ async function main() {
   await send('Page.addScriptToEvaluateOnNewDocument', {
     source: 'window.__errs=[];window.addEventListener("error",function(e){window.__errs.push(String(e.message||e.error));});',
   });
+  /* ⚠️ 必须先把视口设成桌面尺寸：headless 默认窗口只有 ~758×426，
+     会命中手机端媒体查询（`.fgrid{grid-template-columns:1fr}`）把表单塌成单列 ——
+     那样「四个字段挤在一行」这类断言会假红（宽度设对了、布局却是一列）。 */
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: 1200, height: 900, deviceScaleFactor: 1, mobile: false,
+  });
   await send('Page.navigate', {
     url: ONLINE || ('file:///' + join(SITE, 'index.html').replace(/\\/g, '/')),
   });
@@ -295,6 +301,57 @@ async function main() {
   await sleep(250);
   ok(await ev2(`(function(){var c=document.querySelector('.catfield[data-onlycat]');
       return !c.classList.contains('is-hidden');})()`), '③ 改回手办 → 比例又出来了');
+
+  /* ---------- 第四轮：备注名按钮让位 + 四个字段挤成一行（v169）---------- */
+  console.log('\n  —— 第四轮：备注名让位 & 一行放下 ——\n');
+  await openForm();
+  await sleep(400);
+
+  const st0 = JSON.parse(await ev2(`(function(){
+    var g=document.querySelector('.fgrid');
+    var c=document.querySelector('.altfield');
+    return JSON.stringify({
+      fg12: !!g && g.classList.contains('fg12'),
+      btn: !!document.querySelector('.altadd'),
+      altHidden: !c || c.classList.contains('is-hidden')
+    });})()`) || '{}');
+  ok(st0.fg12 === false, '④（起手）还没点备注 → 仍是 4 栏制');
+  ok(st0.altHidden, '④（起手）备注名输入框是藏着的');
+  ok(st0.btn, '④（起手）名称框里那个「＋ 备注」按钮在');
+
+  await ev2(`(function(){ document.querySelector('.altadd').click(); return 1; })()`);
+  await sleep(400);
+
+  const st1 = JSON.parse(await ev2(`(function(){
+    var g=document.querySelector('.fgrid');
+    var btn=document.querySelector('.altadd');
+    var w={}, top={};
+    ['名称','备注名','大类','小类'].forEach(function(k){
+      var i=document.querySelector('[data-f="'+k+'"]');
+      var cell=i && i.closest ? i.closest('.f') : null;
+      w[k]  = cell ? (cell.style.getPropertyValue('--w')||'').trim() : 'x';
+      top[k]= cell ? Math.round(cell.getBoundingClientRect().top) : -1;
+    });
+    return JSON.stringify({
+      btnDisp: btn ? getComputedStyle(btn).display : 'none',
+      fg12: !!g && g.classList.contains('fg12'),
+      w: w, top: top
+    });})()`) || '{}');
+
+  ok(st1.btnDisp === 'none', '④★ 点完「＋ 备注」→ 按钮自己隐藏了（不再挡着名字）');
+  ok(st1.fg12, '④★ 表单切到 12 栏制');
+  /* ⚠️「小类」是 dyn 字段（选项来自库里已有数据）—— 库里一个小类值都没有时它压根不渲染，
+     所以这里按「有就一起验、没有就跳过」来断言，否则测试会在空库上假红。 */
+  const hasSub = st1.top['小类'] > 0;
+  ok(st1.w['名称'] === '4' && st1.w['备注名'] === '4' && st1.w['大类'] === '2' && (!hasSub || st1.w['小类'] === '2'),
+    '④★ 宽度 4 : 4 : 2 : 2（≈ 40% : 40% : 20% : 20%）—— 实际 ' + JSON.stringify(st1.w));
+  const _keys = ['名称','备注名','大类'].concat(hasSub ? ['小类'] : []);
+  const tops = _keys.map(function(k){ return st1.top[k]; });
+  ok(tops.every(function(t){ return t > 0; }) && (Math.max.apply(null, tops) - Math.min.apply(null, tops)) < 8,
+    '④★ 名称 / 备注名 / 大类' + (hasSub ? ' / 小类' : '') + ' 在**同一行**（不再换行）—— top=' + JSON.stringify(tops));
+  ok(await ev2(`(function(){
+    var i=document.querySelector('[data-f="备注名"]'); return !!i && i.offsetParent !== null; })()`),
+    '④ 备注名输入框确实露出来了');
 
   /* 最后重新点一遍「云游」让提示条停在画面上，截一张存档 —— 给用户看"现在有反馈了" */
   try {

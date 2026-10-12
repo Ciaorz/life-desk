@@ -244,8 +244,6 @@ async function main() {
   ok(await ev(`!!document.querySelector('.sheet-attach')`), '★ 点「附件」→ 右边并出附件面板');
   ok(await ev(`!!document.querySelector('.sheet-attach [data-act="attsave"]')`),
     '★ 附件面板自带「保存」按钮（用户不用再去左边找）');
-  ok(await ev(`!!document.querySelector('.sheet-attach .att-tip')`),
-    '并有一句「改完要点保存」的提示');
   ok(await ev(`document.getElementById('sheetHost').classList.contains('pair')`),
     '弹出层切成了并排布局');
   ok(await ev(`(function(){
@@ -306,6 +304,18 @@ async function main() {
     var sz=p.style.backgroundSize||'';
     return sz !== '' && sz.indexOf('cover') < 0; })()`),
     '★ 预览用的是「视口」尺寸（不再写死 cover）');
+
+  ok(await ev(`(function(){
+    var c=document.querySelector('.attcov'); if(!c) return false;
+    return c.getBoundingClientRect().width >= 160; })()`),
+    '★ 附件封面预览框够大（用户报「看不清」）—— 实测宽 '
+      + await ev(`Math.round(document.querySelector('.attcov').getBoundingClientRect().width)`) + 'px');
+  ok(await ev(`(function(){
+    var s=document.querySelector('.attvp-slider'); if(!s) return false;
+    var r=s.getBoundingClientRect();
+    return r.width >= 100 && r.height >= 8; })()`),
+    '★ 缩放滑杆有完整长度（不再是一个点）—— 实测 '
+      + await ev(`(function(){var r=document.querySelector('.attvp-slider').getBoundingClientRect(); return Math.round(r.width)+'×'+Math.round(r.height);})()`));
 
   await clickAt('[data-att-zoom="0.15"]');
   await sleep(200);

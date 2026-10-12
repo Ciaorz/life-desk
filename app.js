@@ -5700,7 +5700,9 @@ function activeFields(key, vals){
      不出现时保持原来的 4 栏，布局与以前完全一致。 */
 function formGridClass(key, vals){
   if (key === 'series') return ' fg12';
-  if (key === 'collection' && seriesHasChildren(vals && vals['系列'])) return ' fg12';
+  /* v169：备注名一露脸也要切 12 栏 —— 名称 / 备注名 / 大类 / 小类 得挤在同一行
+     （用户要的 40 : 40 : 20 : 20 ≈ 12 栏里的 4 + 4 + 2 + 2）。 */
+  if (key === 'collection' && (seriesHasChildren(vals && vals['系列']) || altNameOn())) return ' fg12';
   return '';
 }
 /* v75：自定义字段适用范围匹配：module=全模块；cat/sub/ip/series 仅匹配该范围值的 item。
@@ -7809,8 +7811,11 @@ function poMoneyBlock(r){
     return (v == null) ? '<span class="po-mtotal none">—</span>'
                        : '<span class="po-mtotal">¥' + Math.round(v) + '</span>';
   }
+  /* v169：用户报「预定物管理怎么变成全部都带主体了」——
+      「本体」这两个字只在**真有附件**时才写（没附件的话整张卡就一个主体，写出来纯属噪音）。 */
+  var _hasAtt = attachList(r).length > 0;
   var rows = '<div class="po-mrow po-mrow-body">' +
-      '<span class="po-mname">本体</span>' +
+      '<span class="po-mname">' + (_hasAtt ? '本体' : '') + '</span>' +
       '<span class="po-mchips">' + chip('定金', '定金') + chip('尾款', '尾款') + '</span>' +
       total(poTotalOf(r)) +
     '</div>';
@@ -8179,7 +8184,7 @@ function dlcTagsHTML(r){
   }).join('')+'</div>';
 }
 /* 展开中的附件展示卡（紧跟在本体卡后面 —— 网格里就落在它右边） */
-function dlcCardHTML(a, i){
+function dlcCardHTML(a, i, ownerId){
   var nm = a['名称'] || a['类型'] || '附件';
   var kind = a['类型'] || '附件';
   var pr = num(a['价格']);
@@ -8189,7 +8194,11 @@ function dlcCardHTML(a, i){
   var bg = cu ? ("background-image:url('"+cu.replace(/["'()\\]/g,'')+"')"+
     ";background-repeat:no-repeat;background-position:"+vpPosCss(avp)+
     ";background-size:"+vpSizeCss(avp.s, false)) : '';
-  return '<div class="dlccard" title="'+esc(nm)+'">'+
+  /* v169：展示卡可点 —— 点它**只开附件详情**，不碰主体详情（用户要求）。
+     ⚠️ .dlccard 在 DOM 里是 .poster 的**兄弟**，所以本来就不会冒泡到主体卡；
+        真正要做的是「给它自己的 data-act」，否则点了没反应。 */
+  return '<div class="dlccard" data-act="dlcinfo" data-owner="'+esc(ownerId||'')+'" data-i="'+i+'"'+
+    ' title="点一下看这个附件的详情">'+
     '<span class="dlckind">'+esc(kind)+'</span>'+
     '<div class="dlccov'+(cu?'':' noimg')+'" style="'+bg+'">'+(cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
     '<strong>'+esc(nm)+'</strong>'+
@@ -8202,7 +8211,7 @@ function dlcCardsHTML(r){
   attachList(r).forEach(function(a, i){
     var t = a['类型'] || '附件';
     if (!ui.dlcOpen[r._id + '|' + t]) return;
-    out += dlcCardHTML(a, i);
+    out += dlcCardHTML(a, i, r._id);
   });
   return out;
 }
@@ -11066,6 +11075,14 @@ document.addEventListener('click', function(ev){
   /* v139/v140：藏品「筛选」—— 按钮开关卡片、点条件只重画卡片、应用才生效 */
   if (act==='advtoggle'){ advToggleOpen(); render(); return; }
   /* v162：卡片右下角的附件类型标签 —— 点一下在该卡右边并出这类附件的展示卡，再点收回 */
+  /* v169：点附件展示卡 / 详情页里的附件图 → 只开**附件详情**（绝不打开主体详情） */
+  if (act==='dlcinfo'){
+    var _aoid = node.getAttribute('data-owner');
+    var _ai = parseInt(node.getAttribute('data-i'), 10);
+    var _arow = (store.collection.rows||[]).filter(function(r){ return String(r._id)===String(_aoid); })[0];
+    if (_arow) openAttachDetail(_arow, _ai);
+    return;
+  }
   if (act==='dlctoggle'){
     var _did = node.getAttribute('data-id');
     var _dt  = node.getAttribute('data-t') || '附件';
@@ -11508,10 +11525,23 @@ document.addEventListener('click', function(ev){
       }
     }
     if (_fld){
+      /* v169：① 按钮点了就自己让开 —— 备注名输入框都出来了，还杵在名称框里挡视线
+               ② 名称 / 备注名 / 大类 / 小类 挤成一行：12 栏制 4 + 4 + 2 + 2。 */
+      node.style.display = 'none';
       _fld.classList.remove('is-hidden');
-      /* v161：备注名一露脸，「名称」就缩成 1/4 —— 两个并排各占 1/4（用户要求）。
-         同时记进 ui.altOpen，这样万一表单重绘（切草稿之类）宽度也不会跳回去。 */
       if (ui.altOpen) ui.altOpen[_ak] = true;
+      if (_grid) _grid.classList.add('fg12');
+      var _byk = {};
+      var _all = _grid ? _grid.querySelectorAll('.f') : [];
+      for (var _i = 0; _i < _all.length; _i++){
+        ['名称','备注名','大类','小类'].forEach(function(k){
+          if (_all[_i].querySelector('[data-f="'+k+'"]')) _byk[k] = _all[_i];
+        });
+      }
+      [[_ak,4],['名称',4],['大类',2],['小类',2]].forEach(function(pr){
+        var c = _byk[pr[0]];
+        if (c && c.style) c.style.setProperty('--w', String(pr[1]));
+      });
       setCellSpan(_nameCell, 1);
       var _inp = _fld.querySelector('[data-f="'+_ak+'"]');
       if (_inp && _inp.focus) _inp.focus();
@@ -13999,7 +14029,6 @@ function attachPanelHTML(){
     h += '<p class="attempty">还没有附件。点下面的「＋ 添加附件」，给这件东西挂个 DLC / 特典。</p>';
   }
   h += '<button type="button" class="btn ghost sm attaddbtn" data-act="attadd">＋ 添加附件</button>';
-  h += '<p class="att-tip">新加 / 改完附件后，点右上角「保存」才会真正写进数据（等于左侧表单的「保存」）。</p>';
   if (sel >= 0){
     var a = list[sel];
     var cu = String(a['封面'] || '');
@@ -14946,7 +14975,14 @@ function fieldHTML(f, v){
           : '<label>'+esc(f.lab||f.k)+(f.req?' *':'')+'</label>';
   /* v113：f.w12 = 在 12 栏栅格（.fgrid.fg12）里占几栏，用 CSS 变量 --w 内联下发；
      .f 那几条 span 规则都写成 span var(--w, 默认档)，不写就还是原来的 4 栏比例。 */
-  var _ws = f.w12 ? ' style="--w:'+Number(f.w12)+'"' : '';
+  /* v169：备注名露脸后，名称 / 备注名 / 大类 / 小类 按 4 + 4 + 2 + 2 摆一排
+     （≈ 用户要的 40% : 40% : 20% : 20%）。只在 12 栏制下生效，所以只有这时才下发。 */
+  var _w = f.w12;
+  if (altNameOn()){
+    if (f.k === '名称' || f.k === '备注名') _w = 4;
+    else if (f.k === '大类' || f.k === '小类') _w = 2;
+  }
+  var _ws = _w ? ' style="--w:'+Number(_w)+'"' : '';
   /* v160：`onlyCat` = 只在这个大类下显示（目前只有手办的「比例」）。
      显隐靠 `.is-hidden`，切「大类」时由 wireFormControls 直接改类，不重绘表单。 */
   var _oc = f.onlyCat ? ' data-onlycat="'+esc(f.onlyCat)+'"' : '';
@@ -15997,12 +16033,85 @@ function openBigCover(row, title){
   d.onclick = shut;
   document.addEventListener('keydown', onKey);
 }
+/* ============================================================
+ * v169：**附件详情**（点附件展示卡 / 详情页里的附件图进来）
+ * 只讲这一个附件：大图 + 类型 + 名称 + 价格 / 定金 / 尾款 / 合计，以及它挂在哪件东西上。
+ * ============================================================ */
+function openAttachDetail(ownerRow, i){
+  if (!ownerRow) return;
+  var a = attachList(ownerRow)[i];
+  if (!a){ toast('这个附件不在了'); return; }
+  var nm = a['名称'] || a['类型'] || '附件';
+  var kind = a['类型'] || '附件';
+  var cu = attachCoverUrl(a), avp = attachVp(a);
+  var bg = cu ? ("background-image:url('"+cu.replace(/["'()\\]/g,'')+"')"+
+    ";background-repeat:no-repeat;background-position:"+vpPosCss(avp)+
+    ";background-size:"+vpSizeCss(avp.s,false)) : '';
+  var pr = num(a['价格']), dep = num(a['定金']), bal = num(a['尾款']), tot = poTotalOf(a);
+  var chips = '';
+  if (pr > 0) chips += '<b class="dq">¥' + Math.round(pr) + '</b>';
+  if (dep != null) chips += '<b class="dq">定金 ¥' + Math.round(dep) + '</b>';
+  if (bal != null) chips += '<b class="dq">尾款 ¥' + Math.round(bal) + '</b>';
+  if (tot != null && (dep != null || bal != null)) chips += '<b class="dq dq-sum">合计 ¥' + Math.round(tot) + '</b>';
+  if (!chips) chips = '<span class="dq-empty">还没记价格</span>';
+  var host = $('sheetHost');
+  var h = '<div class="sheet detail-sheet"><div class="sheet-head"><div>'+
+    '<p>附件 · '+esc(kind)+'</p><h2>'+esc(nm)+'</h2></div>'+
+    '<button class="x" type="button" data-x="1">×</button></div>'+
+    '<div class="dbig'+(cu?'':' noimg')+'" style="'+bg+'">'+
+      (cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+
+    '</div>'+
+    '<div class="drow dquick">'+chips+'</div>'+
+    '<p class="dsub">挂在「'+nameHTML(ownerRow)+'」下面</p>'+
+    '<div class="sheet-actions">'+
+      '<button class="btn ghost" type="button" data-x="1">关闭</button>'+
+      '<button class="btn primary" type="button" data-act="datt-edit">去编辑</button>'+
+    '</div></div>';
+  host.innerHTML = h; host.hidden = false;
+  host.querySelectorAll('[data-x]').forEach(function(n){ n.onclick = closeSheet; });
+  var eb = host.querySelector('[data-act="datt-edit"]');
+  if (eb) eb.onclick = function(){
+    var oid = ownerRow._id;
+    closeSheet();
+    openForm('collection', oid);
+    /* 顺手把右侧的附件面板也打开 —— 点了「去编辑」就是想改这个附件 */
+    setTimeout(function(){ try { openAttachPanel(); } catch(e){} }, 280);
+  };
+  bindSheetBackdrop(host);
+}
+/* 详情页里展开的「附件区」：主体在上、附件在下（用户点名手机端要这个顺序）。
+   每个附件 = 一张小图 + 名称 + 类型/价格；图或信息都能点，进附件详情。 */
+function detailAttachBlock(row){
+  var list = attachList(row);
+  if (!list.length) return '';
+  return '<div class="datt-block">'+
+    '<div class="datt-head">附件 <i>'+list.length+'</i></div>'+
+    list.map(function(a, i){
+      var nm = a['名称'] || a['类型'] || '附件';
+      var kind = a['类型'] || '附件';
+      var cu = attachCoverUrl(a), avp = attachVp(a);
+      var bg = cu ? ("background-image:url('"+cu.replace(/["'()\\]/g,'')+"')"+
+        ";background-repeat:no-repeat;background-position:"+vpPosCss(avp)+
+        ";background-size:"+vpSizeCss(avp.s,false)) : '';
+      var pr = num(a['价格']);
+      return '<div class="datt-item" data-act="dlcinfo" data-owner="'+esc(row._id)+'" data-i="'+i+'">'+
+        '<div class="datt-pic'+(cu?'':' noimg')+'" style="'+bg+'">'+
+          (cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+
+        '</div>'+
+        '<div class="datt-info"><strong>'+esc(nm)+'</strong>'+
+          '<span><i>'+esc(kind)+'</i>'+(pr>0?' ¥'+Math.round(pr):'')+'</span></div>'+
+      '</div>';
+    }).join('')+
+  '</div>';
+}
 function openItemDetail(key, id){
   var row=store[key].rows.filter(function(r){ return String(r._id)===String(id); })[0];
   if (!row) return;
   if (!DETAIL_CTX || DETAIL_CTX.key!==key || DETAIL_CTX.ids.indexOf(String(id))<0){
     DETAIL_CTX={ key:key, ids:detailSiblings(key, id), id:String(id) };
   } else { DETAIL_CTX.id=String(id); }
+  /* v169：换了条目就把附件区收起来（免得看到的是上一条的展开状态） */
+  if (String(ui.detailAttId||'') !== String(id)){ ui.detailAttOpen = false; ui.detailAttId = String(id); }
   var ids=DETAIL_CTX.ids, pos=ids.indexOf(String(id))+1;
   var title=row['名称']||'未命名';
   var cat=row['大类']||'', sub=row['小类']||'', ipName=row['IP']||'';
@@ -16012,6 +16121,8 @@ function openItemDetail(key, id){
     return '<b class="dq" data-edin="'+field+'" title="单击编辑">'+shown+'<span class="edhint">✎</span></b>';
   }
   var NONE = '<span class="dq-empty">还没记</span>';
+  var atts = attachList(row);
+  var attTypes = attachTypes(row);
   var host=$('sheetHost');
   var h='<div class="sheet detail-sheet"><div class="sheet-head"><div>'+
     '<p>'+esc(MODS[key].eyebrow)+'</p><h2>'+esc(title)+'</h2></div>'+
@@ -16023,22 +16134,29 @@ function openItemDetail(key, id){
       '</div>'+
       '<button class="x" type="button" data-x="1">×</button>'+
     '</div></div>'+
-    /* v168：封面占大面积（用户要求），点一下看原图 */
-    '<div class="dbig'+(hasCover(row)?'':' noimg')+'" style="'+coverStyle(row,title)+'"'+
-      ' title="点一下看大图">'+
-      (hasCover(row)?'':'<b>'+esc(String(title).slice(0,1))+'</b>')+
+    /* 大封面（点一下看原图）；有附件时右下角挂一个附件按钮 */
+    '<div class="dbig-wrap">'+
+      '<div class="dbig'+(hasCover(row)?'':' noimg')+'" style="'+coverStyle(row,title)+'"'+
+        ' title="点一下看大图">'+
+        (hasCover(row)?'':'<b>'+esc(String(title).slice(0,1))+'</b>')+
+      '</div>'+
+      (atts.length?'<button type="button" class="dbig-att'+(ui.detailAttOpen?' on':'')+'" data-act="datt"'+
+        ' title="看这件挂着的附件（默认收起）">'+esc(attTypes.join(' · '))+'<i>'+atts.length+'</i></button>':'')+
     '</div>'+
-    '<div class="dhead"><h3 class="dname">'+nameHTML(row)+
-      (num(row['星级'])?'<span class="stars">'+stars(row['星级'])+'</span>':'')+
-    '</h3>'+
-      ((cat||sub||ipName)?'<p class="dsub">'+
-        esc([cat, sub].filter(Boolean).join(' · '))+
-        (ipName?(((cat||sub)?' · ':'')+'<b class="dsub-ip" data-gotoip="'+esc(ipName)+'">IP · '+esc(ipName)+'</b>'):'')+
-      '</p>':'')+
+    /* 名称 + 星级 + 分类 ｜ 状态药丸靠右（用户要求同一行） */
+    '<div class="dhead">'+
+      '<div class="dhead-main">'+
+        '<h3 class="dname">'+nameHTML(row)+
+          (num(row['星级'])?'<span class="stars">'+stars(row['星级'])+'</span>':'')+
+        '</h3>'+
+        ((cat||sub||ipName)?'<p class="dsub">'+
+          esc([cat, sub].filter(Boolean).join(' · '))+
+          (ipName?(((cat||sub)?' · ':'')+'<b class="dsub-ip" data-gotoip="'+esc(ipName)+'">IP · '+esc(ipName)+'</b>'):'')+
+        '</p>':'')+
+      '</div>'+
+      '<div class="dstat">'+detailStatusBtns(row)+'</div>'+
     '</div>'+
-    /* 第一行：状态（可点切换） */
-    '<div class="drow dstat">'+detailStatusBtns(row)+'</div>'+
-    /* 第二行：快速编辑 —— 价格 / 购入时间 / 购入渠道 / 持有数 / 存放位置（用户点名的五项） */
+    /* 快速编辑：价格 / 购入时间 / 购入渠道 / 持有数 / 存放位置（用户点名五项） */
     '<div class="drow dquick">'+
       ed('购入价格', price?esc('¥'+price.toFixed(2)):NONE)+
       ed('购入日期', date?esc(date):NONE)+
@@ -16051,6 +16169,8 @@ function openItemDetail(key, id){
       ed('存储地点', loc?esc(loc):NONE)+
     '</div>'+
     (row['短评']?'<p class="dnote">'+esc(row['短评'])+'</p>':'')+
+    /* 附件区：默认收起，点上方的附件按钮才出来 */
+    (ui.detailAttOpen ? detailAttachBlock(row) : '')+
     '<div class="sheet-actions">'+
       '<button class="btn ghost" type="button" id="dDel" style="margin-right:auto;color:var(--red)">删除</button>'+
       '<button class="btn ghost" type="button" data-x="1">关闭</button>'+
@@ -16070,7 +16190,7 @@ function openItemDetail(key, id){
       bumpHold(key, id, parseInt(n.getAttribute('data-hold'),10));
     };
   });
-  /* 状态药丸：点一下就地切换 —— 走的还是 toggleRowStatus，和卡片上的快捷按钮同一套规则 */
+  /* 状态药丸：点一下就地切换（走 toggleRowStatus，与卡片快捷按钮同一套规则） */
   host.querySelectorAll('[data-dstat]').forEach(function(n){
     n.onclick=function(e){
       e.stopPropagation();
@@ -16079,6 +16199,17 @@ function openItemDetail(key, id){
       openItemDetail(key, id);
       toast('已改为「'+n.getAttribute('data-dstat')+'」');
     };
+  });
+  /* 封面右下角的附件按钮：展开 / 收起附件区 */
+  var ab=host.querySelector('[data-act="datt"]');
+  if (ab) ab.onclick=function(e){
+    e.stopPropagation();
+    ui.detailAttOpen = !ui.detailAttOpen;
+    openItemDetail(key, id);
+  };
+  /* 附件区里的每一项：点开它自己的详情（不打开主体详情） */
+  host.querySelectorAll('.datt-item').forEach(function(n){
+    n.onclick=function(e){ e.stopPropagation(); openAttachDetail(row, parseInt(n.getAttribute('data-i'),10)); };
   });
   var big=host.querySelector('.dbig');
   if (big) big.onclick=function(e){ e.stopPropagation(); openBigCover(row, title); };
