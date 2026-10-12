@@ -817,7 +817,7 @@ input.search:focus{border-color:var(--accent);background:#fff}
 .locrow b{font-size:13.5px;font-weight:620}
 .locrow span{color:var(--muted);font-size:11.5px}
 .locrow .ops{display:flex;gap:6px}
-.imgwrap .imgprev{min-height:200px;aspect-ratio:3/4;border-radius:12px;background:#fff;margin-bottom:9px;
+.imgwrap .imgprev{min-height:200px;aspect-ratio:3/4.2;border-radius:12px;background:#fff;margin-bottom:9px;
   border:1px solid rgba(111,89,67,.08);overflow:hidden;position:relative;cursor:grab;outline:0;
   background-position:50% 50%;background-size:100% auto;background-repeat:no-repeat}
 .imgwrap .imgprev:active{cursor:grabbing}
@@ -3286,7 +3286,7 @@ input.search{margin-bottom:12px}
   .studyclassic .sr-shelf { padding: 0 14px 60px; margin: 0; border-radius: 0; }
 
   /* --- 2c. 编辑/录入封面预览：手机端保持竖向比例但稍矮 --- */
-  .imgwrap .imgprev { min-height: 160px; aspect-ratio: 3/4; }
+  .imgwrap .imgprev { min-height: 160px; aspect-ratio: 3/4.2; }
 
   /* --- 3. 关闭 iOS 聚焦自动放大 ---
      iOS Safari 遇到 font-size < 16px 的输入框会在聚焦时把整页放大，
@@ -4322,10 +4322,10 @@ input.search{margin-bottom:12px}
    第二行的五项是用户点名的：价格 / 购入时间 / 购入渠道 / 持有数 / 存放位置。
    ============================================================ */
 .sheet-head-r{display:flex;align-items:center;gap:8px;flex:0 0 auto}
-.dbig{width:100%;height:min(50vh,440px);min-height:180px;border-radius:16px;
+.dbig{width:auto;height:min(48vh,430px);min-height:180px;aspect-ratio:3/4.2;border-radius:16px;
   background-color:#f1ebe3;background-position:center;background-repeat:no-repeat;
   display:flex;align-items:center;justify-content:center;overflow:hidden;
-  cursor:zoom-in;margin:2px 0 12px;box-shadow:0 10px 26px rgba(63,48,36,.10)}
+  cursor:zoom-in;margin:0;box-shadow:0 10px 26px rgba(63,48,36,.10)}
 .dbig b{font:700 3.4em/1 "Songti SC",serif;color:rgba(120,100,80,.42)}
 /* v169：名称 / 分类在左，状态药丸靠右端 —— 同一行（手机端挤不下时自动换行到下面） */
 .dhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
@@ -4383,7 +4383,10 @@ input.search{margin-bottom:12px}
    · .datt-block 是展开后的附件区：主体在上、附件在下（手机端也这个顺序）；
    · .datt-item 可点，进附件详情。
    ============================================================ */
-.dbig-wrap{position:relative}
+/* ⚠️ v170：宽高比统一成 3/4.2（与卡片一致）后，大图要**高度驱动 + 居中**，
+   所以 .dbig-wrap 得收窄到内容宽度 —— 否则右下角的附件按钮会飘到空白处。
+   比例一致还有一个好处：同一个位移量在卡片 / 详情 / 预览里是同一个取景。 */
+.dbig-wrap{position:relative;width:fit-content;max-width:100%;margin:2px auto 12px}
 .dbig-att{position:absolute;right:12px;bottom:12px;display:inline-flex;align-items:center;gap:6px;
   min-height:32px;padding:0 13px;border-radius:10px;border:1px solid rgba(255,255,255,.55);
   background:rgba(255,255,255,.9);color:#4d4540;font:inherit;font-size:12px;font-weight:600;
@@ -4412,3 +4415,28 @@ input.search{margin-bottom:12px}
   .datt-pic{width:50px;height:64px}
   .dbig-att{right:10px;bottom:10px;min-height:30px;padding:0 11px;font-size:11.5px}
 }
+
+/* ============================================================
+   v170：封面「取景层」—— 全项目唯一决定「图怎么摆」的地方。
+   ------------------------------------------------------------
+   宿主元素（卡片封面 .cover / 详情大图 .dbig / 表单预览 .imgprev / 附件封面 …）
+   由 JS 下发四个变量：
+     --cvi  图片 url      --cvs  background-size（NN% auto）
+     --cvx / --cvy  取景层的位移（相对**框宽 / 框高**的百分比，正数 = 往右 / 往下）
+   ::before 就是那一层（absolute inset:0），位移用 transform:translate(%)。关键点：
+   **translate 的百分比永远相对元素自己**，跟「图比框大还是小」无关 ——
+   所以「往上拖 = 图往上走」在任何框、任何图上都成立。
+   ⚠️ 以前用的是 background-position:(50-x)% (50-y)%（x/y = 背景**溢出**的百分比），
+      那个方向会随「图是否溢出框」翻转（图大时 Y% 越大越往上、图小时越大越往下），
+      卡片 3/4.2 / 预览 3/4 / 详情 min(50vh,440px) 三个框宽高比又各不相同 ⇒
+      同一个 y 在编辑页往上、在卡片和详情页往下。这就是用户报的那个 bug。
+   ⚠️ 宿主必须带 .cv 类；`.cv` 自己会设 position:relative（这些封面框原本都没定位）。
+   ============================================================ */
+.cv{position:relative}
+.cv::before{content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
+  background-image:var(--cvi,none);background-repeat:no-repeat;background-position:50% 50%;
+  background-size:var(--cvs,100% auto);
+  transform:translate(var(--cvx,0%),var(--cvy,0%))}
+/* ⚠️ 别写 `.cv > *{position:relative}` —— 那会把 .imgdel（表单预览右上角的 ✕）这类
+   absolute 子元素压回 relative（同特异性、写在后面就赢）。角标本来就都是 absolute +
+   排在取景层之后，天然画在它上面，不用管。 */

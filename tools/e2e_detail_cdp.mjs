@@ -164,8 +164,12 @@ async function main() {
   const bigH = Number(await ev(`Math.round(document.querySelector('.dbig').getBoundingClientRect().height)`));
   const vh = Number(await ev(`window.innerHeight`));
   ok(bigH >= vh * 0.28, '★ 大封面确实占大面积（' + bigH + 'px / 视口 ' + vh + 'px）');
-  ok(await ev(`(document.querySelector('.dbig').getAttribute('style')||'').indexOf('background-image')>=0`),
-    '大封面用的是这件东西的图');
+  /* v170：图挪进了「取景层」(.cv::before)，宿主上是 --cvi / --cvs 两个变量 */
+  /* ⚠️ 正则写在模板字符串里：反斜杠必须写两条（\\s）—— 只写一条会被模板字符串当转义吃掉，
+     变成 /--cvis*:s*url(/ 这种废正则（真踩过）。 */
+  ok(await ev(`(function(){ var a=document.querySelector('.dbig').getAttribute('style')||'';
+    return /--cvi\\s*:\\s*url\\(/.test(a) && /--cvs\\s*:\\s*\\d+% auto/.test(a); })()`),
+    '大封面用的是这件东西的图（取景层 --cvi / --cvs 已下发）');
   ok(await ev(`(function(){var n=document.querySelector('.dname'); return !!n && n.textContent.indexOf('测试手办')>=0;})()`),
     '名称在');
   ok(await ev(`(function(){var s=document.querySelector('.dsub'); return !!s && s.textContent.indexOf('手办')>=0 && s.textContent.indexOf('宝可梦')>=0;})()`),
@@ -225,7 +229,8 @@ async function main() {
   await clickAt('.dbig');
   await sleep(450);
   ok(await ev(`!!document.querySelector('.imgfull')`), '★ 点大封面 → 全屏预览打开');
-  ok(await ev(`(function(){var p=document.querySelector('.ifpic'); return !!p && (p.getAttribute('style')||'').indexOf('background-image')>=0;})()`),
+  ok(await ev(`(function(){var p=document.querySelector('.ifpic'); if(!p) return false;
+    var a=p.getAttribute('style')||''; return /--cvi\\s*:\\s*url\\(/.test(a);})()`),
     '全屏里是同一张图');
   await clickAt('.imgfull');
   await sleep(350);

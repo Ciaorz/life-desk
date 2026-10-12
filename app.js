@@ -1628,7 +1628,7 @@ async function ghUploadCover(fk, url, done){
   var prev = document.querySelector('[data-img-prev="' + fk + '"]');
   if (prev){
     var u = resolveImgUrl(rel);
-    if (u) prev.style.backgroundImage = "url('" + u.replace(/["'()\\]/g, '') + "')";
+    if (u) cvSetImg(prev, u, editing.vals[fk+'_vp']);
   }
   var tip = document.querySelector('[data-img-dltip="' + fk + '"]');
   if (tip) tip.textContent = '已上传到仓库：' + rel.replace('data/images/', '') + '（Pages 生效约需 1 分钟）';
@@ -1669,7 +1669,7 @@ async function downloadCoverToLib(fk, done){
   var prev = document.querySelector('[data-img-prev="' + fk + '"]');
   if (prev){
     var u = resolveImgUrl(res.rel);
-    if (u) prev.style.backgroundImage = "url('" + u.replace(/["'()\\]/g, '') + "')";
+    if (u) cvSetImg(prev, u, editing.vals[fk+'_vp']);
   }
   var tip = document.querySelector('[data-img-dltip="' + fk + '"]');
   if (tip) tip.textContent = '已存到本地：' + res.rel.replace('data/images/', '') + '（不会再重复存第二份）';
@@ -4713,8 +4713,8 @@ function coverImg(row){
 }
 function coverViewport(row){
   var imgs = row['封面'] || row['照片'] || row['IP图像'] || row['系列封面'] || row['图片'];
-  if (imgs && imgs[0] && imgs[0].viewport) return imgs[0].viewport;
-  return {s:1,x:0,y:0};
+  if (imgs && imgs[0] && imgs[0].viewport) return vpNorm(imgs[0].viewport);
+  return vpNorm(null);
 }
 function hasCover(row){ return !!coverImg(row); }
 
@@ -4723,14 +4723,23 @@ function hasCover(row){ return !!coverImg(row); }
    以前「卡片样式」「表单里的初始内联样式」「拖拽/滑杆时的实时更新」三处各写一份尺寸换算，
    而且都拿 Math.max(50,…) 兜底 —— 想放宽缩放范围就得改三个地方，很容易漏掉一个
    （漏了就是「表单里能拉到 30%、卡片上却还是 50%」这种半吊子状态）。
-   现在统一走 vpSizeCss / vpPosCss：
-     · 缩放 30%–180%（VP_ZMIN / VP_ZMAX）；只有 keepContain 且 s=1 时用 'contain'（整图完整显示），
-       卡片那条路一直用百分比，保持和以前一样的观感。
-     · 位移 (50-x)% (50-y)%：x/y 的单位是「背景溢出的百分比」，与滑杆、拖拽同一套。
-       范围放宽到 ±200，允许把图推出框外，方便做裁切式构图。
+   ⚠️ v170 把「位移」的机制换掉了 —— 用户在编辑页把封面往上拉，卡片/详情页反而往下走。
+      老写法是 `background-position:(50-x)% (50-y)%`，把 x/y 当「**背景溢出**的百分比」，
+      而这个百分比的方向**会随「图是否溢出框」翻转**：图比框大时 Y% 越大越往上，
+      图比框小时 Y% 越大越往下。卡片（3/4.2）、表单预览（3/4）、详情大图（min(50vh,440px)）
+      三个框的宽高比各不相同，同一张图有的溢出有的欠填 ⇒ 同一个 y 在三处方向不一样。
+   现在：**图放在一层铺满框的「取景层」里，位移 = 这一层的 transform:translate(x%, y%)**
+      （x% 相对框宽、y% 相对框高，正数 = 往右 / 往下）。translate 的百分比永远相对**自己**，
+      与图大图小无关 ⇒ 三处方向完全一致，且和鼠标拖拽 1:1 对应（往下拖，图就往下走）。
+   ⚠️ 因此 x/y 的**单位变了**（「溢出百分比」→「框的百分比」），老数据要迁移一次：
+       `python tools/migrate_vp_box_units.py --apply`（换算成保持卡片观感不变的值，并打 v:2）。
+       没迁移的老数据一律**忽略位移**（居中显示，不会因为单位变了而乱飞）。
+   · 缩放 30%–180%（VP_ZMIN / VP_ZMAX），一律 `NN% auto`（表单预览也改成和卡片一致，
+     不再用 contain —— 否则「编辑页看到的」和「卡片上的」又是两套）。
+   · 位移 ±100%（VP_PAN），单位 = 框的百分比。
    ⚠️ VP_ZMIN / VP_ZMAX / VP_PAN 必须「先赋值、后使用」，所以放在这里（文件靠前处），
       别再挪到下面去 —— 卡片渲染在页面加载时就会读到它们。 */
-var VP_ZMIN = 0.3, VP_ZMAX = 1.8, VP_PAN = 200;
+var VP_ZMIN = 0.3, VP_ZMAX = 1.8, VP_PAN = 100;
 function vpClampS(s){
   var lo = (typeof VP_ZMIN === 'number') ? VP_ZMIN : 0.3;
   var hi = (typeof VP_ZMAX === 'number') ? VP_ZMAX : 1.8;
@@ -4738,21 +4747,70 @@ function vpClampS(s){
   if (!isFinite(v)) v = 1;
   return Math.max(lo, Math.min(hi, v));
 }
-function vpSizeCss(s, keepContain){
+function vpSizeCss(s){
   var v = (s == null || isNaN(s)) ? 1 : Number(s);
   if (!isFinite(v)) v = 1;
-  if (keepContain && Math.abs(v - 1) < 0.005) return 'contain';
   return Math.round(vpClampS(v) * 100) + '% auto';
 }
-function vpPosCss(vp){
-  var x = num(vp && vp.x), y = num(vp && vp.y);
-  return (50 - x) + '% ' + (50 - y) + '%';
+/* 视口是不是「新单位」（框的百分比）。老数据没打 v:2 → 它的 x/y 不能当新单位用（会乱飞） */
+function vpIsBox(vp){ return !!vp && num(vp.v) >= 2; }
+function vpClampPan(v){
+  var x = num(v); if (!isFinite(x)) x = 0;
+  return Math.max(-VP_PAN, Math.min(VP_PAN, x));
+}
+/* 读路径统一入口：老单位（没 v:2）的位移一律当 0 —— 宁可居中，也不要因为换了单位而乱飞。
+   ⚠️ 返回**新对象**，别拿去回写数据（回写会把老位移抹掉，交给 migrate 脚本换算）。 */
+function vpNorm(vp){
+  return {
+    s: vpClampS(num(vp && vp.s) || 1),
+    x: vpIsBox(vp) ? vpClampPan(vp.x) : 0,
+    y: vpIsBox(vp) ? vpClampPan(vp.y) : 0,
+    v: 2
+  };
+}
+/* 写路径：带上 v:2 标记（下次就不会被当成老数据了） */
+function vpStamp(vp){
+  var o = vpNorm(vp);
+  return { s:o.s, x:o.x, y:o.y, v:2 };
+}
+function cvNum1(v){
+  var x = Number(v); if (!isFinite(x)) x = 0;
+  return Math.round(x * 10) / 10;
+}
+/* ============================================================
+ * 封面「取景层」的样式声明（宿主元素必须带 .cv 类，层 = 它的 ::before）：
+ *   --cvi  图片           --cvs  background-size（NN% auto）
+ *   --cvx / --cvy  取景层的位移（相对框宽 / 框高，正数 = 往右 / 往下）
+ * 为什么不用 background-position：见文件上方 VP_ZMIN 那段注释（方向会随溢出关系翻转）。
+ * ============================================================ */
+function cvDecls(u, vp){
+  if (!u) return '';
+  var n = vpNorm(vp);
+  /* 用单引号包 URL：外层 HTML 是双引号属性，内部再用双引号会把属性截断（封面整片空白） */
+  return "--cvi:url('"+String(u).replace(/[\"'()\\]/g,'')+"');--cvs:"+vpSizeCss(n.s)+
+    ';--cvx:'+cvNum1(n.x)+'%;--cvy:'+cvNum1(n.y)+'%';
+}
+/* 直接把图片 + 视口写到宿主元素上（表单预览 / 附件预览这类「活的」封面用） */
+function cvSetImg(host, resolvedUrl, vp){
+  if (!host) return;
+  if (!resolvedUrl){ cvClear(host); return; }
+  var n = vpNorm(vp);
+  host.style.setProperty('--cvi', "url('"+String(resolvedUrl).replace(/[\"'()\\]/g,'')+"')");
+  host.style.setProperty('--cvs', vpSizeCss(n.s));
+  host.style.setProperty('--cvx', cvNum1(n.x)+'%');
+  host.style.setProperty('--cvy', cvNum1(n.y)+'%');
+}
+function cvClear(host){
+  if (!host || !host.style) return;
+  ['--cvi','--cvs','--cvx','--cvy'].forEach(function(k){ host.style.removeProperty(k); });
+}
+/* 这张封面框里有没有图（原来靠 prev.style.backgroundImage 判断，现在看 --cvi） */
+function cvHasImg(host){
+  return !!(host && host.style && host.style.getPropertyValue('--cvi'));
 }
 function coverStyle(row,title){
   var u = coverImg(row);
-  var vp = coverViewport(row);
-  /* 用单引号包裹 URL：外部 HTML 的 style 属性使用双引号，内部若再用双引号会截断属性，导致封面整片空白 */
-  if (u) return "background-image:url('"+u.replace(/[\"'()\\]/g,"")+"');background-repeat:no-repeat;background-position:"+vpPosCss(vp)+";background-size:"+vpSizeCss(vp.s,false)+";background-color:#fff";
+  if (u) return cvDecls(u, coverViewport(row)) + ';background-color:#fff';
   var h = hue(title), h2 = (h+26)%360;
   return 'background:linear-gradient(152deg,hsl('+h+',26%,57%),hsl('+h2+',22%,36%))';
 }
@@ -6723,7 +6781,7 @@ function localUpsert(key, id, vals){
          原来一律 String(v)，数组会被转成 '[object Object]'，封面直接消失且不可逆。
          数组原样保留；字符串才按「URL + _vp」包装。 */
       if (Array.isArray(v)) row[f.k] = v;
-      else row[f.k] = v ? [{imageUrl:String(v), viewport:(vp && vp.s ? vp : {s:1,x:0,y:0})}] : null;
+      else row[f.k] = v ? [{imageUrl:String(v), viewport:(vp && vp.s ? vp : {s:1,x:0,y:0,v:2})}] : null;
     }
     else if (f.t==='multi') row[f.k] = (v && v.length) ? v : null;
     else if (f.t==='check') row[f.k] = !!v;
@@ -7848,7 +7906,7 @@ function poCardHTML(r){
   var editingBook = same && ed.f === '预定日期';
   /* v166：定金的就地编辑判定挪进了 poMoneyBlock（它要同时管本体和每个附件） */
   return '<div class="pocard'+(same?' poediting':'')+'" data-act="popen" data-id="'+esc(r._id)+'">'+
-    '<div class="pocov" style="'+coverStyle(r, nm)+'">'+(hasCover(r)?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
+    '<div class="pocov cv" style="'+coverStyle(r, nm)+'">'+(hasCover(r)?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
     '<div class="pobody">'+
       '<strong>'+nameHTML(r)+'</strong>'+
       (sub?'<span>'+esc(sub)+'</span>':'')+
@@ -8159,8 +8217,8 @@ function attachCoverUrl(a){
    所以另开一个字段，不动已有数据（老附件没这个字段 → 默认 {s:1,x:0,y:0}）。 */
 function attachVp(a){
   var v = a && a['封面视口'];
-  if (!v || typeof v !== 'object') return { s:1, x:0, y:0 };
-  return { s: num(v.s) || 1, x: num(v.x) || 0, y: num(v.y) || 0 };
+  if (!v || typeof v !== 'object') return vpNorm(null);
+  return vpNorm(v);
 }
 /* ============================================================
  * v159：物品名的展示 —— 「名称」黑色 + 「备注名」灰色小一号。
@@ -8189,18 +8247,16 @@ function dlcCardHTML(a, i, ownerId){
   var kind = a['类型'] || '附件';
   var pr = num(a['价格']);
   var cu = attachCoverUrl(a);
-  /* v165：附件封面也能调缩放 / 位置 —— 换算与物品卡片同源（卡片一律不用 contain） */
+  /* v165：附件封面也能调缩放 / 位置 —— 换算与物品卡片同源（v170 起走「取景层」） */
   var avp = attachVp(a);
-  var bg = cu ? ("background-image:url('"+cu.replace(/["'()\\]/g,'')+"')"+
-    ";background-repeat:no-repeat;background-position:"+vpPosCss(avp)+
-    ";background-size:"+vpSizeCss(avp.s, false)) : '';
+  var bg = cvDecls(cu, avp);
   /* v169：展示卡可点 —— 点它**只开附件详情**，不碰主体详情（用户要求）。
      ⚠️ .dlccard 在 DOM 里是 .poster 的**兄弟**，所以本来就不会冒泡到主体卡；
         真正要做的是「给它自己的 data-act」，否则点了没反应。 */
   return '<div class="dlccard" data-act="dlcinfo" data-owner="'+esc(ownerId||'')+'" data-i="'+i+'"'+
     ' title="点一下看这个附件的详情">'+
     '<span class="dlckind">'+esc(kind)+'</span>'+
-    '<div class="dlccov'+(cu?'':' noimg')+'" style="'+bg+'">'+(cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
+    '<div class="dlccov cv'+(cu?'':' noimg')+'" style="'+bg+'">'+(cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+'</div>'+
     '<strong>'+esc(nm)+'</strong>'+
     (pr>0?'<span class="dlcpr">¥'+Math.round(pr)+'</span>':'')+
   '</div>';
@@ -8223,7 +8279,7 @@ function collectionPosterHTML(r){
   var tags = dlcTagsHTML(r);
   return '<div class="poster'+(tags?' hasdlc':'')+'" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
     ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-    '<div class="cover'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
+    '<div class="cover cv'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
     (hasCover(r)?'':'<b>'+esc(String(t).slice(0,1))+'</b>')+
     '<span class="tag">'+esc(pkCardTag(r))+'</span>'+
     /* v132：只有「贴纸版」加角标 —— 冰箱贴版是默认版本，不加免得 1300 张卡都挂个牌子。
@@ -8665,7 +8721,7 @@ function renderIpMode(){
       ' data-act="ipopen" data-id="'+esc(ip._id)+'"'+
       (parentName?' title="属于「'+esc(parentName)+'」"':'')+
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-      '<div class="ph" style="'+coverStyle(ip,name)+'">'+(hasCover(ip)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
+      '<div class="ph cv" style="'+coverStyle(ip,name)+'">'+(hasCover(ip)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
       '<div class="bd"><strong>'+esc(name)+'</strong><span>'+esc(desc)+'</span></div>'+fold+'</div>';
   }
   h += '<div class="ipgrid" style="--cs:'+csGet()+'">'+ tree.tops.map(function(tn){
@@ -8711,7 +8767,7 @@ function renderIpDetail(){
         : '')+
     '</div>'+
     '<div class="iphero">'+
-      '<div class="ph" style="'+coverStyle(ip,name)+'">'+(hasCover(ip)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
+      '<div class="ph cv" style="'+coverStyle(ip,name)+'">'+(hasCover(ip)?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
       '<div><h3>'+esc(name)+'</h3>'+
       (ip['简介']?'<p>'+esc(ip['简介'])+'</p>':'')+
       (parent?'<p style="color:var(--muted)">上级 IP：'+esc(parent)+'</p>':'')+
@@ -8731,7 +8787,7 @@ function renderIpDetail(){
         var kby = ownedByCat(kitems);
         var kdesc = Object.keys(kby).map(function(k){ return k+' '+kby[k]; }).join(' · ') || '还没挂东西';
         return '<div class="ipcard" data-act="ipopen" data-id="'+esc(kip._id)+'">'+
-          '<div class="ph" style="'+coverStyle(kip,kn)+'">'+(hasCover(kip)?'':'<b>'+esc(String(kn).slice(0,1))+'</b>')+'</div>'+
+          '<div class="ph cv" style="'+coverStyle(kip,kn)+'">'+(hasCover(kip)?'':'<b>'+esc(String(kn).slice(0,1))+'</b>')+'</div>'+
           '<div class="bd"><strong>'+esc(kn)+'</strong><span>'+esc(kdesc)+'</span></div></div>';
       }).join('')+'</div></div>';
   }
@@ -9682,7 +9738,7 @@ function renderTravel(){
     var locRegion = esc(r['地区'] || '');
     var hearts = heartPills(num(r['心愿等级']));
     return '<div class="trip '+cls+'" data-act="edit" data-key="travel" data-id="'+esc(r._id)+'" data-sp-bindable="database" data-sp-database-id="eXqg6O484hQTwO9afBcwZl">'+
-      (hasCover(r)?'<div class="coverimg" style="'+coverStyle(r,locName)+'"></div>':'')+
+      (hasCover(r)?'<div class="coverimg cv" style="'+coverStyle(r,locName)+'"></div>':'')+
       '<div class="top"><h4>'+locName+'</h4>'+statusPill(r['状态'])+'</div>'+
       '<div class="where">'+(locSub?locSub:'')+(locRegion?(locSub?' · ':'')+locRegion:'')+'</div>'+
       (hearts?'<div class="hearts">'+hearts+'</div>':'')+
@@ -9765,7 +9821,7 @@ function renderStudy(){
     if (num(r['每日分钟'])) meta.push('<span>每天 <b>'+num(r['每日分钟'])+'</b> 分钟</span>');
     var scov=coverImg(r);
     return '<div class="study" data-act="edit" data-key="study" data-id="'+esc(r._id)+'" data-sp-bindable="database" data-sp-database-id="4rq1NhoGtp9NOnIWB2asLJ">'+
-      (scov?'<div class="bthumb sm" style="'+coverStyle(r,'')+'"></div>':'')+
+      (scov?'<div class="bthumb sm cv" style="'+coverStyle(r,'')+'"></div>':'')+
       '<div class="bmain"><div class="top"><h4>'+esc(r['计划']||'')+'</h4><span class="pct">'+p+'%</span></div>'+
       '<div class="meta">'+statusPill(r['状态'])+'<span>'+esc(r['领域']||'')+'</span>'+meta.join('')+
       (r['备注']?'<span>'+esc(r['备注'])+'</span>':'')+'</div></div>';
@@ -9838,7 +9894,7 @@ function renderIdea(){
     var rot = ((hue(r._id||i)%5)-2)*0.9;
     var icov=coverImg(r);
     return '<div class="note'+(r['星标']?' star':'')+'" style="transform:rotate('+rot+'deg)" data-act="edit" data-key="idea" data-id="'+esc(r._id)+'" data-sp-bindable="database" data-sp-database-id="enWbyi2bgio8062H0YdwbX">'+
-      (icov?'<div class="ithumb" style="'+coverStyle(r,'')+'"></div>':'')+
+      (icov?'<div class="ithumb cv" style="'+coverStyle(r,'')+'"></div>':'')+
       'data-act="edit" data-key="idea" data-id="'+esc(r._id)+'">'+
       '<p>'+esc(r['内容']||'')+'</p>'+
       (r['来源']?'<div class="src">— '+esc(r['来源'])+'</div>':'')+
@@ -11299,14 +11355,12 @@ document.addEventListener('click', function(ev){
     var ik = node.getAttribute('data-k');
     if (!editing) return;
     editing.vals[ik] = '';
-    editing.vals[ik+'_vp'] = { s:1, x:0, y:0 };
+    editing.vals[ik+'_vp'] = { s:1, x:0, y:0, v:2 };
     var iInp = document.querySelector('[data-f="' + ik + '"]');
     if (iInp){ iInp.value = ''; iInp.dispatchEvent(new Event('input', { bubbles:true })); }
     var iPrev = document.querySelector('[data-img-prev="' + ik + '"]');
     if (iPrev){
-      iPrev.style.backgroundImage = '';
-      iPrev.style.backgroundPosition = '';
-      iPrev.style.backgroundSize = '';
+      cvClear(iPrev);
       var iHint = iPrev.querySelector('.imgvp-hint');
       if (iHint) iHint.hidden = true;
     }
@@ -12373,35 +12427,32 @@ function fieldVal(row, f){
   if (f.t==='number' || f.t==='currency') return v==null?'':num(v);
   return v==null?'':v;
 }
-/* 设置图片预览：用与展示卡一致的 background-image + background-position/size */
+/* 设置图片预览：和展示卡一样，写「取景层」的几个变量 */
 function setImgPreview(prev, url, k){
+  var hint = prev.querySelector('.imgvp-hint');
+  var bar = prev.parentNode ? prev.parentNode.querySelector('.imgvp-bar') : null;
   if (!url){
-    prev.style.backgroundImage = '';
-    prev.style.backgroundRepeat = '';
-    prev.style.backgroundPosition = '';
-    prev.style.backgroundSize = '';
-    var hint = prev.querySelector('.imgvp-hint'); if (hint) hint.hidden = true;
-    var bar = prev.parentNode.querySelector('.imgvp-bar'); if (bar) bar.hidden = true;
+    cvClear(prev);
+    if (hint) hint.hidden = true;
+    if (bar) bar.hidden = true;
     return;
   }
-  var resolved = resolveImgUrl(url);
-  prev.style.backgroundImage = "url('"+resolved.replace(/[\"'()\\]/g,'')+"')";
-  prev.style.backgroundRepeat = 'no-repeat';
-  applyImgViewport(prev, k);
-  var hint = prev.querySelector('.imgvp-hint'); if (hint) hint.hidden = false;
-  var bar = prev.parentNode.querySelector('.imgvp-bar'); if (bar) bar.hidden = false;
+  cvSetImg(prev, resolveImgUrl(url), editing && editing.vals ? editing.vals[k+'_vp'] : null);
+  if (hint) hint.hidden = false;
+  if (bar) bar.hidden = false;
 }
-/* v165：把「按视口上样式」抽出来 —— 表单封面（editing.vals）与附件封面（附件对象）共用这一份 */
+/* v165：把「按视口上样式」抽出来 —— 表单封面（editing.vals）与附件封面（附件对象）共用这一份。
+   v170：只改取景层的尺寸 / 位移（图不在这里动，免得每次拖拽都重设 url）。 */
 function applyVpTo(prev, vp){
   if (!prev) return;
-  vp = vp || {s:1,x:0,y:0};
-  prev.style.backgroundPosition = vpPosCss(vp);
-  prev.style.backgroundSize = vpSizeCss(vp.s, true);
+  var n = vpNorm(vp);
+  prev.style.setProperty('--cvs', vpSizeCss(n.s));
+  prev.style.setProperty('--cvx', cvNum1(n.x)+'%');
+  prev.style.setProperty('--cvy', cvNum1(n.y)+'%');
 }
 function applyImgViewport(prev, k){
   if (!prev || !k) return;
-  var vp = (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0};
-  applyVpTo(prev, vp);
+  applyVpTo(prev, editing && editing.vals ? editing.vals[k+'_vp'] : null);
 }
 /* ---------- 表单控件绑定（单个表单 / 批量表单共用） ---------- */
 function wireFormControls(host, saveDraft){
@@ -12830,7 +12881,7 @@ function wireFormControls(host, saveDraft){
       compressImage(file, 800, function(dataUrl){
         if (!dataUrl){ if (note) note.textContent='这张图读不出来，换个文件试试'; return; }
         editing.vals[k]=dataUrl;
-        editing.vals[k+'_vp']={s:1,x:0,y:0};
+        editing.vals[k+'_vp']={s:1,x:0,y:0,v:2};
         var urlInput=host.querySelector('[data-f="'+k+'"]'); if (urlInput) urlInput.value=dataUrl;
         var prev=host.querySelector('[data-img-prev="'+k+'"]');
         if (prev) setImgPreview(prev, dataUrl, k);
@@ -12891,9 +12942,11 @@ function wireFormControls(host, saveDraft){
   });
   host.querySelectorAll('.imgprev').forEach(function(prev){
     var k=prev.getAttribute('data-img-prev'); if (!k) return;
-    function vp(){ return (editing && editing.vals && editing.vals[k+'_vp']) || {s:1,x:0,y:0}; }
+    /* v170：读出来的位移一律归一化（老单位当 0），改完再打 v:2 写回去 */
+    function vp(){ return vpNorm(editing && editing.vals ? editing.vals[k+'_vp'] : null); }
     function setVp(o){
       if (!editing) return;
+      o = vpStamp(o);
       editing.vals[k+'_vp']=o; applyImgViewport(prev, k);
       var sl = prev.parentNode.querySelector('.imgvp-slider[data-img-zoomslider="'+k+'"]');
       if (sl) sl.value = Math.max(VP_ZMIN, Math.min(VP_ZMAX, o.s||1));
@@ -12946,13 +12999,13 @@ function wireFormControls(host, saveDraft){
     }
     prev.ondblclick=function(){ setVp({s:1,x:0,y:0}); };
     prev.onwheel=function(e){
-      if (!prev.style.backgroundImage) return;
+      if (!cvHasImg(prev)) return;
       e.preventDefault();
       var o=vp(); o.s=Math.max(VP_ZMIN, Math.min(VP_ZMAX, o.s+(e.deltaY<0?0.1:-0.1))); setVp(o);
     };
     /* 键盘方向键微调（焦点在预览框时）。v146：边界改成跟滑杆/拖拽同一套 VP_PAN（±200） */
     prev.addEventListener('keydown', function(e){
-      if (!prev.style.backgroundImage) return;
+      if (!cvHasImg(prev)) return;
       var step = 2;
       var o=vp(), moved=false;
       if (e.key==='ArrowLeft'){ o.x=Math.max(-VP_PAN,Math.min(VP_PAN,o.x-step)); moved=true; }
@@ -12962,25 +13015,32 @@ function wireFormControls(host, saveDraft){
       if (moved){ e.preventDefault(); setVp(o); }
     });
     var dragging=false, sx=0, sy=0, ix=0, iy=0;
+    /* v170：位移单位 = 框的百分比 ⇒ 「拖多少像素，图就走多少像素」（1:1，手感自然）。
+       老代码是 ix+dx/3（那个 /3 是给「溢出百分比」打补丁的），现在不需要了。 */
+    function panTo(cx, cy){
+      var w=Math.max(1,prev.clientWidth), h=Math.max(1,prev.clientHeight);
+      var o=vp();
+      o.x=Math.max(-VP_PAN,Math.min(VP_PAN, ix+(cx-sx)*100/w));
+      o.y=Math.max(-VP_PAN,Math.min(VP_PAN, iy+(cy-sy)*100/h));
+      setVp(o);
+    }
     prev.onmousedown=function(e){
-      if (!prev.style.backgroundImage) return;
+      if (!cvHasImg(prev)) return;
       dragging=true; sx=e.clientX; sy=e.clientY; var o=vp(); ix=o.x; iy=o.y; prev.style.cursor='grabbing';
     };
     window.addEventListener('mousemove', function(e){
       if (!dragging) return;
-      var dx=(e.clientX-sx), dy=(e.clientY-sy);
-      var o=vp(); o.x=Math.max(-VP_PAN,Math.min(VP_PAN,ix+dx/3)); o.y=Math.max(-VP_PAN,Math.min(VP_PAN,iy+dy/3)); setVp(o);
+      panTo(e.clientX, e.clientY);
     });
     window.addEventListener('mouseup', function(){ dragging=false; prev.style.cursor=''; });
-    /* 触摸支持 */
+    /* 触摸支持（与鼠标同一套 1:1 换算） */
     prev.ontouchstart=function(e){
-      if (!prev.style.backgroundImage) return;
+      if (!cvHasImg(prev)) return;
       dragging=true; sx=e.touches[0].clientX; sy=e.touches[0].clientY; var o=vp(); ix=o.x; iy=o.y;
     };
     window.addEventListener('touchmove', function(e){
       if (!dragging) return;
-      var dx=(e.touches[0].clientX-sx), dy=(e.touches[0].clientY-sy);
-      var o=vp(); o.x=Math.max(-VP_PAN,Math.min(VP_PAN,ix+dx/3)); o.y=Math.max(-VP_PAN,Math.min(VP_PAN,iy+dy/3)); setVp(o);
+      panTo(e.touches[0].clientX, e.touches[0].clientY);
     });
     window.addEventListener('touchend', function(){ dragging=false; });
     /* 剪切板粘贴 */
@@ -12993,7 +13053,7 @@ function wireFormControls(host, saveDraft){
       var note=host.querySelector('[data-img-note="'+k+'"]'); if (note) note.textContent='正在压缩…';
       compressImage(file, 800, function(dataUrl){
         if (!dataUrl){ if (note) note.textContent='这张图读不出来，换个文件试试'; return; }
-        editing.vals[k]=dataUrl; editing.vals[k+'_vp']={s:1,x:0,y:0};
+        editing.vals[k]=dataUrl; editing.vals[k+'_vp']={s:1,x:0,y:0,v:2};
         var urlInput=host.querySelector('[data-f="'+k+'"]'); if (urlInput) urlInput.value=dataUrl;
         setImgPreview(prev, dataUrl, k);
         if (note) note.textContent='已压到约 '+Math.round(dataUrl.length/1024)+' KB';
@@ -13425,7 +13485,7 @@ function seriesCloudWall(rows, cols){
       : '<span class="wish-tag" data-act="serieswish" data-id="'+esc(r._id)+'">点击想要</span>';
     return '<div class="poster" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-      '<div class="cover'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
+      '<div class="cover cv'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
       (hasCover(r)?'':'<b>'+esc(String(t).slice(0,1))+'</b>')+
       '<span class="tag">'+esc(pkCardTag(r))+'</span>'+
       /* v132：只有「贴纸版」加角标 —— 冰箱贴版是默认版本，不加免得 1300 张卡都挂个牌子。
@@ -14033,14 +14093,14 @@ function attachPanelHTML(){
     var a = list[sel];
     var cu = String(a['封面'] || '');
     var _avp = attachVp(a);
-    var _abgStyle = cu ? ("background-image:url('"+resolveImgUrl(cu).replace(/["'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+vpPosCss(_avp)+";background-size:"+vpSizeCss(_avp.s,true)) : '';
+    var _abgStyle = cvDecls(resolveImgUrl(cu), _avp);
     h += '<div class="attform">'+
       '<label class="af"><u>名称</u><input data-att-f="名称" type="text" value="'+esc(a['名称'] || '')+'" placeholder="如 特典亚克力立牌" autocomplete="off"></label>'+
       '<label class="af"><u>类型</u><input data-att-f="类型" type="text" list="attTypeList" value="'+esc(a['类型'] || '')+'" placeholder="DLC / 特典…" autocomplete="off"></label>'+
       '<datalist id="attTypeList">'+ATTACH_TYPES.map(function(t){ return '<option value="'+esc(t)+'"></option>'; }).join('')+'</datalist>'+
       '<label class="af"><u>价格</u><input data-att-f="价格" type="number" value="'+(a['价格']==null?'':esc(String(a['价格'])))+'" placeholder="0" inputmode="decimal"></label>'+
       '<div class="af afimg"><u>封面</u>'+
-        '<div class="attcov'+(cu?'':' noimg')+'" data-att-prev="1" tabindex="0" title="拖拽移动 · 滚轮 / 滑杆缩放 · Ctrl+V 粘贴图片" style="'+_abgStyle+'">'+(cu?'':'<b>封面</b>')+'</div>'+
+        '<div class="attcov cv'+(cu?'':' noimg')+'" data-att-prev="1" tabindex="0" title="拖拽移动 · 滚轮 / 滑杆缩放 · Ctrl+V 粘贴图片" style="'+_abgStyle+'">'+(cu?'':'<b>封面</b>')+'</div>'+
         '<div class="attvp-bar"'+(cu?'':' hidden')+'>'+
           '<button type="button" class="btn ghost xs" data-att-zoom="-0.15">−</button>'+
           '<input type="range" class="attvp-slider" data-att-zoomslider min="'+VP_ZMIN+'" max="'+VP_ZMAX+'" step="0.01" value="'+_avp.s+'" title="拖动缩放">'+
@@ -14082,15 +14142,10 @@ function wireAttachPanel(panel, saveDraft){
     var has = !!u;
     prev.classList.toggle('noimg', !has);
     if (has){
-      prev.style.backgroundImage = "url('" + resolveImgUrl(u).replace(/["'()\\]/g,'') + "')";
-      prev.style.backgroundRepeat = 'no-repeat';
-      applyVpTo(prev, attachVp(cur()));
+      cvSetImg(prev, resolveImgUrl(u), attachVp(cur()));
       prev.innerHTML = '';
     } else {
-      prev.style.backgroundImage = '';
-      prev.style.backgroundRepeat = '';
-      prev.style.backgroundPosition = '';
-      prev.style.backgroundSize = '';
+      cvClear(prev);
       prev.innerHTML = '<b>封面</b>';
     }
     var bar = panel.querySelector('.attvp-bar');
@@ -14120,7 +14175,7 @@ function wireAttachPanel(panel, saveDraft){
         if (!dataUrl){ toast('这张图读不出来，换个文件试试'); return; }
         var a = cur(); if (!a) return;
         a['封面'] = dataUrl;
-        a['封面视口'] = a['封面视口'] || { s:1, x:0, y:0 };
+        a['封面视口'] = a['封面视口'] || { s:1, x:0, y:0, v:2 };
         bump();
         var inp = panel.querySelector('[data-att-f="封面"]'); if (inp) inp.value = dataUrl;
         paintCover(dataUrl);
@@ -14139,9 +14194,9 @@ function wireAttachPanel(panel, saveDraft){
         x: Math.max(-VP_PAN, Math.min(VP_PAN, num(o.x) || 0)),
         y: Math.max(-VP_PAN, Math.min(VP_PAN, num(o.y) || 0))
       };
+      nv = vpStamp(nv);
       a['封面视口'] = nv;
-      prev.style.backgroundPosition = vpPosCss(nv);
-      prev.style.backgroundSize = vpSizeCss(nv.s, true);
+      applyVpTo(prev, nv);
       var zsl = panel.querySelector('[data-att-zoomslider]'); if (zsl) zsl.value = nv.s;
       var pc = panel.querySelector('[data-att-pct]'); if (pc) pc.textContent = Math.round(nv.s*100) + '%';
       bump();
@@ -14161,10 +14216,11 @@ function wireAttachPanel(panel, saveDraft){
       var st = { cx: e.clientX, cy: e.clientY, vp: vp() };
       var w = Math.max(1, prev.clientWidth), h = Math.max(1, prev.clientHeight);
       prev.classList.add('dragging');
+      /* v170：1:1 跟手（正数 = 右 / 下），和表单封面完全同一套算法 */
       function onMove(ev){
         var o = { s: st.vp.s, x: st.vp.x, y: st.vp.y };
-        o.x = st.vp.x - (ev.clientX - st.cx) * 100 / w * (st.vp.s || 1);
-        o.y = st.vp.y - (ev.clientY - st.cy) * 100 / h * (st.vp.s || 1);
+        o.x = st.vp.x + (ev.clientX - st.cx) * 100 / w;
+        o.y = st.vp.y + (ev.clientY - st.cy) * 100 / h;
         setVp(o);
       }
       function onUp(){
@@ -14195,7 +14251,7 @@ function wireAttachPanel(panel, saveDraft){
         if (!dataUrl){ toast('这张图读不出来，换个图片试试'); return; }
         var b = cur(); if (!b) return;
         b['封面'] = dataUrl;
-        b['封面视口'] = b['封面视口'] || { s:1, x:0, y:0 };
+        b['封面视口'] = b['封面视口'] || { s:1, x:0, y:0, v:2 };
         bump();
         var inp = panel.querySelector('[data-att-f="封面"]'); if (inp) inp.value = dataUrl;
         paintCover(dataUrl);
@@ -14748,14 +14804,12 @@ function fieldHTML(f, v){
       '<input type="hidden" data-f="'+f.k+'" value="'+esc(lv3)+'">'+
       '</div>';
   } else if (f.t==='img'){
-    var vp = (editing && editing.vals && editing.vals[f.k+'_vp']) || {s:1,x:0,y:0};
-    /* v146：默认 contain（整图完整显示、四周白色补边）；放大/缩小按比例（30%–180%），
-       换算统一走 vpSizeCss，与拖拽时 applyImgViewport 完全一致 */
-    var bgSize = vpSizeCss(vp.s, true);
-    var prevStyle = v ? ("background-image:url('"+resolveImgUrl(v).replace(/[\"'()\\]/g,'')+"');background-repeat:no-repeat;background-position:"+vpPosCss(vp)+";background-size:"+bgSize) : '';
+    var vp = vpNorm(editing && editing.vals && editing.vals[f.k+'_vp']);
+    /* v170：预览一律和卡片同一套（`NN% auto` + 取景层位移）—— 编辑页看到的就是卡片上的 */
+    var prevStyle = cvDecls(resolveImgUrl(v), vp);
     var hasV = !!v;
     body='<div class="imgwrap" data-k="'+f.k+'" data-has-img="'+(hasV?1:0)+'">'+
-      '<div class="imgprev" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
+      '<div class="imgprev cv" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
       /* v75fix：封面框右上角「✕」——一键清掉当前这张图 */
       (v?'<button type="button" class="imgdel" data-act="imgdel" data-k="'+esc(f.k)+'" title="清除这张图片">✕</button>':'')+
       '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动（可推出边框）· 滑杆/滚轮缩放 30–180% · 方向键微调 · 双击重置</div>'+
@@ -16021,7 +16075,7 @@ function openBigCover(row, title){
   if (!hasCover(row)){ toast('这件还没有封面'); return; }
   var d = document.createElement('div');
   d.className = 'imgfull';
-  d.innerHTML = '<div class="ifpic" style="'+coverStyle(row, title)+'"></div>'+
+  d.innerHTML = '<div class="ifpic cv" style="'+coverStyle(row, title)+'"></div>'+
     '<span class="ifname">'+esc(title)+'</span>'+
     '<button class="ifx" type="button" aria-label="关闭">×</button>';
   document.body.appendChild(d);
@@ -16044,9 +16098,7 @@ function openAttachDetail(ownerRow, i){
   var nm = a['名称'] || a['类型'] || '附件';
   var kind = a['类型'] || '附件';
   var cu = attachCoverUrl(a), avp = attachVp(a);
-  var bg = cu ? ("background-image:url('"+cu.replace(/["'()\\]/g,'')+"')"+
-    ";background-repeat:no-repeat;background-position:"+vpPosCss(avp)+
-    ";background-size:"+vpSizeCss(avp.s,false)) : '';
+  var bg = cvDecls(cu, avp);
   var pr = num(a['价格']), dep = num(a['定金']), bal = num(a['尾款']), tot = poTotalOf(a);
   var chips = '';
   if (pr > 0) chips += '<b class="dq">¥' + Math.round(pr) + '</b>';
@@ -16058,7 +16110,7 @@ function openAttachDetail(ownerRow, i){
   var h = '<div class="sheet detail-sheet"><div class="sheet-head"><div>'+
     '<p>附件 · '+esc(kind)+'</p><h2>'+esc(nm)+'</h2></div>'+
     '<button class="x" type="button" data-x="1">×</button></div>'+
-    '<div class="dbig'+(cu?'':' noimg')+'" style="'+bg+'">'+
+    '<div class="dbig cv'+(cu?'':' noimg')+'" style="'+bg+'">'+
       (cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+
     '</div>'+
     '<div class="drow dquick">'+chips+'</div>'+
@@ -16090,12 +16142,10 @@ function detailAttachBlock(row){
       var nm = a['名称'] || a['类型'] || '附件';
       var kind = a['类型'] || '附件';
       var cu = attachCoverUrl(a), avp = attachVp(a);
-      var bg = cu ? ("background-image:url('"+cu.replace(/["'()\\]/g,'')+"')"+
-        ";background-repeat:no-repeat;background-position:"+vpPosCss(avp)+
-        ";background-size:"+vpSizeCss(avp.s,false)) : '';
+      var bg = cvDecls(cu, avp);
       var pr = num(a['价格']);
       return '<div class="datt-item" data-act="dlcinfo" data-owner="'+esc(row._id)+'" data-i="'+i+'">'+
-        '<div class="datt-pic'+(cu?'':' noimg')+'" style="'+bg+'">'+
+        '<div class="datt-pic cv'+(cu?'':' noimg')+'" style="'+bg+'">'+
           (cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+
         '</div>'+
         '<div class="datt-info"><strong>'+esc(nm)+'</strong>'+
@@ -16136,7 +16186,7 @@ function openItemDetail(key, id){
     '</div></div>'+
     /* 大封面（点一下看原图）；有附件时右下角挂一个附件按钮 */
     '<div class="dbig-wrap">'+
-      '<div class="dbig'+(hasCover(row)?'':' noimg')+'" style="'+coverStyle(row,title)+'"'+
+      '<div class="dbig cv'+(hasCover(row)?'':' noimg')+'" style="'+coverStyle(row,title)+'"'+
         ' title="点一下看大图">'+
         (hasCover(row)?'':'<b>'+esc(String(title).slice(0,1))+'</b>')+
       '</div>'+

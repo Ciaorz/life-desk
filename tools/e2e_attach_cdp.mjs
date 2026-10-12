@@ -301,9 +301,10 @@ async function main() {
     '★ 填了封面 → 缩放条出现');
   ok(await ev(`(function(){
     var p=document.querySelector('[data-att-prev]');
-    var sz=p.style.backgroundSize||'';
-    return sz !== '' && sz.indexOf('cover') < 0; })()`),
-    '★ 预览用的是「视口」尺寸（不再写死 cover）');
+    var sz=(p.style.getPropertyValue('--cvs')||'').trim();   /* v170：尺寸走取景层的 --cvs */
+    /* ⚠️ 模板字符串里反斜杠要写两条，否则 '\\d' 会被吃掉变成 'd' */
+    return /^\\d+% auto$/.test(sz); })()`),
+    '★ 预览用的是「视口」尺寸（NN% auto，不再写死 cover）');
 
   ok(await ev(`(function(){
     var c=document.querySelector('.attcov'); if(!c) return false;
