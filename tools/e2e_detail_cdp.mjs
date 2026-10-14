@@ -270,11 +270,39 @@ async function main() {
   await sleep(450);
   ok(await ev(`!!document.querySelector('.datt-block')`), '★ 点附件按钮 → 附件区展开');
   ok(await ev(`document.querySelectorAll('.datt-item').length === 2`), '两个附件都在里面');
+  /* v173：电脑端改成**左右排版**（主体在左、附件在右）；手机端才是上下。
+     这里跑的是桌面视口（1200 宽）⇒ 断言「左右」。 */
   ok(await ev(`(function(){
     var b=document.querySelector('.dbig').getBoundingClientRect();
     var t=document.querySelector('.datt-block').getBoundingClientRect();
-    return t.top >= b.bottom - 4; })()`),
-    '★ 顺序是「主体在上、附件在下」（手机窄屏也顺）');
+    return t.left >= b.right - 6; })()`),
+    '★ 电脑端是「主体在左、附件在右」（左右排版）');
+  ok(await ev(`(function(){
+    var sheet=document.querySelector('.detail-sheet');
+    return !!sheet && sheet.classList.contains('attopen') && sheet.getBoundingClientRect().width > 700; })()`),
+    '★ 展开附件时面板加宽（才够并列两栏）');
+  ok(await ev(`(function(){
+    /* 右栏的附件封面要像主体一样是**大图**（不是原来那种 58px 小图） */
+    var p=document.querySelector('.datt-pic'); if(!p) return false;
+    var r=p.getBoundingClientRect();
+    return r.width >= 120 && r.height >= 140; })()`),
+    '★ 附件封面是大图 —— 实测 '
+      + await ev(`(function(){var r=document.querySelector('.datt-pic').getBoundingClientRect(); return Math.round(r.width)+'×'+Math.round(r.height);})()`));
+  /* 手机视口下必须是上下（主体在上、附件在下） */
+  await send('Emulation.setDeviceMetricsOverride', { width: 420, height: 820, deviceScaleFactor: 1, mobile: true });
+  await sleep(500);
+  await clickAt('[data-x="1"]');
+  await sleep(350);
+  await clickAt('.poster[data-id="d2"]');
+  await sleep(450);
+  if (!(await ev(`!!document.querySelector('.datt-block')`))) { await clickAt('.dbig-att'); await sleep(420); }
+  ok(await ev(`(function(){
+    var b=document.querySelector('.dbig').getBoundingClientRect();
+    var t=document.querySelector('.datt-block').getBoundingClientRect();
+    return t.top >= b.bottom - 6; })()`),
+    '★ 手机端是「主体在上、附件在下」（上下堆叠）');
+  await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
+  await sleep(400);
   await clickAt('.dbig-att');
   await sleep(400);
   ok(!(await ev(`!!document.querySelector('.datt-block')`)), '再点一次收起');

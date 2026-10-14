@@ -151,8 +151,9 @@ async function main() {
     else if (/contain/i.test(bs) && nat[0]){ var k = Math.min(lw/nat[0], lh/nat[1]); rw = nat[0]*k; rh = nat[1]*k; }
     else if (nat[0]){ rh = lw * nat[1] / nat[0]; }
     var top = (lh - rh) / 2 + ty;      /* 图层内：图的上边缘离图层顶多远 */
+    var left = (lw - rw) / 2 + tx;     /* 图层内：图的左边缘离图层左多远（v173 用） */
     return { w:Math.round(lw), h:Math.round(lh), rw:Math.round(rw), rh:Math.round(rh),
-             tx:tx, ty:ty, top:top, frac: top / lh, nat:nat, bs:bs };
+             tx:tx, ty:ty, top:top, left:left, frac: top / lh, nat:nat, bs:bs };
   };`);
 
   /* ---------- 注入：一张**正方形**封面（正是老 bug 最容易翻车的形状） ---------- */
@@ -293,6 +294,45 @@ async function main() {
   ok(!!oldP, '老数据那张卡也渲染出来了');
   ok(near(oldP.ty, 0, 0.6), '★ 老位移 y=97 被忽略（取景层 ty=' + f2(oldP.ty) + 'px）—— 不会因为换了单位而飞出框外');
   ok(JSON.parse(oldVp).y === 97, '数据本身没被动过（还是 97，等迁移脚本换算）：' + oldVp);
+
+  /* ---------- ⑦ 放大后拖动：位移被夹住，框里不留白边（v173） ---------- */
+  console.log('\n[⑦] 放大后拖动：位移被夹住，不留白边（v173）');
+  /* ⚠️ ⑥ 里把弹窗关掉了 —— 先重新打开编辑页，否则取不到 .imgprev */
+  await clickAt('.poster[data-id="q1"]');
+  await sleep(450);
+  await clickAt('#dEdit');
+  await sleep(700);
+  ok(await ev(`!!document.querySelector('.imgwrap .imgprev')`), '重新打开编辑页（⑦ 用）');
+  await ev(`(function(){
+    var sl=document.querySelector('[data-img-zoomslider]');
+    sl.value='1.5'; sl.dispatchEvent(new Event('input',{bubbles:true})); return 1; })()`);
+  await sleep(260);
+  await ev(`(function(){
+    var sx=document.querySelector('[data-img-panslider-x]'), sy=document.querySelector('[data-img-panslider-y]');
+    sx.value='100'; sx.dispatchEvent(new Event('input',{bubbles:true}));
+    sy.value='100'; sy.dispatchEvent(new Event('input',{bubbles:true})); return 1; })()`);
+  await sleep(300);
+  const z8 = await ev(`window.__panProbe('.imgwrap .imgprev')`);
+  ok(!!z8 && z8.w > 0, '量到放大 150% 后的取景（框 ' + f2(z8 && z8.w) + '×' + f2(z8 && z8.h) + '）');
+  /* 正方形图 + 框 6/7：150% 时横向可动半幅 = 50×(1.5−1) = 25%，
+     纵向 = 50×(1.5×6/7 − 1) ≈ 14.29% —— 滑杆推到 100 也只能到这个值 */
+  /* ⚠️ 探针的 tx/ty 是从 matrix 里抠出来的**像素**，要换算成「占框宽/框高的比例」再比 */
+  const txPct = z8.tx / z8.w * 100, tyPct = z8.ty / z8.h * 100;
+  ok(near(txPct, 25, 1), '★ 横向位移被夹到 25%（推到 100 也只有 ' + f2(txPct) + '%）');
+  ok(near(tyPct, 14.29, 1), '★ 纵向位移被夹到 ≈14.29%（得到 ' + f2(tyPct) + '%）');
+  ok(z8.left <= 0.5 && z8.left + z8.rw >= z8.w - 0.5,
+    '★ 图横向仍然盖满框（左边 ' + f2(z8.left) + ' ≤ 0，右边 ' + f2(z8.left + z8.rw) + ' ≥ ' + f2(z8.w) + '）—— 不露白边');
+  ok(z8.top <= 0.5 && z8.top + z8.rh >= z8.h - 0.5,
+    '★ 图纵向也盖满框（顶 ' + f2(z8.top) + ' ≤ 0，底 ' + f2(z8.top + z8.rh) + ' ≥ ' + f2(z8.h) + '）');
+  /* 图比框小（未放大）时**不夹** —— 那是用户故意挪动看图外的空白，别去动他 */
+  await ev(`(function(){
+    var sl=document.querySelector('[data-img-zoomslider]');
+    sl.value='1'; sl.dispatchEvent(new Event('input',{bubbles:true}));
+    var sy=document.querySelector('[data-img-panslider-y]');
+    sy.value='60'; sy.dispatchEvent(new Event('input',{bubbles:true})); return 1; })()`);
+  await sleep(300);
+  const z9 = await ev(`window.__panProbe('.imgwrap .imgprev')`);
+  ok(near(z9.ty / z9.h * 100, 60, 1), '★ 没放大（图填不满框）时**不夹**，位移照旧生效（ty=' + f2(z9.ty / z9.h * 100) + '%）');
 
   /* ---------- ⑦ 无 JS 报错 ---------- */
   const errs = await ev(`JSON.stringify((window.__errs||[]).slice(0,4))`);

@@ -4758,6 +4758,46 @@ function vpClampPan(v){
   var x = num(v); if (!isFinite(x)) x = 0;
   return Math.max(-VP_PAN, Math.min(VP_PAN, x));
 }
+/* ============================================================
+ * v173：封面取景「不出白边」
+ * 用户报：「把图放大到超出可视范围后，再向右移动图片，左侧被一条白条截断」。
+ * 原因：位移是取景层的 translate(框的百分比)，可以一路拖到图跑出框外（露出框的底色）。
+ * 规则：**图在某根轴上比框大**时，把位移夹到「图边刚好不出框」的范围；
+ *       图比框小（填不满）的那根轴不夹 —— 那种空白是图本身不够大，用户想挪就让他挪。
+ * 换算（s = 缩放百分比、F = 框宽/框高、A = 图宽/图高，全是比值，不需要像素尺寸）：
+ *   图宽/框宽 = s/100            ⇒ 横向可动半幅 = 50·(s/100 − 1)
+ *   图高/框高 = (s/100)·F/A      ⇒ 纵向可动半幅 = 50·((s/100)·F/A − 1)
+ * ⚠️ 全项目封面框统一 6/7（v172）⇒ F 是常量；个别不是 6/7 的宿主（IP / 系列封面的
+ *    正方形 .ph）用 6/7 去夹只会**更保守**（更居中），绝不会反而露白。
+ * ⚠️ 图的长宽比按 URL 缓存（cvARLoad 预热）；**取不到就原样返回** —— 宁可不动，也不乱夹。
+ * ============================================================ */
+var CV_FRAME_AR = 6 / 7;   /* 封面框统一 6/7（v172）；换算里 s 是**比例**不是百分比 */
+var _cvAR = {};                 /* 图片 url → 宽/高 */
+function cvARTry(url){ var u = String(url || ''); return (u && _cvAR[u] != null) ? _cvAR[u] : 0; }
+function cvARLoad(url, cb){
+  var u = String(url || '');
+  if (!u){ if (cb) cb(0); return; }
+  if (_cvAR[u] != null){ if (cb) cb(_cvAR[u]); return; }
+  var im = new Image();
+  im.onload  = function(){ _cvAR[u] = (im.naturalWidth || 0) / (im.naturalHeight || 1); if (cb) cb(_cvAR[u]); };
+  im.onerror = function(){ _cvAR[u] = 0; if (cb) cb(0); };
+  im.src = u;
+}
+function cvClampCover(vp, ar, frameAR){
+  /* ⚠️ 返回值必须带 v:2 —— `vpNorm` 里有一条兼容桥：**没有 v:2 的老数据，位移一律当 0**
+     （v170 为了防「换了单位乱飞」加的）。这里返回的全新对象如果不打标记，
+     紧接着的 `vpStamp(...)` 会把刚夹好的 x/y 直接清零（v173 踩过：拖完 y 又回 0）。 */
+  var o = { s: vpClampS(num(vp && vp.s) || 1), x: vpClampPan(vp && vp.x), y: vpClampPan(vp && vp.y), v: 2 };
+  var F = num(frameAR) || CV_FRAME_AR;
+  if (!(ar > 0) || !(F > 0)) return o;
+  var sc = o.s;                         /* ⚠️ s 是**比例**（1.5 = 150%），不是百分比 ——
+                                           写成 o.s/100 会让夹取范围放大 100 倍、等于没夹（v173 踩过） */
+  var halfX = 50 * (sc - 1);            /* > 0 才说明横向溢出、才需要夹 */
+  var halfY = 50 * (sc * F / ar - 1);
+  if (halfX > 0) o.x = Math.max(-halfX, Math.min(halfX, o.x));
+  if (halfY > 0) o.y = Math.max(-halfY, Math.min(halfY, o.y));
+  return o;
+}
 /* 读路径统一入口：老单位（没 v:2）的位移一律当 0 —— 宁可居中，也不要因为换了单位而乱飞。
    ⚠️ 返回**新对象**，别拿去回写数据（回写会把老位移抹掉，交给 migrate 脚本换算）。 */
 function vpNorm(vp){
@@ -7889,9 +7929,9 @@ function poMoneyBlock(r){
   var g = poGrandTotalOf(r);
   /* 只有**确实有附件**时才出「总合计」—— 没附件时它和本体行完全重复，白占一行 */
   if (g != null && attachList(r).length > 0){
+    /* v173：总合计那行只放两格（名称 + 金额），由 CSS 的 space-between 把金额顶到最右 */
     rows += '<div class="po-mrow po-grand">' +
       '<span class="po-mname">总合计</span>' +
-      '<span class="po-mchips"></span>' +
       '<span class="po-mtotal">¥' + Math.round(g) + '</span>' +
     '</div>';
   }
@@ -8515,7 +8555,7 @@ function renderCatMode(){
         var desc = Object.keys(subcats).map(function(k){ return k+' '+subcats[k]; }).join(' · ') || '0 件';
         h += '<div class="ipcard ipseries-card" data-act="seriesopen" data-id="'+esc(sid)+'"'+
           ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-          '<div class="ph" style="'+cover+'">'+(cover?'':'<b>'+esc(String(sn).slice(0,1))+'</b>')+'</div>'+
+          '<div class="ph cv" style="'+cover+'">'+(cover?'':'<b>'+esc(String(sn).slice(0,1))+'</b>')+'</div>'+
           '<div class="bd"><strong>'+esc(sn)+'</strong><span>'+esc(desc)+'</span></div></div>';
       });
       h += '</div></div>';
@@ -8822,7 +8862,7 @@ function renderIpDetail(){
       var desc = Object.keys(subcats).map(function(k){ return k+' '+subcats[k]; }).join(' · ') || '0 件';
       h += '<div class="ipcard ipseries-card" data-act="seriesopen" data-id="'+esc(sid)+'"'+
         ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-        '<div class="ph" style="'+cover+'">'+(cover?'':'<b>'+esc(String(sn).slice(0,1))+'</b>')+'</div>'+
+        '<div class="ph cv" style="'+cover+'">'+(cover?'':'<b>'+esc(String(sn).slice(0,1))+'</b>')+'</div>'+
         '<div class="bd"><strong>'+esc(sn)+'</strong><span>'+esc(desc)+'</span></div></div>';
     });
     h += '</div></div>';
@@ -12194,6 +12234,9 @@ function firstChildCover(seriesName){
 /* v163：系列卡片的封面 —— 三级兜底：
    ① 系列自己的封面；② 第一「弹」（子系列）的封面；③ 第一件有封面的物品。
    re-ment 那类系列自己没封面、封面都挂在弹上，不兜底的话卡片就是一块空白。 */
+/* ⚠️ 这个函数返回的样式串**可能来自 coverStyle()** —— 那是 v170 之后的「取景层变量」写法
+   （图由 .cv::before 画）。所以**凡是拿它的返回值当 style 的宿主，class 里必须有 cv**，
+   否则那块就是空的（v173 修的就是这个：系列库里 2 处 + 系列库卡片 + 系列详情页头，共 4 处）。 */
 function seriesCoverOf(se, name, items){
   if (se && hasCover(se)) return coverStyle(se, name);
   var cc = firstChildCover(name);
@@ -12440,6 +12483,7 @@ function setImgPreview(prev, url, k){
     return;
   }
   cvSetImg(prev, resolveImgUrl(url), editing && editing.vals ? editing.vals[k+'_vp'] : null);
+  cvARLoad(resolveImgUrl(url));      /* v173：预热图片长宽比，供「不出白边」夹取用 */
   if (hint) hint.hidden = false;
   if (bar) bar.hidden = false;
 }
@@ -12946,9 +12990,28 @@ function wireFormControls(host, saveDraft){
     var k=prev.getAttribute('data-img-prev'); if (!k) return;
     /* v170：读出来的位移一律归一化（老单位当 0），改完再打 v:2 写回去 */
     function vp(){ return vpNorm(editing && editing.vals ? editing.vals[k+'_vp'] : null); }
+    /* v173：图比框大时，位移不许把图边拖进框内（会露白边）。
+       长宽比按 URL 缓存；还没读到就先预热，读完再夹一次（这样打开旧数据也会自己收好）。 */
+    function clampVp(o){
+      /* v173：同步夹一次 —— 图比框大时不许把位移拖到露白边。
+         ⚠️ 封面 URL 以**输入框里的值**为准：`editing.vals[k]` 在有些路径下是空的或是个数组，
+         拿它去查长宽比会查不到，夹取就静默跳过（v173 踩过）。
+         ⚠️ 也别在这里挂异步回调「读了比例再补夹一次」—— 回调落地时用户可能已经在拖了，
+         会把刚拖出来的值按旧状态写回去（拖完 y 又回 0）。比例在字段构建 / setImgPreview 时预热。 */
+      var inp = host.querySelector('[data-f="'+k+'"]');
+      var u = inp ? String(inp.value || '') : '';
+      if (!u){
+        var a = (editing && editing.vals) ? editing.vals[k] : '';
+        u = Array.isArray(a) ? String((a[0] && (a[0].imageUrl || a[0].url)) || '') : String(a || '');
+      }
+      u = resolveImgUrl(u);
+      var ar = cvARTry(u);
+      if (!ar && u) cvARLoad(u);          /* 顺手预热，下次拖动就能夹住 */
+      return cvClampCover(o, ar, CV_FRAME_AR);
+    }
     function setVp(o){
       if (!editing) return;
-      o = vpStamp(o);
+      o = vpStamp(clampVp(o));
       editing.vals[k+'_vp']=o; applyImgViewport(prev, k);
       var sl = prev.parentNode.querySelector('.imgvp-slider[data-img-zoomslider="'+k+'"]');
       if (sl) sl.value = Math.max(VP_ZMIN, Math.min(VP_ZMAX, o.s||1));
@@ -13453,7 +13516,7 @@ function renderSeriesMode(){
     var _scv = seriesCoverOf(se, name, items);
     return '<div class="ipcard" data-act="seriesopen" data-id="'+esc(se._id)+'"'+
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-      '<div class="ph" style="'+_scv+'">'+(_scv?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
+      '<div class="ph cv" style="'+_scv+'">'+(_scv?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
       '<div class="bd"><strong>'+esc(name)+'</strong>'+
         '<span>'+esc(se['所属IP']||'未绑 IP')+'</span>'+
         (target
@@ -13718,7 +13781,7 @@ function renderSeriesDetail(){
     '<div class="panel-head"><div><h2>'+esc(name)+'</h2>'+
     '<div class="hint">'+(target? '系列总数量 '+target+' 件 · 在库 '+cntAll+' 件' : '在库 '+cntAll+' 件')+'</div></div>'+modeSeg()+'</div>'+
     '<div class="iphero">'+
-      '<div class="ph" style="'+_heroCov+'">'+(_heroCov?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
+      '<div class="ph cv" style="'+_heroCov+'">'+(_heroCov?'':'<b>'+esc(String(name).slice(0,1))+'</b>')+'</div>'+
       '<div><h3>'+esc(name)+'</h3>'+
       (se['所属IP']?'<p>IP · '+esc(se['所属IP'])+'</p>':'')+
       (se['说明']?'<p>'+esc(se['说明'])+'</p>':'')+
@@ -14195,7 +14258,10 @@ function wireAttachPanel(panel, saveDraft){
         x: Math.max(-VP_PAN, Math.min(VP_PAN, num(o.x) || 0)),
         y: Math.max(-VP_PAN, Math.min(VP_PAN, num(o.y) || 0))
       };
-      nv = vpStamp(nv);
+      /* v173：附件封面同样「不出白边」（图比框大时夹住位移） */
+      var _cu = attachCoverUrl(a), _car = cvARTry(_cu);
+      if (!_car && _cu) cvARLoad(_cu, function(){ var b = cur(); if (b) setVp(attachVp(b)); });
+      nv = vpStamp(cvClampCover(nv, _car, CV_FRAME_AR));
       a['封面视口'] = nv;
       applyVpTo(prev, nv);
       var zsl = panel.querySelector('[data-att-zoomslider]'); if (zsl) zsl.value = nv.s;
@@ -14808,12 +14874,16 @@ function fieldHTML(f, v){
     var vp = vpNorm(editing && editing.vals && editing.vals[f.k+'_vp']);
     /* v170：预览一律和卡片同一套（`NN% auto` + 取景层位移）—— 编辑页看到的就是卡片上的 */
     var prevStyle = cvDecls(resolveImgUrl(v), vp);
+    /* v173：把图片长宽比预热进缓存 —— 「放大后不出白边」的夹取要用它；
+       放在这里（字段构建时）而不是只在 setImgPreview 里，因为**打开表单时预览是内联渲染的**，
+       不走 setImgPreview。不预热的话，用户一进来就拖，夹取会因拿不到比例而跳过。 */
+    if (v) cvARLoad(resolveImgUrl(v));
     var hasV = !!v;
     body='<div class="imgwrap" data-k="'+f.k+'" data-has-img="'+(hasV?1:0)+'">'+
       '<div class="imgprev cv" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
       /* v75fix：封面框右上角「✕」——一键清掉当前这张图 */
       (v?'<button type="button" class="imgdel" data-act="imgdel" data-k="'+esc(f.k)+'" title="清除这张图片">✕</button>':'')+
-      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动（可推出边框）· 滑杆/滚轮缩放 30–180% · 方向键微调 · 双击重置</div>'+
+      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动 · 滑杆/滚轮缩放 30–180% · 方向键微调 · 双击重置（放大后不会拖出白边）</div>'+
       '</div>'+
       '<div class="imgvp-bar" '+(v?'':'hidden')+'>'+
         '<div class="imgvp-sliderwrap">'+
@@ -16149,8 +16219,9 @@ function detailAttachBlock(row){
         '<div class="datt-pic cv'+(cu?'':' noimg')+'" style="'+bg+'">'+
           (cu?'':'<b>'+esc(String(nm).slice(0,1))+'</b>')+
         '</div>'+
-        '<div class="datt-info"><strong>'+esc(nm)+'</strong>'+
-          '<span><i>'+esc(kind)+'</i>'+(pr>0?' ¥'+Math.round(pr):'')+'</span></div>'+
+        '<div class="datt-info"><span class="datt-kind"><i>'+esc(kind)+'</i></span>'+
+          '<strong>'+esc(nm)+'</strong>'+
+          (pr>0?'<span>¥'+Math.round(pr)+'</span>':'')+'</div>'+
       '</div>';
     }).join('')+
   '</div>';
@@ -16175,7 +16246,8 @@ function openItemDetail(key, id){
   var atts = attachList(row);
   var attTypes = attachTypes(row);
   var host=$('sheetHost');
-  var h='<div class="sheet detail-sheet"><div class="sheet-head"><div>'+
+  /* v173：展开附件时，电脑端要把面板放宽做左右两栏（主体左 / 附件右） */
+  var h='<div class="sheet detail-sheet'+(ui.detailAttOpen?' attopen':'')+'"><div class="sheet-head"><div>'+
     '<p>'+esc(MODS[key].eyebrow)+'</p><h2>'+esc(title)+'</h2></div>'+
     '<div class="sheet-head-r">'+
       '<div class="sheet-nav">'+
@@ -16185,6 +16257,9 @@ function openItemDetail(key, id){
       '</div>'+
       '<button class="x" type="button" data-x="1">×</button>'+
     '</div></div>'+
+    /* v173：主体（大封面）与附件区包在一个 .dbody 里 ——
+       电脑端展开附件时是「左右两栏」（主体在左、附件在右），手机端自动变上下。 */
+    '<div class="dbody'+(ui.detailAttOpen?' attopen':'')+'">'+
     /* 大封面（点一下看原图）；有附件时右下角挂一个附件按钮 */
     '<div class="dbig-wrap">'+
       '<div class="dbig cv'+(hasCover(row)?'':' noimg')+'" style="'+coverStyle(row,title)+'"'+
@@ -16193,6 +16268,9 @@ function openItemDetail(key, id){
       '</div>'+
       (atts.length?'<button type="button" class="dbig-att'+(ui.detailAttOpen?' on':'')+'" data-act="datt"'+
         ' title="看这件挂着的附件（默认收起）">'+esc(attTypes.join(' · '))+'<i>'+atts.length+'</i></button>':'')+
+    '</div>'+
+    /* 附件区：默认收起，点封面右下角的附件按钮才出来 */
+    (ui.detailAttOpen ? detailAttachBlock(row) : '')+
     '</div>'+
     /* 名称 + 星级 + 分类 ｜ 状态药丸靠右（用户要求同一行） */
     '<div class="dhead">'+
@@ -16219,9 +16297,8 @@ function openItemDetail(key, id){
       '</span>'+
       ed('存储地点', loc?esc(loc):NONE)+
     '</div>'+
+    '</div>'+
     (row['短评']?'<p class="dnote">'+esc(row['短评'])+'</p>':'')+
-    /* 附件区：默认收起，点上方的附件按钮才出来 */
-    (ui.detailAttOpen ? detailAttachBlock(row) : '')+
     '<div class="sheet-actions">'+
       '<button class="btn ghost" type="button" id="dDel" style="margin-right:auto;color:var(--red)">删除</button>'+
       '<button class="btn ghost" type="button" data-x="1">关闭</button>'+

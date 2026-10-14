@@ -246,6 +246,32 @@ async function main() {
     return s.indexOf('svg+xml')>=0; })()`),
     '★ 系列卡自己没封面 → 自动用了第一弹的封面（不再是空白/首字）');
 
+  /* ④b v173：系列**自己**有封面时必须显示得出来 ——
+     这是回归用例：v170 把封面改成「取景层变量」写法后，系列库那几处 `.ph` 宿主漏了 cv 类，
+     变量下发到没有取景层的元素上 ⇒ **系列封面整个消失**（用户报「系列封面看不到了」）。 */
+  await ev(`(function(){
+    var S=window.__store;
+    var sv=function(c,t){ return 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><rect width="160" height="120" fill="'+c+'"/><text x="80" y="76" font-size="30" fill="#fff" font-family="sans-serif" text-anchor="middle">'+t+'</text></svg>'); };
+    S.series.rows[0]['封面']=[{imageUrl:sv('#3355aa','系列'), viewport:{s:1,x:0,y:0,v:2}}];
+    window.__render(); return 1; })()`);
+  await sleep(520);
+  ok(await ev(`(function(){
+    var c=document.querySelector('.ipcard[data-id="rm1"] .ph'); if(!c) return false;
+    return c.classList.contains('cv') && (c.style.getPropertyValue('--cvi')||'').indexOf('svg+xml')>=0; })()`),
+    '★ 系列自己带封面时能显示（宿主有 cv 类 + --cvi 已下发）');
+  ok(await ev(`(function(){
+    var c=document.querySelector('.ipcard[data-id="rm1"] .ph'); if(!c) return false;
+    return (getComputedStyle(c,'::before').backgroundImage||'').indexOf('url(')>=0; })()`),
+    '★ 取景层里确实画出了图（computed background-image 里有 url）');
+  ok(await ev(`(function(){
+    /* 系列详情页头那张（.iphero .ph）也要能显示 */
+    var U=window.__ui; U.collection.seriesId='rm1'; window.__render(); return 1; })()`) !== null, '（切到系列详情）');
+  await sleep(500);
+  ok(await ev(`(function(){
+    var c=document.querySelector('.iphero .ph'); if(!c) return false;
+    return c.classList.contains('cv') && (getComputedStyle(c,'::before').backgroundImage||'').indexOf('url(')>=0; })()`),
+    '★ 系列详情页头的封面也显示正常');
+
   const errs = JSON.parse(await ev('JSON.stringify(window.__errs||[])') || '[]');
   ok(errs.length === 0, '⑤ 页面没有 JS 报错' + (errs.length ? '：' + JSON.stringify(errs) : ''));
 
