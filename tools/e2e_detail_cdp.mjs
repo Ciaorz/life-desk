@@ -281,11 +281,18 @@ async function main() {
     var sheet=document.querySelector('.detail-sheet');
     return !!sheet && sheet.classList.contains('attopen') && sheet.getBoundingClientRect().width > 700; })()`),
     '★ 展开附件时面板加宽（才够并列两栏）');
+  /* v174：底部三个按钮必须在弹窗**里面** —— 上一版多了一个 </div>，
+     把 .sheet 提前闭合，按钮掉到 .backdrop 里、在弹窗右边单独浮了一排（用户截图报的）。 */
+  ok(await ev(`(function(){
+    var s=document.querySelector('.sheet-actions'); if(!s) return false;
+    return !!s.closest('.detail-sheet') && document.getElementById('sheetHost').children.length === 1; })()`),
+    '★ 删除 / 关闭 / 编辑 在弹窗内部（不是浮在弹窗右边）');
   ok(await ev(`(function(){
     /* 右栏的附件封面要像主体一样是**大图**（不是原来那种 58px 小图） */
     var p=document.querySelector('.datt-pic'); if(!p) return false;
     var r=p.getBoundingClientRect();
-    return r.width >= 120 && r.height >= 140; })()`),
+    /* v174：用户说「太小了」→ 最小列宽 148 → 200，实测约 236×275 */
+    return r.width >= 200 && r.height >= 230; })()`),
     '★ 附件封面是大图 —— 实测 '
       + await ev(`(function(){var r=document.querySelector('.datt-pic').getBoundingClientRect(); return Math.round(r.width)+'×'+Math.round(r.height);})()`));
   /* 手机视口下必须是上下（主体在上、附件在下） */

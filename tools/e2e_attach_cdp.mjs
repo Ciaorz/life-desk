@@ -230,13 +230,23 @@ async function main() {
     '★ 标签的点击热区够大（用户报「容易点不到」）—— 实测 '
       + await ev(`(function(){var b=document.querySelector('.poster .dlctag').getBoundingClientRect(); return Math.round(b.width)+'×'+Math.round(b.height);})()`));
   ok(await ev(`(function(){
-    /* 现在是文档流里的一行：属性图标在左、附件标签在右，天然不叠 */
+    /* v174：条内的顺序是「状态药丸（左）… 附件标签 · 属性图标（右）」——
+       属性图标在最右（v167 起它一直在卡片右下角，v172 塞进留白时顺序没跟上、
+       全挤到左边去了）。这里断言：两者同一行、附件标签在属性图标**左边**、互不重叠。 */
     var p=document.querySelector('.poster[data-id="a3"]'); if(!p) return false;
     var t=p.querySelector('.dlctags'), y=p.querySelector('.pktypes');
     if(!t||!y) return false;
     var tb=t.getBoundingClientRect(), yb=y.getBoundingClientRect();
-    return tb.left >= yb.right - 2; })()`),
-    '★ 属性图标与附件标签排在白条的同一行、互不重叠');
+    return yb.left >= tb.right - 2 && Math.abs((tb.top+tb.height/2)-(yb.top+yb.height/2)) < 6; })()`),
+    '★ 附件标签在左、属性图标在右（同一行、互不重叠）');
+  ok(await ev(`(function(){
+    /* 属性图标要**贴着留白的右端**（用户报「属性图标丢了位置、全挤到左下角」） */
+    var p=document.querySelector('.poster[data-id="a3"]'); if(!p) return false;
+    var bar=p.querySelector('.pkstrip'), y=p.querySelector('.pktypes');
+    if(!bar||!y) return false;
+    var bb=bar.getBoundingClientRect(), yb=y.getBoundingClientRect();
+    return (bb.right - yb.right) < 12; })()`),
+    '★ 属性图标贴着留白条的右端（回到卡片右下角那个位置）');
   ok(await ev(`(function(){
     var p=document.querySelector('.poster[data-id="a2"]');
     return !!p && !p.querySelector('.dlctag'); })()`),

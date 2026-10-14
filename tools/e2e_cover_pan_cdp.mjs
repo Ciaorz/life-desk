@@ -334,6 +334,30 @@ async function main() {
   const z9 = await ev(`window.__panProbe('.imgwrap .imgprev')`);
   ok(near(z9.ty / z9.h * 100, 60, 1), '★ 没放大（图填不满框）时**不夹**，位移照旧生效（ty=' + f2(z9.ty / z9.h * 100) + '%）');
 
+  /* ---------- ⑦b 长宽比拿不到时，横向也要夹住（v174） ---------- */
+  console.log('\n[⑦b] 图片地址读不到（长宽比未知）时，横向照样不许拖出白边');
+  await ev(`(function(){
+    /* 把封面换成一个**加载不出来**的地址 —— 模拟「blob 失效 / 图还没就位」的情况：
+       这时 cvARTry 拿不到长宽比，改之前整段夹取会被跳过（横向也不夹）⇒ 左边露白条。 */
+    var S=window.__store;
+    var r=S.collection.rows.filter(function(x){ return x._id==='q1'; })[0]; if(!r) return 0;
+    r['封面']=[{imageUrl:'no-such-image-xyz.png'}];
+    window.__render(); return 1; })()`);
+  await sleep(400);
+  await ev(`(function(){ var p=document.querySelector('.poster[data-id="q1"]'); if(p) p.click(); return 1; })()`);
+  await sleep(450);
+  await ev(`(function(){ var b=document.getElementById('dEdit'); if(b) b.click(); return 1; })()`);
+  await sleep(700);
+  ok(await ev(`!!document.querySelector('.imgwrap .imgprev')`), '重新打开编辑页（换了一张读不到的图）');
+  await ev(`(function(){ var s=document.querySelector('[data-img-zoomslider]'); s.value='1.8'; s.dispatchEvent(new Event('input',{bubbles:true})); return 1; })()`);
+  await sleep(250);
+  await ev(`(function(){ var s=document.querySelector('[data-img-panslider-x]'); s.value='100'; s.dispatchEvent(new Event('input',{bubbles:true})); return 1; })()`);
+  await sleep(300);
+  const bx = Number(await ev(`(function(){ var p=document.querySelector('[data-img-prev]'); var v=p.style.getPropertyValue('--cvx')||'0%'; return parseFloat(v)||0; })()`));
+  ok(near(bx, 40, 1.5), '★ 长宽比未知时横向也被夹到 40%（= 50×(1.8−1)；得到 ' + bx + '%）');
+  ok(await ev(`(function(){ var p=document.querySelector('[data-img-prev]'); return /^40(\.\d+)?%$/.test((p.style.getPropertyValue('--cvx')||'')); })()`),
+    '★ 存进去的 --cvx 就是夹好的值（不会等重绘再弹回去）');
+
   /* ---------- ⑦ 无 JS 报错 ---------- */
   const errs = await ev(`JSON.stringify((window.__errs||[]).slice(0,4))`);
   ok(errs === '[]', '没有 JS 报错 ' + (errs === '[]' ? '' : errs));

@@ -326,8 +326,13 @@ async function main() {
     var g=document.querySelector('.fgrid');
     var btn=document.querySelector('.altadd');
     var w={}, top={};
+    /* ⚠️ v174：「小类」是 t:'dyn' 字段 —— 它渲染成 dynwrap + select[data-dyn-sel]，没有 data-f。
+       上一版这里只按 [data-f] 找，小类永远找不到 ⇒ 断言被 hasSub 静默跳过，
+       于是「小类没拿到 --w、被挤到第二行」这个 bug 一直没被测试拦住。
+       ⚠️ 注意：这段注释在模板字符串里，**不能写反引号**（会把字符串提前截断）。 */
+    function ctrl(k){ return document.querySelector('[data-f="'+k+'"], [data-dyn-sel="'+k+'"], .dynwrap[data-k="'+k+'"]'); }
     ['名称','备注名','大类','小类'].forEach(function(k){
-      var i=document.querySelector('[data-f="'+k+'"]');
+      var i=ctrl(k);
       var cell=i && i.closest ? i.closest('.f') : null;
       w[k]  = cell ? (cell.style.getPropertyValue('--w')||'').trim() : 'x';
       top[k]= cell ? Math.round(cell.getBoundingClientRect().top) : -1;
@@ -340,15 +345,22 @@ async function main() {
 
   ok(st1.btnDisp === 'none', '④★ 点完「＋ 备注」→ 按钮自己隐藏了（不再挡着名字）');
   ok(st1.fg12, '④★ 表单切到 12 栏制');
-  /* ⚠️「小类」是 dyn 字段（选项来自库里已有数据）—— 库里一个小类值都没有时它压根不渲染，
-     所以这里按「有就一起验、没有就跳过」来断言，否则测试会在空库上假红。 */
-  const hasSub = st1.top['小类'] > 0;
-  ok(st1.w['名称'] === '4' && st1.w['备注名'] === '4' && st1.w['大类'] === '2' && (!hasSub || st1.w['小类'] === '2'),
+  /* v174：四个格子必须**都能找到**（小类的选择器见上）—— 缺一个就说明选择器又漏了 */
+  ok(st1.top['小类'] > 0, '④★ 找得到「小类」那格（dyn 字段：data-dyn-sel，没有 data-f）');
+  ok(st1.w['名称'] === '4' && st1.w['备注名'] === '4' && st1.w['大类'] === '2' && st1.w['小类'] === '2',
     '④★ 宽度 4 : 4 : 2 : 2（≈ 40% : 40% : 20% : 20%）—— 实际 ' + JSON.stringify(st1.w));
-  const _keys = ['名称','备注名','大类'].concat(hasSub ? ['小类'] : []);
-  const tops = _keys.map(function(k){ return st1.top[k]; });
+  const tops = ['名称','备注名','大类','小类'].map(function(k){ return st1.top[k]; });
   ok(tops.every(function(t){ return t > 0; }) && (Math.max.apply(null, tops) - Math.min.apply(null, tops)) < 8,
-    '④★ 名称 / 备注名 / 大类' + (hasSub ? ' / 小类' : '') + ' 在**同一行**（不再换行）—— top=' + JSON.stringify(tops));
+    '④★ 名称 / 备注名 / 大类 / 小类 在**同一行**（不再换行）—— top=' + JSON.stringify(tops));
+  /* 一行 12 栏必须正好占满（4+4+2+2）—— 多一栏就会把最后一个挤下去 */
+  ok(await ev2(`(function(){
+    var g=document.querySelector('.fgrid'), last=g.querySelector('.f.q:nth-child(4)')||null;
+    var cells=Array.prototype.slice.call(g.children).filter(function(c){
+      var t=Math.round(c.getBoundingClientRect().top);
+      return t === Math.round(g.querySelector('.f').getBoundingClientRect().top); });
+    var used=0; cells.forEach(function(c){ used += parseFloat(c.style.getPropertyValue('--w')||'0'); });
+    return cells.length === 4 && Math.abs(used - 12) < 0.01; })()`),
+    '④★ 第一行正好 4 个格子、--w 合计 12 栏（占满一行）');
   ok(await ev2(`(function(){
     var i=document.querySelector('[data-f="备注名"]'); return !!i && i.offsetParent !== null; })()`),
     '④ 备注名输入框确实露出来了');

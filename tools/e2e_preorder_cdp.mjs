@@ -293,6 +293,13 @@ async function main() {
         out.bodyRowTotal = _bt ? _bt.textContent : '';
         var _gt = document.querySelector('.pocard[data-id="po5"] .po-grand .po-mtotal');
         out.grandRowTotal = _gt ? _gt.textContent : '';
+        /* v174：合计必须**紧挨着**定金/尾款，不能再被推到整行最右（宽屏下离名字老远） */
+        var _chip = document.querySelector('.pocard[data-id="po5"] .po-mrow-body .po-mchips');
+        out.bodyGap = (_chip && _bt) ? Math.round(_bt.getBoundingClientRect().left - _chip.getBoundingClientRect().right) : -1;
+        var _gn = document.querySelector('.pocard[data-id="po5"] .po-grand .po-mname');
+        out.grandGap = (_gn && _gt) ? Math.round(_gt.getBoundingClientRect().left - _gn.getBoundingClientRect().right) : -1;
+        var _money = document.querySelector('.pocard[data-id="po5"] .po-money');
+        out.moneyRightGap = (_money && _bt) ? Math.round(_money.getBoundingClientRect().right - _bt.getBoundingClientRect().right) : -1;
       }
       var recvA = document.querySelector('[data-act="porecv"][data-id="po5"]');
       if (recvA){
@@ -392,6 +399,8 @@ async function main() {
   ok(o.bodyDepUnchanged === 100, '⑨ ★ 改附件没动本体的定金（还是 100）');
   ok(o.bodyRowTotal === '¥300', '⑨ ★ 本体那一行自带合计 ¥300（得到 ' + o.bodyRowTotal + '）');
   ok(o.grandRowTotal === '¥410', '⑨ ★ 总合计把附件算进来：本体 300 + 附件 110 = ' + o.grandRowTotal);
+  ok(o.bodyGap >= 0 && o.bodyGap < 40, '⑨ ★ 本体那行的「合计」紧挨着定金/尾款（间距 ' + o.bodyGap + 'px，2026-10-14 用户要求从最右挪到前面）');
+  ok(o.grandGap >= 0 && o.grandGap < 40, '⑨ ★ 「总合计」也紧挨着名称（间距 ' + o.grandGap + 'px）');
   ok(o.priceWithAtt === 410, '⑨ ★ 到货算价含附件：本体 100+200 ＋ 附件 80+30 = ¥' + o.priceWithAtt);
   ok(o.depChip, '⑧ 卡片上有「定金」标签');
   ok(o.hasNumInput, '⑧ ★ 点一下就地出现金额输入框');

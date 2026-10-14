@@ -4772,30 +4772,87 @@ function vpClampPan(v){
  * ⚠️ 图的长宽比按 URL 缓存（cvARLoad 预热）；**取不到就原样返回** —— 宁可不动，也不乱夹。
  * ============================================================ */
 var CV_FRAME_AR = 6 / 7;   /* 封面框统一 6/7（v172）；换算里 s 是**比例**不是百分比 */
-var _cvAR = {};                 /* 图片 url → 宽/高 */
-function cvARTry(url){ var u = String(url || ''); return (u && _cvAR[u] != null) ? _cvAR[u] : 0; }
+var _cvAR = {};                 /* 图片 url → 宽/高（当次会话） */
+var _cvARFail = {};             /* url → 上次加载失败的时间戳：失败**不再永久记 0**，隔一会儿允许重试 */
+var _cvARStore = null;          /* { 路径键 → 宽/高 }，localStorage 持久化 */
+
+/* v174：把任何形式的图片地址折成稳定的「路径键」。
+   为什么要这层：电脑端连了本地目录时，封面是 **blob: 地址**（每次开页面都不一样），
+   于是「这次会话量到的长宽比」下次就对不上号了；而路径（data/images/x/a.jpg）是稳定的。 */
+function cvARPathKey(u){
+  u = String(u || '');
+  if (!u || u.indexOf('data:') === 0) return '';     /* data: 太长且天然唯一，不入库 */
+  u = u.replace(/^blob:https?:\/\/[^/]+/i, '');
+  u = u.replace(/^https?:\/\/[^/]+\/api\/img\//i, '');
+  return u.split('?')[0].split('#')[0];
+}
+function cvARStoreLoad(){
+  if (_cvARStore) return _cvARStore;
+  _cvARStore = {};
+  try { _cvARStore = JSON.parse(localStorage.getItem('lifedesk_ar_v1') || '{}') || {}; } catch(e){ _cvARStore = {}; }
+  return _cvARStore;
+}
+function cvARStorePut(u, ar){
+  var k = cvARPathKey(u);
+  if (!k || !(ar > 0)) return;
+  var s = cvARStoreLoad();
+  if (s[k] === ar) return;
+  s[k] = ar;
+  try { localStorage.setItem('lifedesk_ar_v1', JSON.stringify(s)); } catch(e){}
+}
+/* 查长宽比：内存 → 持久层（按「解析后的地址」和「原始路径」两种键都试） */
+function cvARTry(url, raw){
+  var u = String(url || ''), r = String(raw || '');
+  if (u && _cvAR[u] > 0) return _cvAR[u];
+  if (r && _cvAR[r] > 0) return _cvAR[r];
+  var s = cvARStoreLoad();
+  var k1 = cvARPathKey(u), k2 = cvARPathKey(r);
+  var hit = 0;
+  if (k1 && s[k1] > 0) hit = s[k1];
+  else if (k2 && s[k2] > 0) hit = s[k2];
+  if (hit > 0){
+    if (u) _cvAR[u] = hit;
+    if (r) _cvAR[r] = hit;
+    return hit;
+  }
+  return 0;
+}
 function cvARLoad(url, cb){
   var u = String(url || '');
+  var known = cvARTry(u);
+  if (known > 0){ if (cb) cb(known); return; }
   if (!u){ if (cb) cb(0); return; }
-  if (_cvAR[u] != null){ if (cb) cb(_cvAR[u]); return; }
+  /* 刚失败过就别死循环重试（4 秒后允许再来一次 —— 图片可能是刚上传还没就位） */
+  var f = _cvARFail[u];
+  if (f && (Date.now() - f) < 4000){ if (cb) cb(0); return; }
   var im = new Image();
-  im.onload  = function(){ _cvAR[u] = (im.naturalWidth || 0) / (im.naturalHeight || 1); if (cb) cb(_cvAR[u]); };
-  im.onerror = function(){ _cvAR[u] = 0; if (cb) cb(0); };
+  im.onload  = function(){
+    var ar = (im.naturalWidth || 0) / (im.naturalHeight || 1);
+    _cvAR[u] = ar; cvARStorePut(u, ar); if (cb) cb(ar);
+  };
+  im.onerror = function(){ _cvARFail[u] = Date.now(); if (cb) cb(0); };
   im.src = u;
 }
 function cvClampCover(vp, ar, frameAR){
   /* ⚠️ 返回值必须带 v:2 —— `vpNorm` 里有一条兼容桥：**没有 v:2 的老数据，位移一律当 0**
      （v170 为了防「换了单位乱飞」加的）。这里返回的全新对象如果不打标记，
-     紧接着的 `vpStamp(...)` 会把刚夹好的 x/y 直接清零（v173 踩过：拖完 y 又回 0）。 */
+     紧接着的 `vpStamp(...)` 会把刚夹好的 x/y 直接清零（v173 踩过：拖完 y 又回 0）。
+   v174：**横向夹取不再依赖图片长宽比**。
+     渲染宽度 = s × 框宽（`background-size: NN% auto`），这个关系与图多宽多高无关 ⇒
+     横向安全半幅 `halfX = 50(s−1)` 是**确定**的。而纵向要 `s·F/A`，A（图宽高比）得先把图读出来；
+     读不到（图片 404 / blob 失效 / 还没加载完）时原来整段 return 掉 ⇒ 横向也不夹了 ⇒
+     用户「放大后往右拖，左边露白条」（v173 修了但没修干净，根因就在这）。
+     现在：**横向永远夹**；纵向只在 A 已知时夹。 */
   var o = { s: vpClampS(num(vp && vp.s) || 1), x: vpClampPan(vp && vp.x), y: vpClampPan(vp && vp.y), v: 2 };
-  var F = num(frameAR) || CV_FRAME_AR;
-  if (!(ar > 0) || !(F > 0)) return o;
   var sc = o.s;                         /* ⚠️ s 是**比例**（1.5 = 150%），不是百分比 ——
                                            写成 o.s/100 会让夹取范围放大 100 倍、等于没夹（v173 踩过） */
   var halfX = 50 * (sc - 1);            /* > 0 才说明横向溢出、才需要夹 */
-  var halfY = 50 * (sc * F / ar - 1);
   if (halfX > 0) o.x = Math.max(-halfX, Math.min(halfX, o.x));
-  if (halfY > 0) o.y = Math.max(-halfY, Math.min(halfY, o.y));
+  var F = num(frameAR) || CV_FRAME_AR;
+  if (ar > 0 && F > 0){
+    var halfY = 50 * (sc * F / ar - 1);
+    if (halfY > 0) o.y = Math.max(-halfY, Math.min(halfY, o.y));
+  }
   return o;
 }
 /* 读路径统一入口：老单位（没 v:2）的位移一律当 0 —— 宁可居中，也不要因为换了单位而乱飞。
@@ -8317,7 +8374,11 @@ function dlcCardsHTML(r){
    封面图（取景层 .cv::before）被顶到它上面 —— 所以**卡片总高度一点没变**（封面还是 3/4.2），
    只是封面「露图」的区域短了一截。用户要的就是这个「预留一个高度」。 */
 function pkStripHTML(r){
-  return '<div class="pkstrip">'+pkQuickBtnsHTML(r)+pkTypeIconsHTML(r)+dlcTagsHTML(r)+'</div>';
+  /* v174：条内的**视觉顺序**是「状态药丸（左）… 附件标签 · 属性图标（右）」——
+     DOM 里也得按这个顺序写：`.pkquick{margin-right:auto}` 把后面所有兄弟一起顶到右边，
+     于是 [在库/招募] 在左，[DLC/特典][精灵球属性] 在右（v167 以来属性图标一直在最右下角，
+     v172 塞进这条留白时顺序没跟上，全挤到左边去了 —— 用户报「30周年冰箱贴的属性图标丢了位置」）。 */
+  return '<div class="pkstrip">'+pkQuickBtnsHTML(r)+dlcTagsHTML(r)+pkTypeIconsHTML(r)+'</div>';
 }
 function collectionPosterHTML(r){
   var t=r['名称']||'未命名';
@@ -11622,7 +11683,11 @@ document.addEventListener('click', function(ev){
     }
     if (_fld){
       /* v169：① 按钮点了就自己让开 —— 备注名输入框都出来了，还杵在名称框里挡视线
-               ② 名称 / 备注名 / 大类 / 小类 挤成一行：12 栏制 4 + 4 + 2 + 2。 */
+               ② 名称 / 备注名 / 大类 / 小类 挤成一行：12 栏制 4 + 4 + 2 + 2。
+         v174：⚠️ 找格子必须**同时认 dyn 字段** —— `小类 / IP / 系列` 这些是 `t:'dyn'`，
+         渲染出来是 `<div class="dynwrap" data-k="小类"><select data-dyn-sel="小类">`，
+         **根本没有 data-f**。只按 [data-f] 找会漏掉小类 ⇒ 它的 --w 设不上、保持 .q 的默认 3 栏
+         ⇒ 整行 4+4+2+3 = 13 栏 ⇒ 小类被挤到第二行（用户 v174 报的就是这个）。 */
       node.style.display = 'none';
       _fld.classList.remove('is-hidden');
       if (ui.altOpen) ui.altOpen[_ak] = true;
@@ -11631,7 +11696,7 @@ document.addEventListener('click', function(ev){
       var _all = _grid ? _grid.querySelectorAll('.f') : [];
       for (var _i = 0; _i < _all.length; _i++){
         ['名称','备注名','大类','小类'].forEach(function(k){
-          if (_all[_i].querySelector('[data-f="'+k+'"]')) _byk[k] = _all[_i];
+          if (_all[_i].querySelector('[data-f="'+k+'"], [data-dyn-sel="'+k+'"], .dynwrap[data-k="'+k+'"]')) _byk[k] = _all[_i];
         });
       }
       [[_ak,4],['名称',4],['大类',2],['小类',2]].forEach(function(pr){
@@ -12992,21 +13057,34 @@ function wireFormControls(host, saveDraft){
     function vp(){ return vpNorm(editing && editing.vals ? editing.vals[k+'_vp'] : null); }
     /* v173：图比框大时，位移不许把图边拖进框内（会露白边）。
        长宽比按 URL 缓存；还没读到就先预热，读完再夹一次（这样打开旧数据也会自己收好）。 */
-    function clampVp(o){
-      /* v173：同步夹一次 —— 图比框大时不许把位移拖到露白边。
-         ⚠️ 封面 URL 以**输入框里的值**为准：`editing.vals[k]` 在有些路径下是空的或是个数组，
-         拿它去查长宽比会查不到，夹取就静默跳过（v173 踩过）。
-         ⚠️ 也别在这里挂异步回调「读了比例再补夹一次」—— 回调落地时用户可能已经在拖了，
-         会把刚拖出来的值按旧状态写回去（拖完 y 又回 0）。比例在字段构建 / setImgPreview 时预热。 */
+    function coverUrl(){
+      /* 封面地址以**输入框里的值**为准：`editing.vals[k]` 在有些路径下是空的或是个数组 */
       var inp = host.querySelector('[data-f="'+k+'"]');
       var u = inp ? String(inp.value || '') : '';
       if (!u){
         var a = (editing && editing.vals) ? editing.vals[k] : '';
         u = Array.isArray(a) ? String((a[0] && (a[0].imageUrl || a[0].url)) || '') : String(a || '');
       }
-      u = resolveImgUrl(u);
-      var ar = cvARTry(u);
-      if (!ar && u) cvARLoad(u);          /* 顺手预热，下次拖动就能夹住 */
+      return u;
+    }
+    function clampVp(o){
+      /* v173：同步夹一次 —— 图比框大时不许把位移拖到露白边。
+         v174：横向夹取本来就不需要长宽比（见 cvClampCover）；纵向需要，
+               所以这里把「原始值」也交给 cvARTry（持久层按路径存的，blob 换了也查得到）。
+         长宽比**这次真没有**时才异步补夹一次 —— 且回调里要读**当下**的值再决定写不写，
+         不能拿闭包里的旧 o 回写（那是 v173 拖完 y 又回 0 的原因）。 */
+      var raw = coverUrl();
+      var u = resolveImgUrl(raw);
+      var ar = cvARTry(u, raw);
+      if (!ar && u) cvARLoad(u, function(got){
+        if (!(got > 0)) return;
+        var cur = vp();                                   /* 读当下值 */
+        var c2 = cvClampCover(cur, got, CV_FRAME_AR);
+        if (Math.abs(c2.x - cur.x) > 0.05 || Math.abs(c2.y - cur.y) > 0.05){
+          editing.vals[k+'_vp'] = vpStamp(c2);
+          applyImgViewport(prev, k);
+        }
+      });
       return cvClampCover(o, ar, CV_FRAME_AR);
     }
     function setVp(o){
@@ -14878,6 +14956,7 @@ function fieldHTML(f, v){
        放在这里（字段构建时）而不是只在 setImgPreview 里，因为**打开表单时预览是内联渲染的**，
        不走 setImgPreview。不预热的话，用户一进来就拖，夹取会因拿不到比例而跳过。 */
     if (v) cvARLoad(resolveImgUrl(v));
+    if (v) cvARTry(resolveImgUrl(v), v);        /* v174：先查持久层（blob 换了也认路径） */
     var hasV = !!v;
     body='<div class="imgwrap" data-k="'+f.k+'" data-has-img="'+(hasV?1:0)+'">'+
       '<div class="imgprev cv" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
@@ -16297,7 +16376,10 @@ function openItemDetail(key, id){
       '</span>'+
       ed('存储地点', loc?esc(loc):NONE)+
     '</div>'+
-    '</div>'+
+    /* ⚠️ v174：这里原来多了一个 `</div>` —— 它把 `.sheet` 提前闭合了，
+       于是后面的 `.sheet-actions`（删除/关闭/编辑）**掉到弹窗外面**，
+       变成 .backdrop 的第二个 flex 子元素，在右边单独浮了一排（用户截图报的就是这个）。
+       少一个之后：dquick 关闭 → sheet-actions 开关 → 末尾那个 </div> 收掉 .sheet，正好平衡。 */
     (row['短评']?'<p class="dnote">'+esc(row['短评'])+'</p>':'')+
     '<div class="sheet-actions">'+
       '<button class="btn ghost" type="button" id="dDel" style="margin-right:auto;color:var(--red)">删除</button>'+
