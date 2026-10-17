@@ -4393,6 +4393,27 @@ input.search{margin-bottom:12px}
   transition:background .15s,border-color .15s,color .15s}
 .dstat-btn:hover{border-color:var(--accent);color:var(--ink)}
 .dstat-btn.on{background:var(--ink);border-color:var(--ink);color:#fff;font-weight:650}
+/* ---------- v187：手机端详情页「精简」 ----------
+   用户要求：手机端详情页默认只留「大封面 + 名称 + 已选中的状态」；
+   价格 / 日期 / 渠道 / 持有 / 位置、底部按钮（删除·关闭·编辑）、**没选中的状态药丸**全部收起，
+   点一个按钮再展开。桌面端完全不受影响（连这个按钮都不显示）。
+   ⚠️ 用 `:not(.d-open)` 而不是「展开时再 display:flex」—— 这样展开时这些规则不匹配，
+      自动回到它们原本的 display（.dquick 是 .drow 的 flex、.sheet-actions 是 flex），
+      不用把每个 display 值抄一遍。 */
+.dmore{display:none;align-items:center;justify-content:center;gap:6px;width:100%;margin:10px 0 0;
+  padding:8px 12px;border-radius:12px;border:1px dashed rgba(111,89,67,.28);background:transparent;
+  color:var(--muted);font:inherit;font-size:12.5px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.dmore:hover{border-color:var(--accent);color:var(--ink)}
+.dmore i{font-style:normal;line-height:1;transition:transform .18s}
+.detail-sheet.d-open .dmore i{transform:rotate(180deg)}
+@media (max-width:560px){
+  .detail-sheet .dmore{display:flex}
+  .detail-sheet:not(.d-open) .dquick,
+  .detail-sheet:not(.d-open) .sheet-actions,
+  .detail-sheet:not(.d-open) .dstat .dstat-btn:not(.on){display:none}
+  /* 老数据「一个状态都没选」时别把状态区整成空白 —— 全露出来（:has 不支持的浏览器只是这一条失效） */
+  .detail-sheet:not(.d-open) .dstat:not(:has(.dstat-btn.on)) .dstat-btn{display:inline-block}
+}
 /* 第二行：快速编辑的每一小块（点了就地改，不弹窗） */
 .dq{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:600;
   padding:7px 12px;border-radius:11px;background:rgba(41,37,31,.055);

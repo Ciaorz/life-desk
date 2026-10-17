@@ -4440,6 +4440,7 @@ function addDataTools(){
       return;
     }
     var total = todo.length, i = 0, done = 0, fail = 0;
+    var failUrls = [];      /* v187：失败的清单（末尾打到 console，方便查出「是哪两张」） */
     var upd = function(){
       say('离线下载中 ' + done + '/' + total + (same ? ('（已有 ' + same + ' 张，跳过）') : '') + (fail ? ('，失败 ' + fail) : ''));
     };
@@ -4452,21 +4453,36 @@ function addDataTools(){
           hint.style.color = fail ? '#c77700' : '#1a7f37';
         }
         toast('封面离线完成：新下 ' + done + ' 张' + (fail ? ('，失败 ' + fail + ' 张') : ''));
+        /* v187：失败清单打到控制台 —— 以后再报「有两张失败」，F12 一看就知道是哪两张 */
+        if (failUrls.length){
+          console.warn('[封面离线] 这 ' + failUrls.length + ' 张没下下来（多半是网络抖动，再点一次即可）：', failUrls);
+        }
         return;
       }
       var u = todo[i++];
       /* ⚠️ cache:'no-store' —— 万一浏览器 HTTP 缓存里存过这张图的 404，
          不加这个会一直拿到那个失败结果（刚上传的新封面尤其容易踩）。 */
-      fetch(u, { cache: 'no-store' }).then(function(resp){
-        if (!resp || !resp.ok) throw new Error('HTTP ' + (resp && resp.status));
-        if (!sp.cache) return resp;
-        /* 页面自己写一份：这样即使 SW 还没接管页面，缓存也已落盘 */
-        return sp.cache.put(u, resp.clone()).catch(function(){ return resp; });
-      }).then(function(){ done++; }, function(){ fail++; }).then(function(){ upd(); step(); });
+      var grab = function(retries){
+        return fetch(u, { cache: 'no-store' }).then(function(resp){
+          if (!resp || !resp.ok) throw new Error('HTTP ' + (resp && resp.status));
+          if (!sp.cache) return resp;
+          /* 页面自己写一份：这样即使 SW 还没接管页面，缓存也已落盘 */
+          return sp.cache.put(u, resp.clone()).catch(function(){ return resp; });
+        }).catch(function(err){
+          /* v187：手机网络抖一下就会零星失败（用户报过「两张下载失败」，但 R2 上实测 1719 张全部可取）。
+             失败后隔 600ms 再试一次 —— 绝大多数偶发失败一次就过了，不用用户整轮重来。 */
+          if (retries > 0){
+            return new Promise(function(r){ setTimeout(r, 600); }).then(function(){ return grab(retries - 1); });
+          }
+          throw err;
+        });
+      };
+      grab(1).then(function(){ done++; }, function(){ fail++; failUrls.push(u); })
+        .then(function(){ upd(); step(); });
     };
     upd();
-    /* 6 路并发：够快，又不至于把手机网络/内存打满 */
-    for (var c = 0; c < 6 && c < total; c++) step();
+    /* v187：并发 6 → 4。手机上一次挂 6 个连接更容易被网络 / 内存打断，4 稳得多（总时长只多一点）。 */
+    for (var c = 0; c < 4 && c < total; c++) step();
   }
   /* 面板打开时后台数一次「本地已缓存多少张」，让人一眼知道离线齐没齐 */
   function refreshCoverCacheStat(hintEl){
@@ -16523,10 +16539,18 @@ function patchRowFields(key, id, patch){
 function detailStatusBtns(row){
   var arr = Array.isArray(row['状态']) ? row['状态'] : String(row['状态']||'').split(',');
   var has = function(s){ return arr.indexOf(s) >= 0; };
-  return ['在库','云游','想收'].map(function(s){
+  /* v187：「已预订」也补成药丸（它是挂在「云游」上的附加态，`toggleRowStatus` 的 else 分支本来就支持）——
+     否则状态里明明有「已预订」，详情页三个药丸全是灰的、看不出来。
+     手机端默认只显示**已选中**的那几个（见 style.css 的 .detail-sheet:not(.d-open) 段）。 */
+  var TIP = {
+    '在库': '标记为在库（会自动清掉想收 / 云游）',
+    '云游': '标记为云游（还没到手）',
+    '想收': '标记为想收（挂在云游上）',
+    '已预订': '标记为已预订（挂在云游上）'
+  };
+  return ['在库','云游','想收','已预订'].map(function(s){
     return '<button type="button" class="dstat-btn'+(has(s)?' on':'')+'"'+
-      ' data-dstat="'+esc(s)+'" title="'+esc(s==='在库'?'标记为在库（会自动清掉想收 / 云游）':(s==='云游'?'标记为云游（还没到手）':'标记为想收（挂在云游上）'))+'">'+
-      esc(s)+'</button>';
+      ' data-dstat="'+esc(s)+'" title="'+esc(TIP[s]||s)+'">'+esc(s)+'</button>';
   }).join('');
 }
 /* v168：点详情卡的大封面 → 全屏看原图。按**同一个视口**（缩放/位移）显示，
@@ -16623,6 +16647,8 @@ function openItemDetail(key, id){
   } else { DETAIL_CTX.id=String(id); }
   /* v169：换了条目就把附件区收起来（免得看到的是上一条的展开状态） */
   if (String(ui.detailAttId||'') !== String(id)){ ui.detailAttOpen = false; ui.detailAttId = String(id); }
+  /* v187：手机端详情的「显示更多」同样按条目隔离 —— 换了条目默认收起（用户要的就是默认隐藏） */
+  if (String(ui.detailMoreId||'') !== String(id)){ ui.detailMoreOpen = false; ui.detailMoreId = String(id); }
   var ids=DETAIL_CTX.ids, pos=ids.indexOf(String(id))+1;
   var title=row['名称']||'未命名';
   var cat=row['大类']||'', sub=row['小类']||'', ipName=row['IP']||'';
@@ -16636,7 +16662,7 @@ function openItemDetail(key, id){
   var attTypes = attachTypes(row);
   var host=$('sheetHost');
   /* v173：展开附件时，电脑端要把面板放宽做左右两栏（主体左 / 附件右） */
-  var h='<div class="sheet detail-sheet'+(ui.detailAttOpen?' attopen':'')+'"><div class="sheet-head"><div>'+
+  var h='<div class="sheet detail-sheet'+(ui.detailAttOpen?' attopen':'')+(ui.detailMoreOpen?' d-open':'')+'"><div class="sheet-head"><div>'+
     '<p>'+esc(MODS[key].eyebrow)+'</p><h2>'+esc(title)+'</h2></div>'+
     '<div class="sheet-head-r">'+
       '<div class="sheet-nav">'+
@@ -16674,6 +16700,10 @@ function openItemDetail(key, id){
       '</div>'+
       '<div class="dstat">'+detailStatusBtns(row)+'</div>'+
     '</div>'+
+    /* v187：手机端默认收起「价格/日期/渠道/持有/位置 + 底部按钮 + 未选中的状态药丸」，
+       点这个按钮才展开（桌面端这个按钮不显示，一切照旧）。同一个条目切换状态后仍保持展开。 */
+    '<button type="button" class="dmore" data-act="dmore" aria-expanded="'+(ui.detailMoreOpen?'true':'false')+'">'+
+      '<span class="dmore-t">'+(ui.detailMoreOpen?'收起':'显示更多')+'</span><i>▾</i></button>'+
     /* 快速编辑：价格 / 购入时间 / 购入渠道 / 持有数 / 存放位置（用户点名五项） */
     '<div class="drow dquick">'+
       ed('购入价格', price?esc('¥'+price.toFixed(2)):NONE)+
@@ -16710,6 +16740,21 @@ function openItemDetail(key, id){
       bumpHold(key, id, parseInt(n.getAttribute('data-hold'),10));
     };
   });
+  /* v187：手机端「显示更多 / 收起」—— 只切一个类（不重渲染），状态记进 ui，
+     这样同一条目点状态药丸触发重渲染后仍保持展开；换到别的条目则回到收起。 */
+  var _dm = host.querySelector('.dmore');
+  if (_dm){
+    _dm.onclick = function(e){
+      e.stopPropagation();
+      ui.detailMoreOpen = !ui.detailMoreOpen;
+      ui.detailMoreId = String(id);
+      var sh = host.querySelector('.detail-sheet');
+      if (sh) sh.classList.toggle('d-open', ui.detailMoreOpen);
+      _dm.setAttribute('aria-expanded', ui.detailMoreOpen ? 'true' : 'false');
+      var t = _dm.querySelector('.dmore-t');
+      if (t) t.textContent = ui.detailMoreOpen ? '收起' : '显示更多';
+    };
+  }
   /* 状态药丸：点一下就地切换（走 toggleRowStatus，与卡片快捷按钮同一套规则） */
   host.querySelectorAll('[data-dstat]').forEach(function(n){
     n.onclick=function(e){

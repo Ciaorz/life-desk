@@ -1,0 +1,16 @@
+const fs = require('fs');
+const s = fs.readFileSync('C:/Users/biode/AppData/Local/Temp/yun_home.html', 'utf8');
+const forms = [...s.matchAll(/<form[^>]*>/gi)];
+console.log('form count:', forms.length);
+const fa = [...s.matchAll(/<form[^>]*action="([^"]*)"[^>]*method="([^"]*)"/gi)];
+fa.forEach(f => console.log('FORM action=', f[1] || '(self)', 'method=', f[2] || 'get'));
+const inputs = [...s.matchAll(/<(?:input|select)[^>]*name="([^"]+)"/gi)].map(m => m[1]);
+console.log('input names:', [...new Set(inputs)].join(', '));
+const links = [...s.matchAll(/(?:href|action|src)="([^"]*(?:search|book|api|weeknew|list|action)[^"]*)"/gi)].map(m => m[1]);
+console.log('related links:');
+[...new Set(links)].slice(0, 25).forEach(l => console.log('  ', l));
+const apis = [...s.matchAll(/["']([^"']*(?:\/api\/|\.action|\.do)[^"']*)["']/gi)].map(m => m[1]);
+console.log('suspected APIs:');
+[...new Set(apis)].slice(0, 25).forEach(a => console.log('  ', a));
+console.log('has weeknewbook?', /weeknewbook/.test(s));
+console.log('has search?', /search/i.test(s));
