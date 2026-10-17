@@ -4717,6 +4717,20 @@ function coverViewport(row){
   return vpNorm(null);
 }
 function hasCover(row){ return !!coverImg(row); }
+/* v182 / v184：封面显示模式 —— 'center' / 'cover'（缺省）。
+   ⚠️ 名字是用户起的历史遗留，**别按字面理解成「图必须居中、不能移动」**。实际语义是：
+     · 'center' = **无白条模式**：卡片底部不留白条（药丸半透明浮在图上）；
+                   background-size 用 `contain`（min）—— 图**完整装进框**、四周按需留白。
+     · 'cover'  = **有白条模式**：卡片底部 1/6 白条（放药丸）；
+                   background-size 用 `cover`（max）—— 图盖满整框。
+   两种模式**都**可缩放、**都**可用滑杆/拖拽/方向键调位移（v184 起 'center' 也允许位移）。
+   这个区别直接影响「详情页 vs 展示卡」的封面框比例能否统一：
+     · 'cover'  ⇒ 卡片可视区 = 上 5/6（6/7）⇒ 详情也用 6/7（见 style.css .dbig-wrap .dbig）。
+     · 'center' ⇒ 卡片可视区 = 整框（3/4.2）  ⇒ 详情也用 3/4.2（见 .dbig-wrap .dbig.cv-center）。 */
+function coverFit(row){
+  var imgs = row['封面'] || row['照片'] || row['IP图像'] || row['系列封面'] || row['图片'];
+  return (imgs && imgs[0] && imgs[0].viewport && imgs[0].viewport.fit === 'center') ? 'center' : 'cover';
+}
 
 /* v146：封面视口（缩放 / 位移）的**唯一换算处**。
    --------------------------------------------------------------------------
@@ -4747,10 +4761,23 @@ function vpClampS(s){
   if (!isFinite(v)) v = 1;
   return Math.max(lo, Math.min(hi, v));
 }
-function vpSizeCss(s){
+function vpSizeCss(s, ar, fit){
+  /* v175：background-size 改成「cover × s」。
+     ⚠️ 原来写 `NN% auto` 只锁**宽度** ⇒ 横图（长宽比 > 框宽高比）放进 6/7 的竖框时高度只有
+        `NN% × 框宽 / 图比例`，压根不够高 ⇒ 上下露白（「白条」的第二个来源）。
+     cover 宽 = max(框宽, 框高 × A)：横图取「框高 × A」、竖图取 100%（框宽）。
+     ⚠️ 依赖 `.cv` 的 container-type:size（100cqh = 框高）；长宽比未知时退化成旧的宽度基准。 */
   var v = (s == null || isNaN(s)) ? 1 : Number(s);
   if (!isFinite(v)) v = 1;
-  return Math.round(vpClampS(v) * 100) + '% auto';
+  var sc = vpClampS(v);
+  var A = num(ar);
+  if (!(A > 0)) return Math.round(sc * 100) + '% auto';
+  var a3 = Math.round(A * 1000) / 1000, s3 = Math.round(sc * 1000) / 1000;
+  /* v182：fit='center'（居中模式 = 无白条模式）→ `contain × s`（min：图完整装进框，四周按需留白）；
+     缺省（铺满模式）→ `cover × s`（max：图盖满整框）。
+     `100cqh` 换成可覆盖的 `var(--cvH, 100cqh)` —— 默认 = 宿主框高；宿主若「取景层 ≠ 框」自己设 `--cvH`。 */
+  var fn = (fit === 'center') ? 'min' : 'max';
+  return 'calc(' + fn + '(100%, calc(var(--cvH, 100cqh) * ' + a3 + ')) * ' + s3 + ') auto';
 }
 /* 视口是不是「新单位」（框的百分比）。老数据没打 v:2 → 它的 x/y 不能当新单位用（会乱飞） */
 function vpIsBox(vp){ return !!vp && num(vp.v) >= 2; }
@@ -4771,9 +4798,11 @@ function vpClampPan(v){
  *    正方形 .ph）用 6/7 去夹只会**更保守**（更居中），绝不会反而露白。
  * ⚠️ 图的长宽比按 URL 缓存（cvARLoad 预热）；**取不到就原样返回** —— 宁可不动，也不乱夹。
  * ============================================================ */
-var CV_FRAME_AR = 6 / 7;   /* 封面框统一 6/7（v172）；换算里 s 是**比例**不是百分比 */
+var CV_FRAME_AR = 6 / 7;   /* **露图区**统一 6/7（v176）：卡片封面 / 编辑预览 / 详情大图三处外框都是
+                              3/4.2 且取景层底部让出 1/6 ⇒ 露图区一律 6/7（换算里 s 是**比例**不是百分比） */
 var _cvAR = {};                 /* 图片 url → 宽/高（当次会话） */
 var _cvARFail = {};             /* url → 上次加载失败的时间戳：失败**不再永久记 0**，隔一会儿允许重试 */
+var _cvARPend = {};             /* url → 加载在途（v175）：用来区分「还没量出来」和「量不出来」 */
 var _cvARStore = null;          /* { 路径键 → 宽/高 }，localStorage 持久化 */
 
 /* v174：把任何形式的图片地址折成稳定的「路径键」。
@@ -4826,53 +4855,123 @@ function cvARLoad(url, cb){
   var f = _cvARFail[u];
   if (f && (Date.now() - f) < 4000){ if (cb) cb(0); return; }
   var im = new Image();
+  _cvARPend[u] = true;
   im.onload  = function(){
+    delete _cvARPend[u];
     var ar = (im.naturalWidth || 0) / (im.naturalHeight || 1);
     _cvAR[u] = ar; cvARStorePut(u, ar); if (cb) cb(ar);
   };
-  im.onerror = function(){ _cvARFail[u] = Date.now(); if (cb) cb(0); };
+  im.onerror = function(){ delete _cvARPend[u]; _cvARFail[u] = Date.now(); if (cb) cb(0); };
   im.src = u;
 }
+/* v175：长宽比的「三态」—— >0 拿到了 / 0 确定拿不到 / undefined 还在加载。
+   ⚠️ 夹取必须区分后两者：「拿不到」才退化成保守的 50(s−1)（宁可紧一点也不露白，⑦b 就是冲它来的）；
+      「还在加载」时**不要夹** —— 那是暂时的，等 cvARLoad 回调补夹即可。
+      混为一谈的后果：按 A=0 把位移**过早压紧**，而回调里又只在「已压紧的值」上再夹（只会更紧），
+      于是永远回不来 —— ⑦c-1 就是这个（打开旧记录时横向只给到 40 而不是 92.6）。 */
+function cvARState(u, raw){
+  var a = cvARTry(u, raw);
+  if (a > 0) return a;
+  var k1 = String(u || ''), k2 = String(raw || '');
+  if ((k1 && _cvARPend[k1]) || (k2 && _cvARPend[k2])) return undefined;   /* 在途 ⇒ 先别夹 */
+  return 0;                                                              /* 失败 / 空地址 ⇒ 保守夹 */
+}
 function cvClampCover(vp, ar, frameAR){
-  /* ⚠️ 返回值必须带 v:2 —— `vpNorm` 里有一条兼容桥：**没有 v:2 的老数据，位移一律当 0**
-     （v170 为了防「换了单位乱飞」加的）。这里返回的全新对象如果不打标记，
-     紧接着的 `vpStamp(...)` 会把刚夹好的 x/y 直接清零（v173 踩过：拖完 y 又回 0）。
-   v174：**横向夹取不再依赖图片长宽比**。
-     渲染宽度 = s × 框宽（`background-size: NN% auto`），这个关系与图多宽多高无关 ⇒
-     横向安全半幅 `halfX = 50(s−1)` 是**确定**的。而纵向要 `s·F/A`，A（图宽高比）得先把图读出来；
-     读不到（图片 404 / blob 失效 / 还没加载完）时原来整段 return 掉 ⇒ 横向也不夹了 ⇒
-     用户「放大后往右拖，左边露白条」（v173 修了但没修干净，根因就在这）。
-     现在：**横向永远夹**；纵向只在 A 已知时夹。 */
-  var o = { s: vpClampS(num(vp && vp.s) || 1), x: vpClampPan(vp && vp.x), y: vpClampPan(vp && vp.y), v: 2 };
-  var sc = o.s;                         /* ⚠️ s 是**比例**（1.5 = 150%），不是百分比 ——
-                                           写成 o.s/100 会让夹取范围放大 100 倍、等于没夹（v173 踩过） */
-  var halfX = 50 * (sc - 1);            /* > 0 才说明横向溢出、才需要夹 */
-  if (halfX > 0) o.x = Math.max(-halfX, Math.min(halfX, o.x));
-  var F = num(frameAR) || CV_FRAME_AR;
-  if (ar > 0 && F > 0){
-    var halfY = 50 * (sc * F / ar - 1);
-    if (halfY > 0) o.y = Math.max(-halfY, Math.min(halfY, o.y));
-  }
-  return o;
+  /* v175：实现收敛到 vpNorm —— 夹取规则只有一份（横向永远夹、纵向拿到长宽比才夹），
+     函数名保留是因为附件面板与回归测试还在用它。
+     ⚠️ 返回值带 v:2（`vpNorm` 的兼容桥：没有 v:2 的老数据位移一律当 0），
+        漏了它紧接着的 `vpStamp(...)` 会把刚夹好的 x/y 清零（v173 踩过：拖完 y 又回 0）。 */
+  return vpNorm(vp, ar, frameAR);
 }
 /* 读路径统一入口：老单位（没 v:2）的位移一律当 0 —— 宁可居中，也不要因为换了单位而乱飞。
    ⚠️ 返回**新对象**，别拿去回写数据（回写会把老位移抹掉，交给 migrate 脚本换算）。 */
-function vpNorm(vp){
+/* ⚠️ v176 起**不再被调用**（用户要「自由取景」：可以拖出框、不足处用白色补）。
+   保留下来是因为这套算法本身是对的 —— 哪天又需要「不许拖出白边」时直接接回 `vpNorm` 即可。
+   v175：位移的**安全半幅**（%，相对框宽/框高）。>0 才需要夹（图在这根轴上比框大）。
+   · 横向：渲染宽度 = s × 框宽（`background-size: NN% auto`）⇒ `50(s−1)`，**与图片长宽比无关**；
+   · 纵向：渲染高度 = s·框宽/A ⇒ `50(s·F/A − 1)`，需要图片长宽比 A（拿不到就返回 0＝不夹，
+     宁可让用户自由挪动，也不要瞎夹）。
+   ⚠️ 这里的 s 是**比例**（1.5 = 150%），不是百分比。 */
+function cvSafeHalf(s, ar, frameAR){
+  var sc = vpClampS(num(s) || 1);
+  var F = num(frameAR) || CV_FRAME_AR;
+  /* ⚠️ v175：`ar` **没传**（undefined）≠「传了但拿不到」（0），含义不同：
+     · 没传 ⇒ 调用方只是想要「归一化」（老单位当 0），**不要夹**。典型是 vp() / vpStamp() /
+       coverViewport() 这些「读当前值」的路径 —— 它们要真按 A=0 去夹，就会拿保守的 cw=1
+       把位移**过早压紧**（横向只给 50(s−1)，而真实可移范围更大）；夹取只会更紧，压完再也回不来。
+     · 传了 0 ⇒ 长宽比确实拿不到，这时才退化成保守的 50(s−1)（宁可紧一点也不能露白，见 ⑦b）。 */
+  if (ar === undefined || ar === null) return { needX: false, x: 0, needY: false, y: 0 };
+  var A = num(ar);
+  /* EPS：只给**纵向**留一点余量。纵向位移上限乘的是**名义**框架宽高比 F=6/7，
+     而框的实际宽高比会因取整与它差一点点（例如 499×583 实际是 0.8559 而不是 0.8571），
+     正好夹到「理论极限」时边上会露一条 1px 白线；0.25%（≈1.5px）肉眼不可见，却能把缝吃掉。
+     ⚠️ **横向绝对不能减 EPS**：横向上限由**实际**框宽推出，本身就已精确贴边，
+        再减 0.25 反而让位移差一点点（v175 的 ⑦b 断言就是被这个 0.25 咬到：40% 变 39.75%）。
+     ⚠️ 返回里带 needX/needY：纵向溢出量比 EPS 还小时，仍然要「夹到 0」（不许动），
+        不能因为减完变成 0 就当成「不需要夹」（那样又漏白）。
+     v175：图现在是「cover × s」（见 vpSizeCss），所以可移范围要按 cover 尺寸算 ——
+     cover 宽 = 框宽 × max(1, A/F)、cover 高 = 框高 × max(1, F/A)。 */
+  var EPS = 0.25;
+  var cw = (A > 0 && F > 0) ? Math.max(1, A / F) : 1;   // cover 宽 / 框宽
+  var ch = (A > 0 && F > 0) ? Math.max(1, F / A) : 1;   // cover 高 / 框高
+  var hx = 50 * (sc * cw - 1);
+  var hy = 50 * (sc * ch - 1);
   return {
-    s: vpClampS(num(vp && vp.s) || 1),
-    x: vpIsBox(vp) ? vpClampPan(vp.x) : 0,
-    y: vpIsBox(vp) ? vpClampPan(vp.y) : 0,
-    v: 2
+    /* ⚠️ v175：判定是 `>= 0`（含 0）—— 「图正好等于框」（无溢出）时也必须夹，夹到 0；
+       写成 `> 0` 会漏掉这一档，用户一挪就露白（⑦ 里 s=1 的那条断言就是冲它来的）。 */
+    needX: hx >= 0, x: hx,
+    needY: hy >= 0, y: hy > 0 ? Math.max(0, hy - EPS) : hy
   };
+}
+/* v175：**唯一**的「归一化 + 夹取」入口 —— 读路径（记录 / 草稿 / 卡片渲染）也必须走它。
+   原来只在 setVp（用户拖动）里夹，存量里超范围的 x 一渲染出来就是「左边一条白条」。 */
+function vpNorm(vp){
+  /* v176：**不再夹取位移**。用户明确要「封面可以任意放大 / 缩小，可以拖出取景框，
+     框里不足的地方用白色补上」，而且要「编辑时什么样、卡片和详情就是什么样」。
+     所以这里只做两件事：①「归一化」（没打 v:2 的老单位一律当 0）；②把 s / x / y 收进滑杆量程。
+     ⚠️ 之前那套防白边夹取（`cvSafeHalf`）与「自由取景」直接冲突，已停用；
+        函数保留在下面备查 —— 它本身算得是对的（cover × s 的安全半幅），只是不该拦用户。 */
+  var s = vpClampS(num(vp && vp.s) || 1);
+  var x = vpIsBox(vp) ? vpClampPan(vp.x) : 0;
+  var y = vpIsBox(vp) ? vpClampPan(vp.y) : 0;
+  var o = { s: s, x: x, y: y, v: 2 };
+  /* v182：封面**显示模式**标记 —— 存进 viewport 里（随视口一起走，不用另开字段）。
+     'center' = 居中模式 = **无白条模式**（contain：图完整装进框）；缺省 = 铺满模式 = **有白条模式**。
+     ⚠️ 两种模式都可缩放 / 可拖位移（v184 起 'center' 也允许位移，别再按名字理解成「锁死在中间」）。 */
+  if (vp && vp.fit === 'center') o.fit = 'center';
+  return o;
+}
+/* 宿主上已经下发的图片地址（从 --cvi 里抠出来）—— 给「只拿到元素、拿不到 url」的地方查长宽比用 */
+function cvUrlOf(host){
+  if (!host || !host.style) return '';
+  var v = String(host.style.getPropertyValue('--cvi') || '');
+  var m = /url\(\s*['"]?([^'")]+)/.exec(v);
+  return m ? m[1] : '';
 }
 /* 写路径：带上 v:2 标记（下次就不会被当成老数据了） */
 function vpStamp(vp){
   var o = vpNorm(vp);
-  return { s:o.s, x:o.x, y:o.y, v:2 };
+  var r = { s:o.s, x:o.x, y:o.y, v:2 };
+  if (o.fit === 'center') r.fit = 'center';   /* v182：保留居中模式标记 */
+  return r;
 }
+/* 新封面 / 录入封面的默认 viewport —— 统一成「30周年冰箱贴·贴纸版·妙蛙种子」的取景：
+   s:0.6（缩小到 60%）、x:0（不左右移）、y:8.43（下移一点）、v:2（新单位）。
+   用户要求之后录入的新封面也自动带这个取景，所以「新建 / 清空 / 文件录入 / 重置」都用它。 */
+var VP_DEFAULT = { s:0.6, x:0, y:8.428571428571429, v:2 };
+function vpDefault(){ return { s:VP_DEFAULT.s, x:VP_DEFAULT.x, y:VP_DEFAULT.y, v:2 }; }
 function cvNum1(v){
   var x = Number(v); if (!isFinite(x)) x = 0;
   return Math.round(x * 10) / 10;
+}
+/* v177：缩放 s 单独用 2 位精度（不沿用 cvNum1 的 0.1 取整）。
+   原因：cvApplySize 会回读 --cvS 重新算 --cvs（见下），0.1 取整会把用户存的
+   1.45 变成 1.5、0.85 变成 0.9 ⇒ 图片缩放和滑杆上显示的百分比对不上，
+   用户觉得「百分比配置丢了 / 变了」。2 位精度能保住用户设的原值（1.45→1.45）。
+   位移 x/y 仍走 cvNum1（0.1cqw 的误差肉眼不可见，且只影响手感不影响缩放）。 */
+function cvNum2(v){
+  var x = Number(v); if (!isFinite(x)) x = 1;
+  return Math.round(x * 100) / 100;
 }
 /* ============================================================
  * 封面「取景层」的样式声明（宿主元素必须带 .cv 类，层 = 它的 ::before）：
@@ -4880,26 +4979,60 @@ function cvNum1(v){
  *   --cvx / --cvy  取景层的位移（相对框宽 / 框高，正数 = 往右 / 往下）
  * 为什么不用 background-position：见文件上方 VP_ZMIN 那段注释（方向会随溢出关系翻转）。
  * ============================================================ */
+/* v176：长宽比到位后，把**所有**正用着这张图的 .cv 宿主的 `--cvs` 补设一次。
+   为什么必须有它：卡片 / 详情是 `cvDecls` 直接吐 HTML 字符串渲染的，**不经过表单**，
+   而只有表单那条路（fieldVal / setField）会预热长宽比 —— 所以卡片/详情上
+   `--cvs` 会永远停在「长宽比未知」的退化版本（只锁宽度），横图就上下露白、
+   `cover × s` 等于白写。这里靠「净化后的 URL」找回同一张图的宿主（与 `cvUrlOf` 同一套规则）。 */
+function cvSanUrl(u){ return String(u == null ? '' : u).replace(/["'()\\]/g, ''); }
+function cvApplySize(u, ar){
+  var san = cvSanUrl(u);
+  if (!san || !(ar > 0)) return;
+  var els = document.querySelectorAll('.cv');
+  for (var i = 0; i < els.length; i++){
+    var el = els[i];
+    if (cvUrlOf(el) !== san) continue;                       /* 只补自己这张图 */
+    var s = num(el.style.getPropertyValue('--cvS')) || 1;
+    var fit = el.classList.contains('cv-center') ? 'center' : 'cover';   /* v182：长宽比到位后也要按模式算 */
+    el.style.setProperty('--cvs', vpSizeCss(s, ar, fit));
+  }
+}
 function cvDecls(u, vp){
   if (!u) return '';
-  var n = vpNorm(vp);
+  /* v175：cover 尺寸要图片长宽比 —— 这里 u 就是**已解析**的图片地址，
+     直接查缓存（命中就是一次对象读取，没有 IO；未命中返回 0 ⇒ 尺寸先退化成宽度基准） */
+  var A = cvARState(u);
+  var n = vpNorm(vp, A);
+  /* ⚠️ v176：渲染这条路**必须自己发起加载** —— 见 cvApplySize 上面的说明。 */
+  cvARLoad(u, function(ar){ if (ar > 0) cvApplySize(u, ar); });
   /* 用单引号包 URL：外层 HTML 是双引号属性，内部再用双引号会把属性截断（封面整片空白） */
-  return "--cvi:url('"+String(u).replace(/[\"'()\\]/g,'')+"');--cvs:"+vpSizeCss(n.s)+
-    ';--cvx:'+cvNum1(n.x)+'%;--cvy:'+cvNum1(n.y)+'%';
+  /* ⚠️ 位移单位是 cqw / cqh（框宽 / 框高的 1%），不是 %：%` 是相对**元素自身**，
+     而取景层自身就是框，用它做位移会把框自己推出画面（白条的根因）；cqw / cqh 是绝对长度。 */
+  /* v184：位移照旧下发 —— 「居中模式」只是**无白条**，不是「锁死不能动」。
+     `contain` 下 `background-position:50%` 仍是「图居中」，再叠加 cqw/cqh 偏移方向恒定（永远往右/往下），
+     图比框大或小都成立，所以两种模式共用同一套位移机制。 */
+  return "--cvi:url('"+String(u).replace(/[\"'()\\]/g,'')+"');--cvs:"+vpSizeCss(n.s, A, n.fit)+
+    ';--cvS:'+cvNum2(n.s)+';--cvx:'+cvNum1(n.x)+'cqw;--cvy:'+cvNum1(n.y)+'cqh';
 }
 /* 直接把图片 + 视口写到宿主元素上（表单预览 / 附件预览这类「活的」封面用） */
 function cvSetImg(host, resolvedUrl, vp){
   if (!host) return;
   if (!resolvedUrl){ cvClear(host); return; }
-  var n = vpNorm(vp);
+  var A = cvARState(resolvedUrl);
+  var n = vpNorm(vp, A);
+  var cent = (n.fit === 'center');
+  host.classList.toggle('cv-center', cent);       /* v182：无白条模式标记（供 cvApplySize / CSS 用） */
   host.style.setProperty('--cvi', "url('"+String(resolvedUrl).replace(/[\"'()\\]/g,'')+"')");
-  host.style.setProperty('--cvs', vpSizeCss(n.s));
-  host.style.setProperty('--cvx', cvNum1(n.x)+'%');
-  host.style.setProperty('--cvy', cvNum1(n.y)+'%');
+  host.style.setProperty('--cvs', vpSizeCss(n.s, A, n.fit));
+  host.style.setProperty('--cvS', cvNum2(n.s));
+  /* v184：无白条模式也下发位移（见 cvDecls 的说明） */
+  host.style.setProperty('--cvx', cvNum1(n.x)+'cqw');
+  host.style.setProperty('--cvy', cvNum1(n.y)+'cqh');
 }
 function cvClear(host){
   if (!host || !host.style) return;
-  ['--cvi','--cvs','--cvx','--cvy'].forEach(function(k){ host.style.removeProperty(k); });
+  ['--cvi','--cvs','--cvS','--cvx','--cvy'].forEach(function(k){ host.style.removeProperty(k); });
+  if (host.classList) host.classList.remove('cv-center');
 }
 /* 这张封面框里有没有图（原来靠 prev.style.backgroundImage 判断，现在看 --cvi） */
 function cvHasImg(host){
@@ -6878,7 +7011,7 @@ function localUpsert(key, id, vals){
          原来一律 String(v)，数组会被转成 '[object Object]'，封面直接消失且不可逆。
          数组原样保留；字符串才按「URL + _vp」包装。 */
       if (Array.isArray(v)) row[f.k] = v;
-      else row[f.k] = v ? [{imageUrl:String(v), viewport:(vp && vp.s ? vp : {s:1,x:0,y:0,v:2})}] : null;
+      else row[f.k] = v ? [{imageUrl:String(v), viewport:(vp && vp.s ? vp : vpDefault())}] : null;
     }
     else if (f.t==='multi') row[f.k] = (v && v.length) ? v : null;
     else if (f.t==='check') row[f.k] = !!v;
@@ -8311,11 +8444,15 @@ function attachCoverUrl(a){
 }
 /* v165：附件封面的「缩放 / 位置」—— 和物品封面同一套语义（s/x/y），存在附件的 `封面视口` 上。
    物品封面用的是 `封面[0].viewport`（数组嵌套），附件封面是**平铺的字符串**，
-   所以另开一个字段，不动已有数据（老附件没这个字段 → 默认 {s:1,x:0,y:0}）。 */
+   所以另开一个字段，不动已有数据（老附件没这个字段 → 默认 vpDefault()）。 */
 function attachVp(a){
   var v = a && a['封面视口'];
-  if (!v || typeof v !== 'object') return vpNorm(null);
-  return vpNorm(v);
+  /* v175：附件封面也按「已解析地址 + 原始路径」查一次长宽比，纵向一起夹住 */
+  var cu = attachCoverUrl(a), raw = a && a['封面'];
+  raw = Array.isArray(raw) ? ((raw[0] && (raw[0].imageUrl || raw[0].url)) || '') : String(raw || '');
+  var ar = cvARTry(cu, raw);
+  if (!v || typeof v !== 'object') return vpNorm(null, ar);
+  return vpNorm(v, ar);
 }
 /* ============================================================
  * v159：物品名的展示 —— 「名称」黑色 + 「备注名」灰色小一号。
@@ -8386,7 +8523,7 @@ function collectionPosterHTML(r){
   var no=String(r['编号']||'');
   return '<div class="poster" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
     ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-    '<div class="cover cv'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
+    '<div class="cover cv'+(hasCover(r)?'':' noimg')+(coverFit(r)==='center'?' cv-center':'')+'" style="'+coverStyle(r,t)+'">'+
     (hasCover(r)?'':'<b>'+esc(String(t).slice(0,1))+'</b>')+
     '<span class="tag">'+esc(pkCardTag(r))+'</span>'+
     /* v132：只有「贴纸版」加角标 —— 冰箱贴版是默认版本，不加免得 1300 张卡都挂个牌子。
@@ -11458,7 +11595,7 @@ document.addEventListener('click', function(ev){
     var ik = node.getAttribute('data-k');
     if (!editing) return;
     editing.vals[ik] = '';
-    editing.vals[ik+'_vp'] = { s:1, x:0, y:0, v:2 };
+    editing.vals[ik+'_vp'] = vpDefault();
     var iInp = document.querySelector('[data-f="' + ik + '"]');
     if (iInp){ iInp.value = ''; iInp.dispatchEvent(new Event('input', { bubbles:true })); }
     var iPrev = document.querySelector('[data-img-prev="' + ik + '"]');
@@ -12526,7 +12663,15 @@ function fieldVal(row, f){
   var v=row[f.k];
   if (f.t==='img'){
     if (v && v[0] && v[0].imageUrl){
-      if (editing && v[0].viewport) editing.vals[f.k+'_vp'] = v[0].viewport;
+      /* v175：记录里的位移**先夹再进编辑区** —— 老版本可能把超范围的值保存下来，
+         不夹的话一打开表单（还没碰任何控件）就已经是「左边一条白条」。 */
+      if (editing && v[0].viewport){
+        var _ru = resolveImgUrl(v[0].imageUrl);
+        /* v175：先**发起**长宽比的加载 —— cvARState 才能看出「在途」，这时先不夹、等回调补夹。
+           否则会按 A=0 把存量里超范围的位移过早压紧，之后再也放宽不回来。 */
+        if (_ru) cvARLoad(_ru);
+        editing.vals[f.k+'_vp'] = vpStamp(vpNorm(v[0].viewport, cvARState(_ru, v[0].imageUrl)));
+      }
       return v[0].imageUrl;
     }
     return '';
@@ -12556,14 +12701,39 @@ function setImgPreview(prev, url, k){
    v170：只改取景层的尺寸 / 位移（图不在这里动，免得每次拖拽都重设 url）。 */
 function applyVpTo(prev, vp){
   if (!prev) return;
-  var n = vpNorm(vp);
-  prev.style.setProperty('--cvs', vpSizeCss(n.s));
-  prev.style.setProperty('--cvx', cvNum1(n.x)+'%');
-  prev.style.setProperty('--cvy', cvNum1(n.y)+'%');
+  /* v175：只拿到元素 ⇒ 从它已经下发的 --cvi 反查长宽比（缓存命中，无 IO） */
+  var A = cvARState(cvUrlOf(prev));
+  var n = vpNorm(vp, A);
+  prev.classList.toggle('cv-center', (n.fit === 'center'));   /* v182：无白条模式标记 */
+  prev.style.setProperty('--cvs', vpSizeCss(n.s, A, n.fit));
+  prev.style.setProperty('--cvS', cvNum2(n.s));
+  /* v184：无白条模式也下发位移（编辑预览里拖动/滑杆同样生效） */
+  prev.style.setProperty('--cvx', cvNum1(n.x)+'cqw');
+  prev.style.setProperty('--cvy', cvNum1(n.y)+'cqh');
+  /* v177：长宽比到位后，把这张图的 --cvs 从「宽度基准（`NN% auto`）」升级成「cover × s」。
+     编辑预览之前只走 applyVpTo（不触发 cvApplySize），一直停在宽度基准 ⇒ 和卡片/详情的
+     `cover × s` 裁切对不上、滑杆上的百分比和实际画面不一致（所见即所得被破坏）。
+     这里借 cvApplySize 统一补一次（它按 --cvi 找回同图宿主，安全幂等）。 */
+  cvARLoad(cvUrlOf(prev), function(ar){ if (ar > 0) cvApplySize(cvUrlOf(prev), ar); });
 }
 function applyImgViewport(prev, k){
   if (!prev || !k) return;
-  applyVpTo(prev, editing && editing.vals ? editing.vals[k+'_vp'] : null);
+  var _vp = editing && editing.vals ? editing.vals[k+'_vp'] : null;
+  applyVpTo(prev, _vp);
+  /* v175：顺手把**控件**也同步上 —— 夹取改成「读路径也夹」之后，会出现
+     「画面已经夹到 40、滑杆还停在 82」的错位（用户再一动滑杆就会跳一下）。
+     这里把缩放滑杆 / 百分比 / 左右上下滑杆一起对齐到当前 vp。 */
+  var n = vpNorm(_vp, cvARState(cvUrlOf(prev)));
+  var box = prev.parentNode; if (!box) return;
+  var q = function(sel){ return box.querySelector(sel); };
+  var sl = q('.imgvp-slider[data-img-zoomslider="'+k+'"]');
+  if (sl) sl.value = Math.max(VP_ZMIN, Math.min(VP_ZMAX, n.s));
+  var pc = q('.imgvp-pct[data-img-pct="'+k+'"]');
+  if (pc) pc.textContent = Math.round(n.s * 100) + '%';
+  var sx = q('.imgvp-pan[data-img-panslider-x="'+k+'"]');
+  if (sx) sx.value = Math.max(-VP_PAN, Math.min(VP_PAN, n.x));
+  var sy = q('.imgvp-pan[data-img-panslider-y="'+k+'"]');
+  if (sy) sy.value = Math.max(-VP_PAN, Math.min(VP_PAN, n.y));
 }
 /* ---------- 表单控件绑定（单个表单 / 批量表单共用） ---------- */
 function wireFormControls(host, saveDraft){
@@ -12992,7 +13162,7 @@ function wireFormControls(host, saveDraft){
       compressImage(file, 800, function(dataUrl){
         if (!dataUrl){ if (note) note.textContent='这张图读不出来，换个文件试试'; return; }
         editing.vals[k]=dataUrl;
-        editing.vals[k+'_vp']={s:1,x:0,y:0,v:2};
+        editing.vals[k+'_vp']=vpDefault();
         var urlInput=host.querySelector('[data-f="'+k+'"]'); if (urlInput) urlInput.value=dataUrl;
         var prev=host.querySelector('[data-img-prev="'+k+'"]');
         if (prev) setImgPreview(prev, dataUrl, k);
@@ -13068,6 +13238,10 @@ function wireFormControls(host, saveDraft){
       return u;
     }
     function clampVp(o){
+      /* v182/v184：**无白条模式（fit='center'）不夹位移**。
+         `cvClampCover` 算的是「cover × s 下不露白边」的安全半幅，而 contain 模式图本来就小于框、
+         而且用户要的是「自由取景」，所以这里直接放行（顺带也保住 fit 标记不被夹取逻辑丢掉）。 */
+      if (o && o.fit === 'center') return o;
       /* v173：同步夹一次 —— 图比框大时不许把位移拖到露白边。
          v174：横向夹取本来就不需要长宽比（见 cvClampCover）；纵向需要，
                所以这里把「原始值」也交给 cvARTry（持久层按路径存的，blob 换了也查得到）。
@@ -13075,9 +13249,12 @@ function wireFormControls(host, saveDraft){
          不能拿闭包里的旧 o 回写（那是 v173 拖完 y 又回 0 的原因）。 */
       var raw = coverUrl();
       var u = resolveImgUrl(raw);
-      var ar = cvARTry(u, raw);
+      var ar = cvARState(u, raw);
       if (!ar && u) cvARLoad(u, function(got){
         if (!(got > 0)) return;
+        /* ⚠️ v175：长宽比是异步来的，等它回来时表单可能已经关了 / 换成另一张了；
+           元素一旦脱离 DOM 就直接放弃 —— 否则会把位移写到**别人**的 vals 上。 */
+        if (!prev.isConnected) return;
         var cur = vp();                                   /* 读当下值 */
         var c2 = cvClampCover(cur, got, CV_FRAME_AR);
         if (Math.abs(c2.x - cur.x) > 0.05 || Math.abs(c2.y - cur.y) > 0.05){
@@ -13089,7 +13266,9 @@ function wireFormControls(host, saveDraft){
     }
     function setVp(o){
       if (!editing) return;
+      var _keepFit = (o && o.fit === 'center');   /* v182：居中模式标记要留住（clampVp/vpStamp 可能丢） */
       o = vpStamp(clampVp(o));
+      if (_keepFit) o.fit = 'center';
       editing.vals[k+'_vp']=o; applyImgViewport(prev, k);
       var sl = prev.parentNode.querySelector('.imgvp-slider[data-img-zoomslider="'+k+'"]');
       if (sl) sl.value = Math.max(VP_ZMIN, Math.min(VP_ZMAX, o.s||1));
@@ -13104,6 +13283,22 @@ function wireFormControls(host, saveDraft){
     }
     var zbar = prev.parentNode.querySelector('.imgvp-bar');
     if (zbar){
+      /* v182/v184：「居中模式」（= **无白条**模式）复选框 —— 只切两件事：
+         ① background-size 用 contain（图完整装进框）还是 cover（盖满整框）；
+         ② 卡片底部有没有白条。
+         ⚠️ v184 起**不再**禁用/收起位移控件 —— 两种模式都能拖动、都能调上下左右。 */
+      zbar.querySelectorAll('[data-img-fit]').forEach(function(cb){
+        cb.onchange=function(){
+          var o=vp();
+          if (cb.checked) o.fit='center'; else delete o.fit;
+          setVp(o);                                  /* setVp→applyImgViewport 会连带切换 .cv-center */
+          zbar.classList.toggle('fit-center', cb.checked);
+          var hint=prev.querySelector('.imgvp-hint');
+          if (hint) hint.textContent = cb.checked
+            ? '居中模式（无白条）· 可拖动移动 · 滑杆/滚轮缩放 30–180% · 双击重置'
+            : '铺满模式（有白条）· 拖动移动 · 滑杆/滚轮缩放 30–180% · 双击重置';
+        };
+      });
       zbar.querySelectorAll('[data-img-zoom]').forEach(function(btn){
         btn.onclick=function(){
           var o=vp(); o.s=Math.max(VP_ZMIN, Math.min(VP_ZMAX, o.s+parseFloat(btn.getAttribute('data-d')))); setVp(o);
@@ -13137,10 +13332,15 @@ function wireFormControls(host, saveDraft){
         });
       });
       zbar.querySelectorAll('[data-img-reset]').forEach(function(btn){
-        btn.onclick=function(){ setVp({s:1,x:0,y:0}); };
+        btn.onclick=function(){
+          /* v182：居中模式的重置 = 回到「自然居中」(s=1)；铺满模式 = 保持原有默认取景 */
+          setVp((vp().fit==='center') ? { s:1, x:0, y:0, v:2, fit:'center' } : vpDefault());
+        };
       });
     }
-    prev.ondblclick=function(){ setVp({s:1,x:0,y:0}); };
+    prev.ondblclick=function(){
+      setVp((vp().fit==='center') ? { s:1, x:0, y:0, v:2, fit:'center' } : vpDefault());
+    };
     prev.onwheel=function(e){
       if (!cvHasImg(prev)) return;
       e.preventDefault();
@@ -13196,7 +13396,7 @@ function wireFormControls(host, saveDraft){
       var note=host.querySelector('[data-img-note="'+k+'"]'); if (note) note.textContent='正在压缩…';
       compressImage(file, 800, function(dataUrl){
         if (!dataUrl){ if (note) note.textContent='这张图读不出来，换个文件试试'; return; }
-        editing.vals[k]=dataUrl; editing.vals[k+'_vp']={s:1,x:0,y:0,v:2};
+        editing.vals[k]=dataUrl; editing.vals[k+'_vp']=vpDefault();
         var urlInput=host.querySelector('[data-f="'+k+'"]'); if (urlInput) urlInput.value=dataUrl;
         setImgPreview(prev, dataUrl, k);
         if (note) note.textContent='已压到约 '+Math.round(dataUrl.length/1024)+' KB';
@@ -13215,7 +13415,7 @@ function wireFormControls(host, saveDraft){
         var note=host.querySelector('[data-img-note="'+k+'"]'); if (note) note.textContent='正在压缩…';
         compressImage(file, 800, function(dataUrl){
           if (!dataUrl){ if (note) note.textContent='这张图读不出来，换个文件试试'; return; }
-          editing.vals[k]=dataUrl; editing.vals[k+'_vp']={s:1,x:0,y:0};
+          editing.vals[k]=dataUrl; editing.vals[k+'_vp']=vpDefault();
           urlInp.value=dataUrl; setImgPreview(prev, dataUrl, k);
           if (note) note.textContent='已压到约 '+Math.round(dataUrl.length/1024)+' KB';
           if (saveDraft) saveDraft();
@@ -13628,7 +13828,7 @@ function seriesCloudWall(rows, cols){
       : '<span class="wish-tag" data-act="serieswish" data-id="'+esc(r._id)+'">点击想要</span>';
     return '<div class="poster" data-act="item" data-key="collection" data-id="'+esc(r._id)+'"'+
       ' data-sp-bindable="database" data-sp-database-id="6xC81f403Az4cQm0QIX2TK">'+
-      '<div class="cover cv'+(hasCover(r)?'':' noimg')+'" style="'+coverStyle(r,t)+'">'+
+      '<div class="cover cv'+(hasCover(r)?'':' noimg')+(coverFit(r)==='center'?' cv-center':'')+'" style="'+coverStyle(r,t)+'">'+
       (hasCover(r)?'':'<b>'+esc(String(t).slice(0,1))+'</b>')+
       '<span class="tag">'+esc(pkCardTag(r))+'</span>'+
       /* v132：只有「贴纸版」加角标 —— 冰箱贴版是默认版本，不加免得 1300 张卡都挂个牌子。
@@ -14317,7 +14517,7 @@ function wireAttachPanel(panel, saveDraft){
         if (!dataUrl){ toast('这张图读不出来，换个文件试试'); return; }
         var a = cur(); if (!a) return;
         a['封面'] = dataUrl;
-        a['封面视口'] = a['封面视口'] || { s:1, x:0, y:0, v:2 };
+        a['封面视口'] = a['封面视口'] || vpDefault();
         bump();
         var inp = panel.querySelector('[data-att-f="封面"]'); if (inp) inp.value = dataUrl;
         paintCover(dataUrl);
@@ -14352,7 +14552,7 @@ function wireAttachPanel(panel, saveDraft){
     var zsl = panel.querySelector('[data-att-zoomslider]');
     if (zsl) zsl.addEventListener('input', function(){ var o = vp(); o.s = parseFloat(zsl.value); setVp(o); });
     var rb = panel.querySelector('[data-att-reset]');
-    if (rb) rb.onclick = function(){ setVp({ s:1, x:0, y:0 }); };
+    if (rb) rb.onclick = function(){ setVp(vpDefault()); };
 
     /* 拖拽移动：只在拖拽期间挂 document 监听，松手立刻摘掉（不留监听垃圾） */
     prev.addEventListener('mousedown', function(e){
@@ -14396,7 +14596,7 @@ function wireAttachPanel(panel, saveDraft){
         if (!dataUrl){ toast('这张图读不出来，换个图片试试'); return; }
         var b = cur(); if (!b) return;
         b['封面'] = dataUrl;
-        b['封面视口'] = b['封面视口'] || { s:1, x:0, y:0, v:2 };
+        b['封面视口'] = b['封面视口'] || vpDefault();
         bump();
         var inp = panel.querySelector('[data-att-f="封面"]'); if (inp) inp.value = dataUrl;
         paintCover(dataUrl);
@@ -14479,6 +14679,18 @@ function openForm(key, id, opts){
      未声明的 saveDraft，点击云游/端盒时 `if (saveDraft)` 抛 ReferenceError（file:// 下被
      全局错误框截成 "Script error."，白屏根因）。 */
   var saveDraft = function(){ try { localStorage.setItem(draftKey, JSON.stringify(editing.vals)); } catch(e){} };
+  /* v185：先把**记录里原本的**图片字段值记下来 —— 草稿万一已经失效，要能回退（见草稿恢复之后那段）。
+     只在「编辑已有条目」时记（新建没有可比的对象）。 */
+  var _recImg = {};
+  if (id){
+    try {
+      activeFields(key, editing.vals).forEach(function(f){
+        if (f.t !== 'img') return;
+        _recImg[f.k] = editing.vals[f.k];
+        _recImg[f.k + '_vp'] = editing.vals[f.k + '_vp'];
+      });
+    } catch(e){}
+  }
   try {
     var raw = localStorage.getItem(draftKey);
     if (raw){
@@ -14491,6 +14703,24 @@ function openForm(key, id, opts){
         if (k in editing.vals) editing.vals[k] = d[k];
       });
     }
+    /* v175：草稿里的封面位移也要过一遍夹取。
+       草稿是老老实实 JSON 存下来的，老版本（没有夹取 / 夹取依赖图片长宽比）会把
+       「拖出白边」的 x 留在里面；恢复后如果直接画出来，就是用户报的
+       「一进编辑页左边一条白条，怎么都修不掉」—— 代码明明改了却还是那样，就是这个原因。 */
+    activeFields(key, editing.vals).forEach(function(f){
+      if (f.t !== 'img') return;
+      var vk = f.k + '_vp';
+      if (!editing.vals[vk]) return;
+      var raw = editing.vals[f.k];
+      raw = Array.isArray(raw) ? ((raw[0] && (raw[0].imageUrl || raw[0].url)) || '') : String(raw || '');
+      /* ⚠️ 只挑「文件里存的」原始路径去查长宽比：草稿里的 vk 可能是数组/对象，别直接 String() */
+      var ru = resolveImgUrl(raw);
+      /* ⚠️ v175：和 fieldVal 一样，先**发起**加载 —— cvARState 才能看出「在途」。
+         在途时先不夹（fieldHTML 的补夹会跟上）；否则会按 A=0 把位移**过早压紧**，
+         而夹取只会更紧、之后再也放宽不回来。 */
+      if (ru) cvARLoad(ru);
+      editing.vals[vk] = vpStamp(vpNorm(editing.vals[vk], cvARState(ru, raw)));
+    });
     /* 若本次打开带有明确 大类 预填，确保草稿不会把大类覆盖错（如博物馆草稿覆盖书籍入口） */
     if (opts && opts.prefill && opts.prefill['大类']!=null){
       editing.vals['大类'] = opts.prefill['大类'];
@@ -14506,6 +14736,55 @@ function openForm(key, id, opts){
       if (opts.prefill[k] != null) editing.vals[k] = opts.prefill[k];
     });
   }
+
+  /* ============================================================
+     v185：**草稿里的封面图自愈**。
+     起因（2026-10-16 排查「两款伊布编辑页全白」）：图片做过一次 jpg→webp 优化后，
+     某个记录的 `封面` 路径改了，但 localStorage 里那份**旧草稿**还存着老路径。
+     草稿的优先级高于记录（上面 `editing.vals[k] = d[k]`）⇒ 打开编辑页一片空白；
+     更糟的是用户一点「保存」，这个坏路径会被写回记录，**把已经修好的数据又弄坏**。
+     做法：草稿生效后异步试加载草稿那张图，**加载不出来**就回退到「记录里那张」，
+     并且把输入框 / 预览 / 位移一起刷回去（顺带把草稿也写干净，下次不再犯）。
+     ⚠️ 只处理**本地相对路径**（data/ · images/ · orig/）；data:、blob:、外链一律不动
+        —— 用户正在编辑页里粘的新图不能被误伤。
+     ⚠️ 非 FSA 模式（手机/网页）下 resolveImgUrl 会把它折成 R2 缩略图路径，那些是能加载的，
+        所以这里**不会**误伤 —— 只有在「本地模式 + 文件真的不在」时才会触发回退。
+     ============================================================ */
+  Object.keys(_recImg).forEach(function(k){
+    if (/_vp$/.test(k)) return;
+    var pick = function(x){
+      if (Array.isArray(x)) return String((x[0] && (x[0].imageUrl || x[0].url)) || '');
+      return String(x == null ? '' : x);
+    };
+    var dUrl = pick(editing.vals[k]), rUrl = pick(_recImg[k]);
+    if (!dUrl || !rUrl || dUrl === rUrl) return;            /* 草稿没动过图 / 与记录相同 / 记录里也没图 */
+    if (!/^(data\/|images\/|orig\/)/.test(dUrl)) return;    /* 不是本地相对路径 → 不折腾 */
+    var probe = new Image(), settled = false;
+    var restore = function(){
+      if (settled) return; settled = true;
+      editing.vals[k] = _recImg[k];
+      if (_recImg[k + '_vp'] != null) editing.vals[k + '_vp'] = _recImg[k + '_vp'];
+      var apply = function(){
+        var box = document.querySelector('.imgwrap[data-k="' + k + '"]');
+        if (!box) return false;
+        var prev = box.querySelector('.imgprev');
+        if (!prev) return false;
+        setImgPreview(prev, rUrl, k);
+        var inp = box.querySelector('[data-f="' + k + '"]');
+        if (inp) inp.value = rUrl;
+        var note = document.querySelector('[data-img-note="' + k + '"]');
+        if (note) note.textContent = '草稿里那张封面已经失效，已自动换回记录里的封面';
+        return true;
+      };
+      /* 缓存命中时回调是同步的，此时表单 HTML 还没插进 DOM ⇒ 找不到元素就延后再来一次 */
+      if (!apply()) setTimeout(apply, 80);
+      try { saveDraft(); } catch(e){}
+    };
+    probe.onerror = restore;
+    probe.onload = function(){ settled = true; };
+    /* 4 秒还没结果（网络慢）就当没事发生，绝不误伤用户正在写的内容 */
+    probe.src = resolveImgUrl(dUrl);
+  });
 
   /* v155：打开编辑表单时先把「状态」归一到合法形态 ——
      空状态的老数据（以前误取消「在库」留下的）会**显示成「云游」**，
@@ -14957,14 +15236,45 @@ function fieldHTML(f, v){
        不走 setImgPreview。不预热的话，用户一进来就拖，夹取会因拿不到比例而跳过。 */
     if (v) cvARLoad(resolveImgUrl(v));
     if (v) cvARTry(resolveImgUrl(v), v);        /* v174：先查持久层（blob 换了也认路径） */
+    /* v175：长宽比到位后**补夹一次**（纵向需要它）。这里改的是**当下的值**：
+       ⚠️ 不能拿闭包里的旧值回写（v173 的「拖完 y 跳回 0」就是这么来的）；
+       也只在真的超范围时才写（用户已经拖到安全范围里就什么都不做，不跟他抢）。 */
+    var _myEd = editing;      /* ⚠️ 记住「这一次表单」—— 回调可能是上一张表单注册的（见下） */
+    if (v) cvARLoad(resolveImgUrl(v), function(_ar){
+      if (!(_ar > 0)) return;
+      var _fix = function(){
+        /* ⚠️ v175：长宽比是异步来的，等它回来时表单**可能已经换成另一张**了。
+           不加这个校验，上一张表单的回调会拿着新表单的 vals 去夹（用旧表单的 ar），
+           把刚设好的位移凭空改掉 —— ⑦c-1 的「打开旧记录横向量只有 40」就是这么来的。 */
+        if (editing !== _myEd) return true;
+        if (!editing || !editing.vals) return true;
+        var _pv = document.querySelector('[data-img-prev="'+f.k+'"]');
+        if (!_pv) return false;                 /* 字段还没插进 DOM → 让调用方稍后重试 */
+        var _cur = editing.vals[f.k+'_vp'];
+        if (!_cur) return true;
+        var _nx = vpStamp(vpNorm(_cur, _ar));
+        editing.vals[f.k+'_vp'] = _nx;
+        /* ⚠️ v175：**即使位移没变也要重下发一次** —— 长宽比刚到位时 `--cvs`（cover 尺寸）
+           很可能还是按「未知」算的那版，不重算的话上下仍可能差一截。 */
+        applyImgViewport(_pv, f.k);
+        return true;
+      };
+      /* ⚠️ 缓存命中时 cvARLoad 的回调是**同步**执行的 —— 此时这行的 HTML 还在拼字符串，
+         `.imgprev` 根本不在 DOM 里，直接找会拿到 null 然后静默放弃（v175 踩过：
+         纵向一直没夹上）。所以没找到元素就延后再来一次。 */
+      if (!_fix()) setTimeout(_fix, 60);
+    });
     var hasV = !!v;
+    var _cent = (vp && vp.fit === 'center');   /* v182：居中模式（无背景物品） */
     body='<div class="imgwrap" data-k="'+f.k+'" data-has-img="'+(hasV?1:0)+'">'+
-      '<div class="imgprev cv" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
+      '<div class="imgprev cv'+(_cent?' cv-center':'')+'" data-img-prev="'+f.k+'" tabindex="0" title="可拖拽移动、滚轮缩放、方向键微调、Ctrl+V 粘贴图片" style="'+prevStyle+'">'+
       /* v75fix：封面框右上角「✕」——一键清掉当前这张图 */
       (v?'<button type="button" class="imgdel" data-act="imgdel" data-k="'+esc(f.k)+'" title="清除这张图片">✕</button>':'')+
-      '<div class="imgvp-hint" '+(v?'':'hidden')+'>拖动移动 · 滑杆/滚轮缩放 30–180% · 方向键微调 · 双击重置（放大后不会拖出白边）</div>'+
+      '<div class="imgvp-hint" '+(v?'':'hidden')+'>'+(_cent?'居中模式（无白条）· 可拖动移动 · 滑杆/滚轮缩放 30–180% · 双击重置':'铺满模式（有白条）· 拖动移动 · 滑杆/滚轮缩放 30–180% · 双击重置')+'</div>'+
       '</div>'+
-      '<div class="imgvp-bar" '+(v?'':'hidden')+'>'+
+      '<div class="imgvp-bar'+(_cent?' fit-center':'')+'" '+(v?'':'hidden')+'>'+
+        /* v182/v184：居中模式 = **无白条模式**（图完整装进框、卡片下方不留白条）；两种模式都可缩放 + 可拖动 */
+        '<label class="imgvp-fit"><input type="checkbox" data-img-fit="'+f.k+'"'+(_cent?' checked':'')+'> <b>居中模式（无白条）</b><span>适合无背景物品：图完整装进框，展示卡下方不留白条（药丸浮在图上）。可缩放、可拖动。</span></label>'+
         '<div class="imgvp-sliderwrap">'+
           '<button type="button" class="btn ghost xs" data-img-zoom="'+f.k+'" data-d="-0.15">−</button>'+
           '<input type="range" class="imgvp-slider" data-img-zoomslider="'+f.k+'" min="'+VP_ZMIN+'" max="'+VP_ZMAX+'" step="0.01" value="'+Math.max(VP_ZMIN,Math.min(VP_ZMAX,vp.s||1))+'" title="拖动无级缩放（'+Math.round(VP_ZMIN*100)+'%-'+Math.round(VP_ZMAX*100)+'%）">'+
@@ -16341,7 +16651,7 @@ function openItemDetail(key, id){
     '<div class="dbody'+(ui.detailAttOpen?' attopen':'')+'">'+
     /* 大封面（点一下看原图）；有附件时右下角挂一个附件按钮 */
     '<div class="dbig-wrap">'+
-      '<div class="dbig cv'+(hasCover(row)?'':' noimg')+'" style="'+coverStyle(row,title)+'"'+
+      '<div class="dbig cv'+(hasCover(row)?'':' noimg')+(coverFit(row)==='center'?' cv-center':'')+'" style="'+coverStyle(row,title)+'"'+
         ' title="点一下看大图">'+
         (hasCover(row)?'':'<b>'+esc(String(title).slice(0,1))+'</b>')+
       '</div>'+
@@ -16587,6 +16897,16 @@ function batchRow(k, type, ph){
   return '<div class="batchrow"><label class="bchk"><input type="checkbox" data-bf="'+k+'"> '+k+'</label>'+
     '<div class="bin"><input type="'+(type==='number'?'number':'text')+'" data-bv="'+k+'" placeholder="'+ph+'"></div></div>';
 }
+/* v183：批量改「封面模式」（铺满 / 居中 / 不修改）。
+   居中 = 无背景物品：图片完整居中、卡片不再留白条（详见 mem-2b 的 v182）。 */
+function batchModeRow(){
+  return '<div class="batchrow"><label class="bchk"><input type="checkbox" data-bf="封面模式"> 封面模式</label>'+
+    '<div class="bin"><select data-bv="封面模式">'+
+      '<option value="">（不修改）</option>'+
+      '<option value="cover">铺满（默认）</option>'+
+      '<option value="center">居中（无背景物品）</option>'+
+    '</select></div></div>';
+}
 /* v143：批量改「大类 / 小类」。
    候选值来源与表单一致：大类 = CATS ∪ 用户新增大类 ∪ 数据里用过的；
    小类 = SUBS[大类] ∪ 该大类下数据里用过的（同 dynOptions('sub')）。
@@ -16628,7 +16948,7 @@ function openBatchEdit(){
   var stOpts=STATES_OWN.map(function(s){ return '<label class="stchk"><input type="checkbox" data-bf-status="'+esc(s)+'"> '+esc(s)+'</label>'; }).join('');
   host.innerHTML='<div class="sheet"><div class="sheet-head"><div><p>批量编辑</p><h2>写入 '+ids.length+' 件藏品</h2></div>'+
     '<button class="x" type="button" data-x="1" aria-label="关闭">×</button></div>'+
-    '<div class="batchnote">只写入勾选的字段，未勾选的保持原样；价格与持有留空则不写，大类 / 小类选「（不修改）」则不写。</div>'+
+    '<div class="batchnote">只写入勾选的字段，未勾选的保持原样；价格与持有留空则不写，大类 / 小类 / 封面模式选「（不修改）」则不写。</div>'+
     '<div class="batchfields">'+
       batchCatRows()+
       batchRow('购入价格','number','如 129.00')+
@@ -16637,6 +16957,8 @@ function openBatchEdit(){
       batchRow('购入渠道','text','淘宝 / 线下店 / 朋友送')+
       batchRow('存储地点','text','房间 · 柜墙 · 层')+
       batchRow('购入日期','text','2026 或 2026-03-05')+
+      batchRow('封面百分比','number','如 60 表示 60%（只改缩放，保留各自位置）')+
+      batchModeRow()+
     '</div>'+
     '<div class="sheet-actions">'+
       '<button class="btn ghost" type="button" data-x="1">取消</button>'+
@@ -16671,6 +16993,25 @@ function applyBatchEdit(){
       patch[k]=(k==='购入价格'||k==='持有')?num(v):v;
     }
   });
+  /* v178b：封面百分比（勾选才写；留空 = 不写；范围 30%–180%）。
+     存成缩放系数 s（百分比 / 100，保留 1 位），applyBatchPatch 里再写进 封面[0].viewport.s。 */
+  if (checked('封面百分比')){
+    var pv=raw('封面百分比');
+    if (pv===''){ /* 勾了但留空：按约定不写这一项，不报错 */ }
+    else if (!/^-?\d+(\.\d+)?$/.test(pv)){ toast('封面百分比 请填数字'); return; }
+    else {
+      var pct=num(pv);
+      if (pct < Math.round(VP_ZMIN*100) || pct > Math.round(VP_ZMAX*100)){
+        toast('封面百分比需在 '+Math.round(VP_ZMIN*100)+'–'+Math.round(VP_ZMAX*100)+'% 之间'); return;
+      }
+      patch['封面百分比'] = Math.round(pct*10)/10/100;
+    }
+  }
+  /* v183：封面模式（铺满 / 居中）。选「（不修改）」= 空值 → 不写这一项。 */
+  if (checked('封面模式')){
+    var mv = raw('封面模式');
+    if (mv === 'cover' || mv === 'center') patch['封面模式'] = mv;
+  }
   /* v143：大类 / 小类（下拉）。选「（不修改）」= 空值 → 不写这一项。
      ⚠️ 小类同时是**分片键**：改成一个还没有独立数据文件的小类，
      保存后这些条目会先落在主文件里，app 会弹「为「xx」新建数据文件」问一句（maybeOfferNewShard）。 */
@@ -16693,6 +17034,36 @@ function applyBatchEdit(){
   closeSheet(); render();
   toast('已写入 '+ids.length+' 件');
 }
+/* v178b：把缩放系数 s 写进某行的封面视口，保留该行已有的 x/y 位置。
+   无封面（无 imageUrl）或无需改动 → 返回 false。 */
+function applyCoverZoom(row, s){
+  var cov = row && row['封面'];
+  if (!cov || !cov[0] || !cov[0].imageUrl) return false;
+  var vp = cov[0].viewport || {};
+  var nv = { s: s, x: (typeof vp.x==='number'?vp.x:0), y: (typeof vp.y==='number'?vp.y:0), v:2 };
+  if (vp.fit === 'center') nv.fit = 'center';   /* v183：别把「居中模式」刷掉（两种属性互不干扰） */
+  if (cloudStableStr(vp) !== cloudStableStr(nv)){
+    cov[0].viewport = nv;
+    return true;
+  }
+  return false;
+}
+/* v183：把封面**模式**写进某行的封面视口 —— 'center' = 居中（无背景物品）；'cover' = 铺满（去掉 fit）。
+   保留该行已有的 s / x / y；无封面（无 imageUrl）或模式没变 → 返回 false。 */
+function applyCoverMode(row, mode){
+  var cov = row && row['封面'];
+  if (!cov || !cov[0] || !cov[0].imageUrl) return false;
+  var vp = cov[0].viewport;
+  var want = (mode === 'center');
+  var was = !!(vp && vp.fit === 'center');
+  if (was === want) return false;
+  var nv = { s: (vp && vp.s != null) ? vp.s : 1,
+             x: (vp && vp.x != null) ? vp.x : 0,
+             y: (vp && vp.y != null) ? vp.y : 0, v: 2 };
+  if (want) nv.fit = 'center';
+  cov[0].viewport = nv;
+  return true;
+}
 /* 逐条写入（兼容 db / 本地 / 文件 / gh 模式） */
 function applyBatchPatch(ids, patch){
   var key='collection';
@@ -16709,7 +17080,9 @@ function applyBatchPatch(ids, patch){
       if (!row) return;
       var vals={};
       activeFields(key, row).forEach(function(f){ vals[f.k]=fieldVal(row,f); });
-      Object.keys(patch).forEach(function(k){ vals[k]=patch[k]; });
+      Object.keys(patch).forEach(function(k){ if (k!=='封面百分比' && k!=='封面模式') vals[k]=patch[k]; });
+      if (Object.prototype.hasOwnProperty.call(patch,'封面百分比')) applyCoverZoom(row, patch['封面百分比']);
+      if (Object.prototype.hasOwnProperty.call(patch,'封面模式')) applyCoverMode(row, patch['封面模式']);
       if (_ownedPatch && !_userHold){
         var hp = holdPatchForStatus(vals['状态'], vals['持有']);
         if (hp['持有'] != null) vals['持有'] = hp['持有'];
@@ -16725,6 +17098,8 @@ function applyBatchPatch(ids, patch){
     if (!set[String(r._id)]) return;
     var changed = false;
     Object.keys(patch).forEach(function(k){
+      if (k==='封面百分比'){ if (applyCoverZoom(r, patch[k])) changed = true; return; }
+      if (k==='封面模式'){ if (applyCoverMode(r, patch[k])) changed = true; return; }
       var nv = (patch[k]==null) ? null : patch[k];
       if (DATE_FIELDS[k]) nv = normDateStr(nv);        /* v144：日期先补零，免得写出「等价不同串」 */
       if (cloudStableStr(r[k]) !== cloudStableStr(nv)){ r[k] = nv; changed = true; }
